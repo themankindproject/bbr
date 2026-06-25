@@ -37,12 +37,14 @@ pub fn setup() -> Result<()> {
     }
 
     println!("  Credential type:");
-    println!("    1) Personal Access Token (recommended)");
-    println!("    2) App password (legacy)");
+    println!("    1) Atlassian API Token (recommended, from id.atlassian.com)");
+    println!("    2) Personal Access Token (from bitbucket.org)");
+    println!("    3) App password (legacy)");
     let choice = prompt("Choose [1]: ")?;
     let kind = match choice.trim() {
-        "2" => CredentialKind::AppPassword,
-        _ => CredentialKind::Pat,
+        "2" => CredentialKind::Pat,
+        "3" => CredentialKind::AppPassword,
+        _ => CredentialKind::ApiToken,
     };
 
     let secret = prompt_secret("Secret: ")?;
@@ -52,7 +54,8 @@ pub fn setup() -> Result<()> {
 
     let profile = CredentialProfile {
         username: username.trim().to_string(),
-        token: (kind == CredentialKind::Pat).then_some(secret.clone()),
+        token: (kind == CredentialKind::Pat || kind == CredentialKind::ApiToken)
+            .then_some(secret.clone()),
         app_password: (kind == CredentialKind::AppPassword).then_some(secret),
         workspace: None,
     };
@@ -102,6 +105,7 @@ pub async fn status(g: &GlobalArgs) -> Result<()> {
         credential_kind: kind.map(|k| match k {
             CredentialKind::Pat => "pat".into(),
             CredentialKind::AppPassword => "app_password".into(),
+            CredentialKind::ApiToken => "atlassian_api_token".into(),
         }),
         display_name,
         account_id,
@@ -148,15 +152,5 @@ fn prompt(msg: &str) -> Result<String> {
 }
 
 fn prompt_secret(msg: &str) -> Result<String> {
-    // We don't toggle terminal echo off (cross-platform complexity); the
-    // secret is read on a single line. Future: use `rpassword`.
-    let mut out = io::stdout().lock();
-    out.write_all(msg.as_bytes()).map_err(BitbucketError::Io)?;
-    out.flush().map_err(BitbucketError::Io)?;
-    let mut line = String::new();
-    io::stdin()
-        .lock()
-        .read_line(&mut line)
-        .map_err(BitbucketError::Io)?;
-    Ok(line.trim_end().to_string())
+    rpassword::prompt_password(msg).map_err(BitbucketError::Io)
 }
