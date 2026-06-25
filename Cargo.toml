@@ -56,6 +56,7 @@ chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
 url = "2"
 xdg = "2"
+rpassword = "7"
 
 [dev-dependencies]
 wiremock = "0.6"
