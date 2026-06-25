@@ -29,8 +29,12 @@ pub struct Credentials {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialKind {
+    /// Bitbucket Personal Access Token (Bearer auth).
     Pat,
+    /// Legacy app password (Basic auth).
     AppPassword,
+    /// Atlassian API token from id.atlassian.com (Basic auth, same as app password).
+    ApiToken,
 }
 
 /// Resolve credentials from the environment first, then the config file.
@@ -48,10 +52,15 @@ fn from_env() -> Option<Credentials> {
     let username = std::env::var(ENV_USERNAME).ok()?;
     if let Ok(token) = std::env::var(ENV_TOKEN) {
         if !token.is_empty() {
+            let kind = if token.starts_with("ATATT") {
+                CredentialKind::ApiToken
+            } else {
+                CredentialKind::Pat
+            };
             return Some(Credentials {
                 username,
                 secret: token,
-                kind: CredentialKind::Pat,
+                kind,
             });
         }
     }
@@ -79,7 +88,11 @@ fn from_config() -> Result<Option<Credentials>> {
         return Ok(None);
     }
     let kind = if p.is_pat() {
-        CredentialKind::Pat
+        if p.is_atlassian_api_token() {
+            CredentialKind::ApiToken
+        } else {
+            CredentialKind::Pat
+        }
     } else {
         CredentialKind::AppPassword
     };
