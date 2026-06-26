@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu,   archive: tar.gz }
+          - { os: macos-13,       target: x86_64-apple-darwin,        archive: tar.gz }
+          - { os: macos-14,       target: aarch64-apple-darwin,       archive: tar.gz }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc,     archive: zip }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package (unix)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/bb dist/
+          cp README.md LICENSE dist/
+          tar -czf bbr-${{ matrix.target }}.tar.gz -C dist .
+      - name: Package (windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/bb.exe dist/
+          Copy-Item README.md LICENSE dist/
+          Compress-Archive dist/* bbr-${{ matrix.target }}.zip
+
+      - name: Generate shell completions
+        run: |
+          cargo run --release -- completion bash > bb.bash
+          cargo run --release -- completion zsh  > bb.zsh
+          cargo run --release -- completion fish > bb.fish
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            bbr-${{ matrix.target }}.tar.gz
+            bbr-${{ matrix.target }}.zip
+            bb.bash
+            bb.zsh
+            bb.fish
+          generate_release_notes: true
