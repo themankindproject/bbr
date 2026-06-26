@@ -33,7 +33,7 @@ pub struct GlobalArgs {
 #[command(
     name = "bb",
     version,
-    about = "A Bitbucket Cloud CLI for coding agents and humans",
+    about = "BitBucket Remote — a Bitbucket Cloud CLI for coding agents and humans",
     long_about = None,
     propagate_version = true,
     disable_help_subcommand = true

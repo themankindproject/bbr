@@ -2,7 +2,7 @@
 name = "bbr"
 version = "0.1.0"
 edition = "2021"
-description = "A fast, single-binary Bitbucket Cloud CLI for coding agents and humans"
+description = "BitBucket Remote — a fast, single-binary Bitbucket Cloud CLI for coding agents and humans"
 license = "MIT"
 keywords = ["bitbucket", "cli", "atlassian", "devops", "pull-request"]
 categories = ["command-line-utilities", "development-tools"]
