@@ -305,7 +305,7 @@ Interactive credential setup.
 
 ```bash
 $ bb auth setup
-  Need a Personal Access Token? https://bitbucket.org/account/settings/api-tokens
+  Need a Personal Access Token? https://id.atlassian.com/manage-profile/security/api-tokens
   Required scopes: account:read, repository:read, repository:write,
                    pullrequest:read, pullrequest:write, pipeline:read
 

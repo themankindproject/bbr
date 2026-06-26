@@ -59,7 +59,7 @@ The binary is installed as `bb`.
 
 ```bash
 # 1. Get a Personal Access Token (PAT):
-#    https://bitbucket.org/account/settings/api-tokens
+#    https://id.atlassian.com/manage-profile/security/api-tokens
 #    Required scopes: account:read, repository:read, repository:write,
 #                     pullrequest:read, pullrequest:write, pipeline:read
 

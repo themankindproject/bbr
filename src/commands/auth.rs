@@ -11,7 +11,7 @@ use crate::config::{self, CredentialProfile, CredentialsFile};
 use crate::error::{BitbucketError, Result};
 use crate::output::Formatter;
 
-const PAT_HELP_URL: &str = "https://bitbucket.org/account/settings/api-tokens";
+const PAT_HELP_URL: &str = "https://id.atlassian.com/manage-profile/security/api-tokens";
 
 #[derive(Debug, Serialize)]
 pub struct AuthStatusOut {
