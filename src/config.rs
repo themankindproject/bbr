@@ -70,6 +70,14 @@ impl CredentialProfile {
     pub fn is_pat(&self) -> bool {
         self.token.is_some()
     }
+
+    /// Detect if this looks like an Atlassian API token (starts with "ATATT").
+    pub fn is_atlassian_api_token(&self) -> bool {
+        self.token
+            .as_deref()
+            .map(|t| t.starts_with("ATATT"))
+            .unwrap_or(false)
+    }
 }
 
 /// Read and parse the credentials file. Returns `Ok(None)` if no file exists.
@@ -104,17 +112,30 @@ pub fn save_credentials(creds: &CredentialsFile) -> Result<PathBuf> {
     let serialized = toml::to_string_pretty(creds)
         .map_err(|e| BitbucketError::Config(format!("serializing credentials: {e}")))?;
 
-    fs::write(&path, serialized)
+    write_private(&path, &serialized)
         .map_err(|e| BitbucketError::Config(format!("writing {}: {e}", path.display())))?;
 
+    Ok(path)
+}
+
+/// Write `contents` to `path` with mode 0600 on Unix (atomically created so
+/// the file is never readable by others even for a moment).
+fn write_private(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = fs::Permissions::from_mode(0o600);
-        let _ = fs::set_permissions(&path, perms);
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?
+            .write_all(contents.as_bytes())?;
+        Ok(())
     }
-
-    Ok(path)
+    #[cfg(not(unix))]
+    fs::write(path, contents)
 }
 
 /// Delete the credentials file, if present. Returns `true` if a file was removed.
