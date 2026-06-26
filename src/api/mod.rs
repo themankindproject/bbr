@@ -43,11 +43,11 @@ impl BitbucketClient {
         &self.creds
     }
 
-    fn auth_header(&self) -> String {
+    pub(crate) fn auth_header(&self) -> String {
         match self.creds.kind {
             CredentialKind::Pat => format!("Bearer {}", self.creds.secret),
-            CredentialKind::AppPassword => {
-                // HTTP Basic with username:app-password
+            CredentialKind::AppPassword | CredentialKind::ApiToken => {
+                // HTTP Basic with username:secret
                 let raw = format!("{}:{}", self.creds.username, self.creds.secret);
                 let encoded = base64_encode(raw.as_bytes());
                 format!("Basic {encoded}")
@@ -62,25 +62,40 @@ impl BitbucketClient {
     }
 
     /// Issue a request and return the deserialized body.
+    /// Automatically retries up to 2 times on HTTP 429 (rate-limit) with
+    /// exponential back-off (5 s, 10 s).
     pub async fn send<T: DeserializeOwned>(
         &self,
         method: Method,
         path: &str,
         body: Option<&str>,
     ) -> Result<T> {
-        let url = self.url(path);
-        let mut req = self
-            .inner
-            .request(method, &url)
-            .header(AUTHORIZATION, self.auth_header())
-            .header(ACCEPT, "application/json");
-        if let Some(b) = body {
-            req = req
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(b.to_string());
+        const MAX_RETRIES: u8 = 2;
+        let mut attempt: u8 = 0;
+        loop {
+            let url = self.url(path);
+            let mut req = self
+                .inner
+                .request(method.clone(), &url)
+                .header(AUTHORIZATION, self.auth_header())
+                .header(ACCEPT, "application/json");
+            if let Some(b) = body {
+                req = req
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(b.to_string());
+            }
+            let resp = req.send().await.map_err(BitbucketError::Http)?;
+            match self.decode(resp).await {
+                Err(BitbucketError::RateLimit(msg)) if attempt < MAX_RETRIES => {
+                    attempt += 1;
+                    let wait = std::time::Duration::from_secs(u64::from(attempt) * 5);
+                    tracing::warn!("rate limited, retrying in {:?} (attempt {attempt})", wait);
+                    tokio::time::sleep(wait).await;
+                    let _ = msg;
+                }
+                other => return other,
+            }
         }
-        let resp = req.send().await.map_err(BitbucketError::Http)?;
-        self.decode(resp).await
     }
 
     /// Issue a request expecting no body (returns `()` on success).
@@ -99,13 +114,16 @@ impl BitbucketClient {
 
     async fn decode<T: DeserializeOwned>(&self, resp: reqwest::Response) -> Result<T> {
         let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
+        let text = resp.text().await.map_err(BitbucketError::Http)?;
 
         if status.is_success() {
             if text.is_empty() {
                 return serde_json::from_str("null").map_err(BitbucketError::Json);
             }
-            return serde_json::from_str(&text).map_err(BitbucketError::Json);
+            return serde_json::from_str(&text).map_err(|e| {
+                tracing::debug!("JSON decode failed for {status}: {text:.200}");
+                BitbucketError::Json(e)
+            });
         }
 
         Err(map_error(status, &text))
