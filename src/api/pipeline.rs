@@ -190,31 +190,18 @@ impl BitbucketClient {
         let resp = self
             .inner
             .get(&url)
-            .header(reqwest::header::AUTHORIZATION, self.auth_header_value())
+            .header(reqwest::header::AUTHORIZATION, self.auth_header())
             .header(reqwest::header::ACCEPT, "text/plain")
             .send()
             .await
             .map_err(BitbucketError::Http)?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = resp.text().await.map_err(BitbucketError::Http)?;
             return Err(super::map_error(status, &body));
         }
-        let text = resp.text().await.unwrap_or_default();
+        let text = resp.text().await.map_err(BitbucketError::Http)?;
         Ok(StepLog { text })
-    }
-}
-
-impl BitbucketClient {
-    /// Expose the auth header value (used by step_log which bypasses `send`).
-    fn auth_header_value(&self) -> String {
-        match self.creds().kind {
-            crate::auth::CredentialKind::Pat => format!("Bearer {}", self.creds().secret),
-            crate::auth::CredentialKind::AppPassword => {
-                let raw = format!("{}:{}", self.creds().username, self.creds().secret);
-                format!("Basic {}", super::base64_encode(raw.as_bytes()))
-            }
-        }
     }
 }
 
