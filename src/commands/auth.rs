@@ -132,14 +132,15 @@ pub async fn status(g: &GlobalArgs) -> Result<()> {
 }
 
 /// Remove stored credentials.
-pub fn logout() -> Result<()> {
+pub fn logout(g: &GlobalArgs) -> Result<()> {
     let removed = config::delete_credentials()?;
-    if removed {
-        println!("Removed stored credentials.");
+    let out = serde_json::json!({ "removed": removed });
+    let human = if removed {
+        "Removed stored credentials.".to_string()
     } else {
-        println!("No stored credentials to remove.");
-    }
-    Ok(())
+        "No stored credentials to remove.".to_string()
+    };
+    Formatter::from_json_flag(g.json).print(&out, &human)
 }
 
 // ---- prompt helpers -------------------------------------------------------

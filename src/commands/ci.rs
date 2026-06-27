@@ -59,6 +59,75 @@ pub struct CiLogsOut {
     pub log: String,
 }
 
+pub async fn list(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> Result<()> {
+    let repo = current_repo()?;
+    let branch = match branch {
+        Some(b) => b.to_string(),
+        None => git::current_branch()?,
+    };
+    let client = client(g)?;
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Fetching pipelines...");
+    let pipelines = client
+        .list_pipelines(&repo.workspace, &repo.slug, Some(&branch), limit)
+        .await?;
+    spinner.finish_and_clear();
+
+    let out = CiStatusOut {
+        branch: branch.clone(),
+        pipeline: None,
+    };
+    let fmt = Formatter::from_json_flag(g.json);
+    if pipelines.is_empty() {
+        let human = format!("No pipelines for branch '{branch}'.");
+        return fmt.print(&out, &human);
+    }
+
+    let mut steps_map: std::collections::HashMap<String, Vec<StepOut>> =
+        std::collections::HashMap::new();
+    for p in &pipelines {
+        if let Ok(s) = steps_for_pipeline(&client, &repo.workspace, &repo.slug, &p.uuid).await {
+            steps_map.insert(p.uuid.clone(), s.iter().map(step_out).collect());
+        }
+    }
+
+    let pips: Vec<PipelineOut> = pipelines
+        .iter()
+        .map(|p| PipelineOut {
+            uuid: p.uuid.clone(),
+            build_number: p.build_number,
+            state: p.state_name().to_string(),
+            duration_seconds: p.duration_in_seconds,
+            branch: p.target.ref_name.clone(),
+            commit: p.target.commit.as_ref().map(|c| c.hash.clone()),
+            steps: steps_map.remove(&p.uuid).unwrap_or_default(),
+        })
+        .collect();
+
+    let theme = Theme::current();
+    let mut human = format!("Branch: {}\n", theme.bold(&branch));
+    human.push_str(&format!("{}\n", theme.separator()));
+    for p in &pips {
+        human.push_str(&format!(
+            "  {}  #{}  {}  ({})\n",
+            theme.status_glyph(&p.state),
+            p.build_number,
+            p.state,
+            human_duration(p.duration_seconds),
+        ));
+        for s in &p.steps {
+            human.push_str(&format!(
+                "    {} {:<18}  {}\n",
+                theme.status_glyph(&s.state),
+                s.name,
+                human_duration(s.duration_seconds),
+            ));
+        }
+    }
+    fmt.print(&out, &human)
+}
+
 pub async fn status(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
     let repo = current_repo()?;
     let branch = match branch {
@@ -236,6 +305,38 @@ pub async fn logs(
     fmt.print(&out, &human)
 }
 
+pub async fn stop(g: &GlobalArgs, uuid: Option<&str>, branch: Option<&str>) -> Result<()> {
+    let repo = current_repo()?;
+    let client = client(g)?;
+    let pipeline_uuid = match uuid {
+        Some(u) => normalize_uuid(u),
+        None => {
+            let branch = match branch {
+                Some(b) => b.to_string(),
+                None => git::current_branch()?,
+            };
+            client
+                .latest_pipeline(&repo.workspace, &repo.slug, Some(&branch))
+                .await?
+                .ok_or_else(|| {
+                    BitbucketError::NotFound(format!("no pipeline for branch '{branch}'"))
+                })?
+                .uuid
+        }
+    };
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Stopping pipeline...");
+    client
+        .stop_pipeline(&repo.workspace, &repo.slug, &pipeline_uuid)
+        .await?;
+    spinner.finish_and_clear();
+    let fmt = Formatter::from_json_flag(g.json);
+    fmt.print(
+        &serde_json::json!({ "uuid": pipeline_uuid, "stopped": true }),
+        &format!("Stopped pipeline {pipeline_uuid}"),
+    )
+}
+
 pub async fn rerun(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
     let repo = current_repo()?;
     let branch = match branch {
@@ -360,22 +461,29 @@ fn last_lines(s: &str, n: usize) -> String {
 
 fn render_status(out: &CiStatusOut) -> String {
     let theme = Theme::current();
-    let mut s = format!("Branch: {}\n", theme.bold(&out.branch));
+    let mut s = format!("{}\n", theme.bold(&out.branch));
+    s.push_str(&format!("{}\n", theme.separator()));
     match &out.pipeline {
         Some(p) => {
             s.push_str(&format!(
-                "\nPipeline #{}  {}  ({})\n",
+                "\n  {}  Pipeline #{}  {}  ({})\n",
+                theme.bullet(),
                 p.build_number,
                 theme.status_glyph(&p.state),
                 human_duration(p.duration_seconds)
             ));
             s.push_str(&format!(
-                "  Branch: {}  /  Commit: {}\n",
-                p.branch.as_deref().unwrap_or("-"),
+                "  {}{}\n",
+                theme.label("Branch:"),
+                p.branch.as_deref().unwrap_or("-")
+            ));
+            s.push_str(&format!(
+                "  {}{}\n",
+                theme.label("Commit:"),
                 p.commit.as_deref().unwrap_or("-")
             ));
             if !p.steps.is_empty() {
-                s.push_str("  Steps:\n");
+                s.push_str(&format!("  {}\n", theme.label("Steps:")));
                 for st in &p.steps {
                     s.push_str(&format!(
                         "    {} {:<18}  {}\n",
@@ -386,7 +494,7 @@ fn render_status(out: &CiStatusOut) -> String {
                 }
             }
         }
-        None => s.push_str("\nNo pipeline found.\n"),
+        None => s.push_str(&format!("  {}\n", theme.dim("No pipeline found."))),
     }
     s
 }

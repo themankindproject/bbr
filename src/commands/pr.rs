@@ -65,18 +65,31 @@ pub struct PrCommentOut {
 
 // ---- commands -------------------------------------------------------------
 
-pub async fn list(g: &GlobalArgs, state: &str, limit: u32) -> Result<()> {
+pub async fn list(
+    g: &GlobalArgs,
+    state: &str,
+    limit: u32,
+    author: Option<&str>,
+    source_branch: Option<&str>,
+) -> Result<()> {
     let state = PrState::parse(state)?;
     let repo = current_repo()?;
     let client = client(g)?;
     let spinner = make_spinner(g.json);
     spinner.set_message("Fetching pull requests...");
-    let page = client
-        .list_prs(&repo.workspace, &repo.slug, state, limit)
+    let values = client
+        .list_prs(
+            &repo.workspace,
+            &repo.slug,
+            state,
+            limit,
+            author,
+            source_branch,
+        )
         .await?;
     spinner.finish_and_clear();
 
-    let rows: Vec<PrSummary> = page.values.iter().map(summarize).collect();
+    let rows: Vec<PrSummary> = values.iter().map(summarize).collect();
     let out = PrListOut {
         workspace: repo.workspace.clone(),
         slug: repo.slug.clone(),
@@ -145,6 +158,7 @@ pub async fn create(
     src: Option<&str>,
     dst: Option<&str>,
     close_source_branch: bool,
+    reviewers: &[String],
 ) -> Result<()> {
     let repo = current_repo()?;
     let client = client(g)?;
@@ -182,7 +196,10 @@ pub async fn create(
         } else {
             None
         },
-        reviewers: Vec::<ReviewerRef>::new(),
+        reviewers: reviewers
+            .iter()
+            .map(|uuid| ReviewerRef { uuid: uuid.clone() })
+            .collect(),
     };
 
     let spinner = make_spinner(g.json);
@@ -237,6 +254,68 @@ pub async fn comment(
     let fmt = Formatter::from_json_flag(g.json);
     let human = format!("Commented on PR #{}", id);
     fmt.print(&out, &human)
+}
+
+pub async fn approve(g: &GlobalArgs, id: u64) -> Result<()> {
+    let repo = current_repo()?;
+    let client = client(g)?;
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Approving...");
+    client.approve_pr(&repo.workspace, &repo.slug, id).await?;
+    spinner.finish_and_clear();
+    let fmt = Formatter::from_json_flag(g.json);
+    fmt.print(
+        &serde_json::json!({ "id": id, "approved": true }),
+        &format!("Approved PR #{}", id),
+    )
+}
+
+pub async fn unapprove(g: &GlobalArgs, id: u64) -> Result<()> {
+    let repo = current_repo()?;
+    let client = client(g)?;
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Removing approval...");
+    client.unapprove_pr(&repo.workspace, &repo.slug, id).await?;
+    spinner.finish_and_clear();
+    let fmt = Formatter::from_json_flag(g.json);
+    fmt.print(
+        &serde_json::json!({ "id": id, "approved": false }),
+        &format!("Removed approval from PR #{}", id),
+    )
+}
+
+pub async fn decline(g: &GlobalArgs, id: u64) -> Result<()> {
+    let repo = current_repo()?;
+    let client = client(g)?;
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Declining...");
+    let pr = client.decline_pr(&repo.workspace, &repo.slug, id).await?;
+    spinner.finish_and_clear();
+    let out = PrViewOut {
+        id: pr.id,
+        state: pr.state.clone(),
+        title: pr.title.clone(),
+        description: pr.description.clone(),
+        source: pr
+            .source
+            .branch
+            .as_ref()
+            .map(|b| b.name.clone())
+            .unwrap_or_default(),
+        destination: pr
+            .destination
+            .branch
+            .as_ref()
+            .map(|b| b.name.clone())
+            .unwrap_or_default(),
+        author: pr.author.as_ref().map(|a| a.display_name.clone()),
+        url: pr.links.html.href.clone(),
+        comment_count: pr.comment_count,
+        task_count: pr.task_count,
+        close_source_branch: pr.close_source_branch,
+    };
+    let fmt = Formatter::from_json_flag(g.json);
+    fmt.print(&out, &format!("Declined PR #{}", id))
 }
 
 pub async fn merge(g: &GlobalArgs, id: u64) -> Result<()> {
@@ -307,6 +386,49 @@ pub async fn merge(g: &GlobalArgs, id: u64) -> Result<()> {
     } else {
         fmt.print(&out, &human)
     }
+}
+
+pub async fn checkout(g: &GlobalArgs, id: u64) -> Result<()> {
+    let repo = current_repo()?;
+    let client = client(g)?;
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Fetching PR details...");
+    let pr = client.get_pr(&repo.workspace, &repo.slug, id).await?;
+    spinner.finish_and_clear();
+
+    let branch = pr
+        .source
+        .branch
+        .as_ref()
+        .map(|b| b.name.clone())
+        .ok_or_else(|| BitbucketError::Other("PR has no source branch".into()))?;
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message(format!("Fetching '{branch}'..."));
+    git::fetch_branch(&branch)?;
+    spinner.set_message(format!("Checking out '{branch}'..."));
+    git::checkout_branch(&branch)?;
+    spinner.finish_and_clear();
+
+    let fmt = Formatter::from_json_flag(g.json);
+    fmt.print(
+        &serde_json::json!({ "id": id, "branch": branch }),
+        &format!("Checked out PR #{}: {}", id, branch),
+    )
+}
+
+pub async fn diff(g: &GlobalArgs, id: u64) -> Result<()> {
+    let repo = current_repo()?;
+    let client = client(g)?;
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Fetching diff...");
+    let body = client.pr_diff(&repo.workspace, &repo.slug, id).await?;
+    spinner.finish_and_clear();
+
+    let fmt = Formatter::from_json_flag(g.json);
+    fmt.print(&serde_json::json!({ "id": id, "diff": body }), &body)
 }
 
 // ---- helpers --------------------------------------------------------------
@@ -390,25 +512,41 @@ fn render_view(out: &PrViewOut) -> String {
     let theme = Theme::current();
     let mut s = String::new();
     s.push_str(&format!("PR #{} — {}\n", out.id, theme.bold(&out.state)));
-    s.push_str(&format!("  Title:    {}\n", out.title));
+    s.push_str(&format!("{}\n", theme.separator()));
+    s.push_str(&format!("  {}{}\n", theme.label("Title:"), out.title));
     if let Some(d) = &out.description {
-        s.push_str(&format!("  Desc:     {}\n", truncate_desc(d, 200)));
+        s.push_str(&format!(
+            "  {}{}\n",
+            theme.label("Desc:"),
+            truncate_desc(d, 200)
+        ));
     }
-    s.push_str(&format!("  {} -> {}\n", out.source, out.destination));
     s.push_str(&format!(
-        "  Author:   {}\n",
+        "  {} {} → {}\n",
+        theme.label("Branches:"),
+        out.source,
+        out.destination
+    ));
+    s.push_str(&format!(
+        "  {}{}\n",
+        theme.label("Author:"),
         out.author.as_deref().unwrap_or("-")
     ));
     s.push_str(&format!(
-        "  URL:      {}\n",
-        out.url.as_deref().unwrap_or("-")
+        "  {} {}  |  {} {}\n",
+        theme.label("Comments:"),
+        out.comment_count,
+        theme.label("Tasks:"),
+        out.task_count
     ));
-    s.push_str(&format!("  Comments: {}\n", out.comment_count));
-    s.push_str(&format!("  Tasks:    {}\n", out.task_count));
     s.push_str(&format!(
-        "  Close src branch: {}",
+        "  {} {}",
+        theme.label("Close src:"),
         if out.close_source_branch { "yes" } else { "no" }
     ));
+    if let Some(u) = &out.url {
+        s.push_str(&format!("\n  {}{u}", theme.label("URL:")));
+    }
     s
 }
 

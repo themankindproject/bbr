@@ -41,12 +41,12 @@ async fn lists_open_prs() {
         .await;
 
     let c = client(&server.uri()).await;
-    let page = c
-        .list_prs("sdadev", "bvrm", PrState::Open, 25)
+    let values = c
+        .list_prs("sdadev", "bvrm", PrState::Open, 25, None, None)
         .await
         .unwrap();
-    assert_eq!(page.values.len(), 1);
-    let pr: &PullRequest = &page.values[0];
+    assert_eq!(values.len(), 1);
+    let pr: &PullRequest = &values[0];
     assert_eq!(pr.id, 467);
     assert_eq!(pr.state, "OPEN");
     assert_eq!(pr.source.branch.as_ref().unwrap().name, "feat/x");

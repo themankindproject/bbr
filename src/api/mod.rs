@@ -119,6 +119,33 @@ impl BitbucketClient {
         self.send(Method::POST, path, Some(&raw)).await
     }
 
+    /// Fetch all pages of a paginated endpoint, up to `limit`.
+    /// Follows `next` links until the limit is reached or there are no more pages.
+    pub async fn fetch_all_pages<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        limit: usize,
+    ) -> Result<Vec<T>> {
+        let mut all = Vec::new();
+        let mut next_path = path.to_string();
+        loop {
+            let page: crate::api::pr::Paginated<T> =
+                self.send(Method::GET, &next_path, None).await?;
+            let remaining = limit.saturating_sub(all.len());
+            all.extend(page.values.into_iter().take(remaining));
+            if all.len() >= limit {
+                break;
+            }
+            match page.next {
+                Some(next_url) => {
+                    next_path = strip_base(&next_url, &self.base_url)?;
+                }
+                None => break,
+            }
+        }
+        Ok(all)
+    }
+
     async fn decode<T: DeserializeOwned>(&self, resp: reqwest::Response) -> Result<T> {
         let status = resp.status();
         let text = resp.text().await.map_err(BitbucketError::Http)?;
@@ -210,6 +237,13 @@ pub fn map_error(status: StatusCode, body: &str) -> BitbucketError {
         StatusCode::TOO_MANY_REQUESTS => BitbucketError::RateLimit(format!(": HTTP {status}")),
         _ => BitbucketError::Other(format!("HTTP {status}: {full}")),
     }
+}
+
+/// Strip the API base URL from an absolute `next` URL to get a relative path.
+fn strip_base(url: &str, base: &str) -> Result<String> {
+    url.strip_prefix(base)
+        .map(|s| s.to_string())
+        .ok_or_else(|| BitbucketError::Other(format!("next URL does not match base: {url}")))
 }
 
 fn one_line(s: &str) -> String {

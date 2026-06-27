@@ -117,6 +117,20 @@ pub fn detect_repo() -> Result<RepoIdentity> {
     ))
 }
 
+/// Fetch a branch from origin.
+pub fn fetch_branch(branch: &str) -> Result<()> {
+    git(&["fetch", "origin", branch])?;
+    Ok(())
+}
+
+/// Checkout a local branch (creating it if it doesn't exist).
+pub fn checkout_branch(branch: &str) -> Result<()> {
+    git(&["switch", branch]).map(|_| ()).or_else(|_| {
+        // Branch doesn't exist locally; create tracking branch from origin.
+        git(&["switch", "-c", branch, &format!("origin/{branch}")]).map(|_| ())
+    })
+}
+
 /// Convenience: detect the repo identity and current HEAD together.
 pub fn context() -> Result<(RepoIdentity, Head)> {
     let repo = detect_repo()?;

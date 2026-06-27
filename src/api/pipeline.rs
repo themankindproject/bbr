@@ -165,6 +165,36 @@ pub fn normalize_uuid(s: &str) -> String {
 }
 
 impl BitbucketClient {
+    /// `GET /repositories/{ws}/{slug}/pipelines/` with optional branch filter.
+    pub async fn list_pipelines(
+        &self,
+        workspace: &str,
+        slug: &str,
+        branch: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<Pipeline>> {
+        let pagelen = limit.min(100);
+        let mut path = format!(
+            "/repositories/{workspace}/{slug}/pipelines/?\
+             fields=values.uuid,values.build_number,values.state,values.result,\
+             values.duration_in_seconds,values.target.ref_name,values.target.commit.hash&\
+             pagelen={pagelen}&sort=-created_on"
+        );
+        if let Some(b) = branch {
+            path.push_str(&format!(
+                "&q=target.ref_name%3D%22{}%22",
+                super::pr::url_encode(b)
+            ));
+        }
+        if limit > 100 {
+            self.fetch_all_pages(&path, limit as usize).await
+        } else {
+            let page: super::pr::Paginated<Pipeline> =
+                self.send(reqwest::Method::GET, &path, None).await?;
+            Ok(page.values)
+        }
+    }
+
     pub async fn latest_pipeline(
         &self,
         workspace: &str,
@@ -248,5 +278,14 @@ impl BitbucketClient {
         let body = serde_json::Value::Null;
         self.send(reqwest::Method::POST, &path, Some(&body.to_string()))
             .await
+    }
+
+    pub async fn stop_pipeline(&self, workspace: &str, slug: &str, uuid: &str) -> Result<()> {
+        let path = format!("/repositories/{workspace}/{slug}/pipelines/{uuid}/stopPipeline");
+        let body = serde_json::Value::Null;
+        let _: serde_json::Value = self
+            .send(reqwest::Method::POST, &path, Some(&body.to_string()))
+            .await?;
+        Ok(())
     }
 }

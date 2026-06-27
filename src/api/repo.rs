@@ -73,3 +73,51 @@ impl BitbucketClient {
         self.send(reqwest::Method::GET, "/user", None).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repository_deserializes_minimal() {
+        let json = serde_json::json!({ "slug": "my-repo" });
+        let repo: Repository = serde_json::from_value(json).unwrap();
+        assert_eq!(repo.slug, "my-repo");
+        assert_eq!(repo.name, "");
+        assert!(repo.links.html.href.is_none());
+    }
+
+    #[test]
+    fn repository_deserializes_full() {
+        let json = serde_json::json!({
+            "slug": "bvrm",
+            "full_name": "ws/bvrm",
+            "name": "bvrm",
+            "scm": "git",
+            "is_private": true,
+            "language": "Rust",
+            "description": "A repo",
+            "mainbranch": { "name": "main" }
+        });
+        let repo: Repository = serde_json::from_value(json).unwrap();
+        assert_eq!(repo.slug, "bvrm");
+        assert_eq!(
+            repo.mainbranch.as_ref().map(|b| &b.name),
+            Some(&"main".into())
+        );
+    }
+
+    #[test]
+    fn branch_deserializes() {
+        let json = serde_json::json!({
+            "name": "feature-x",
+            "target": { "hash": "abc123" }
+        });
+        let branch: Branch = serde_json::from_value(json).unwrap();
+        assert_eq!(branch.name, "feature-x");
+        assert_eq!(
+            branch.target.as_ref().map(|t| &t.hash),
+            Some(&"abc123".into())
+        );
+    }
+}

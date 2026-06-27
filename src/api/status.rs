@@ -46,3 +46,45 @@ impl BitbucketClient {
         self.send(reqwest::Method::GET, &path, None).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_status_deserializes() {
+        let json = serde_json::json!({
+            "state": "SUCCESSFUL",
+            "key": "BB-CI",
+            "name": "Pipeline #123",
+            "url": "https://bitbucket.org/ws/r/pipelines/results/123",
+            "description": "All good"
+        });
+        let status: BuildStatus = serde_json::from_value(json).unwrap();
+        assert_eq!(status.state, "SUCCESSFUL");
+        assert_eq!(status.key, "BB-CI");
+    }
+
+    #[test]
+    fn build_status_page_deserializes() {
+        let json = serde_json::json!({
+            "size": 2,
+            "pagelen": 25,
+            "values": [
+                { "state": "SUCCESSFUL", "key": "k1", "name": "n1", "url": "https://..." },
+                { "state": "FAILED", "key": "k2", "name": "n2", "url": "https://..." }
+            ]
+        });
+        let page: BuildStatusPage = serde_json::from_value(json).unwrap();
+        assert_eq!(page.values.len(), 2);
+        assert!(page.values[1].state == "FAILED");
+    }
+
+    #[test]
+    fn build_status_defaults_on_empty() {
+        let json = serde_json::json!({ "values": [] });
+        let page: BuildStatusPage = serde_json::from_value(json).unwrap();
+        assert!(page.size == 0);
+        assert!(page.values.is_empty());
+    }
+}

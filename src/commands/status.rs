@@ -5,11 +5,17 @@ use serde::Serialize;
 use crate::api::pipeline::{Pipeline, PipelineStep};
 use crate::api::pr::{Participant, PullRequest};
 use crate::cli::GlobalArgs;
-use crate::commands::{client, current_repo, human_duration};
-use crate::error::{BitbucketError, Result};
-use crate::git;
+use crate::commands::{client, current_head, current_repo, human_duration};
+use crate::error::Result;
 use crate::output::theme::Theme;
 use crate::output::Formatter;
+
+#[derive(Debug, Serialize)]
+pub struct BuildStatusSummary {
+    pub state: String,
+    pub key: String,
+    pub url: String,
+}
 
 #[derive(Debug, Serialize)]
 pub struct StatusOut {
@@ -20,6 +26,8 @@ pub struct StatusOut {
     pub pr: Option<PrSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pipeline: Option<PipelineSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commit_statuses: Vec<BuildStatusSummary>,
     pub suggested_commands: Vec<String>,
 }
 
@@ -72,18 +80,12 @@ pub struct StepSummary {
 
 pub async fn run(g: &GlobalArgs) -> Result<()> {
     let repo = current_repo()?;
-    let head = git::head()?;
+    let head = current_head()?;
     let client = client(g)?;
 
-    let pr = fetch_optional(
-        client
-            .pr_for_branch(&repo.workspace, &repo.slug, &head.branch)
-            .await,
-    )?;
-    let pipeline = fetch_optional(
-        client
-            .latest_pipeline(&repo.workspace, &repo.slug, Some(&head.branch))
-            .await,
+    let (pr, pipeline) = tokio::try_join!(
+        client.pr_for_branch(&repo.workspace, &repo.slug, &head.branch),
+        client.latest_pipeline(&repo.workspace, &repo.slug, Some(&head.branch)),
     )?;
 
     let raw_steps = match &pipeline {
@@ -99,6 +101,22 @@ pub async fn run(g: &GlobalArgs) -> Result<()> {
         .as_ref()
         .map(|p| pipeline_summary(p, &raw_steps, steps.clone()));
     let pr_summary = pr.as_ref().map(pr_summary);
+
+    let commit_statuses = client
+        .commit_statuses(&repo.workspace, &repo.slug, &head.commit)
+        .await
+        .map(|page| {
+            page.values
+                .iter()
+                .map(|s| BuildStatusSummary {
+                    state: s.state.clone(),
+                    key: s.key.clone(),
+                    url: s.url.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let suggested_commands = suggested_commands(&pr_summary, &pipeline_summary);
 
     let out = StatusOut {
@@ -111,20 +129,13 @@ pub async fn run(g: &GlobalArgs) -> Result<()> {
         commit: head.commit.clone(),
         pr: pr_summary,
         pipeline: pipeline_summary,
+        commit_statuses,
         suggested_commands,
     };
 
     let fmt = Formatter::from_json_flag(g.json);
     let human = render_human(&out);
     fmt.print(&out, &human)
-}
-
-fn fetch_optional<T>(r: Result<Option<T>>) -> Result<Option<T>> {
-    match r {
-        Ok(v) => Ok(v),
-        Err(BitbucketError::NotFound(_)) => Ok(None),
-        Err(e) => Err(e),
-    }
 }
 
 fn pr_summary(pr: &PullRequest) -> PrSummary {
@@ -236,20 +247,33 @@ fn suggested_commands(pr: &Option<PrSummary>, pipeline: &Option<PipelineSummary>
 fn render_human(out: &StatusOut) -> String {
     let theme = Theme::current();
     let mut s = String::new();
-    s.push_str(&format!("Repo: {}\n", theme.bold(&out.repo.full_name)));
+    s.push_str(&format!("{}\n", theme.bold(&out.repo.full_name)));
+    s.push_str(&format!("{}\n", theme.separator()));
     s.push_str(&format!(
-        "On branch: {}  (commit {})\n",
-        theme.bold(&out.branch),
-        out.commit
+        "{} {}\n",
+        theme.label("Branch:"),
+        theme.bold(&out.branch)
     ));
+    s.push_str(&format!("{} {}\n", theme.label("Commit:"), &out.commit));
 
     match &out.pr {
         Some(pr) => {
-            s.push_str(&format!("\nPR #{} — {}\n", pr.id, pr.state.to_lowercase()));
-            s.push_str(&format!("  {} -> {}\n", pr.source, pr.destination));
-            s.push_str(&format!("  Title: {}\n", pr.title));
+            s.push_str(&format!(
+                "\n{} PR #{} — {}\n",
+                theme.bullet(),
+                pr.id,
+                pr.state.to_lowercase()
+            ));
+            s.push_str(&format!("{}\n", theme.separator()));
+            s.push_str(&format!(
+                "  {} {} → {}\n",
+                theme.label("Branches:"),
+                pr.source,
+                pr.destination
+            ));
+            s.push_str(&format!("  {}{}\n", theme.label("Title:"), pr.title));
             if let Some(a) = &pr.author {
-                s.push_str(&format!("  Author: {a}\n"));
+                s.push_str(&format!("  {}{a}\n", theme.label("Author:")));
             }
             if !pr.reviewers.is_empty() {
                 let reviewers = pr
@@ -257,50 +281,62 @@ fn render_human(out: &StatusOut) -> String {
                     .iter()
                     .map(|r| {
                         format!(
-                            "{} {}",
+                            "{}{}",
                             r.display_name,
-                            if r.approved { "approved" } else { "pending" }
+                            if r.approved { " (approved)" } else { "" }
                         )
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
-                s.push_str(&format!("  Reviewers: {reviewers}\n"));
+                s.push_str(&format!("  {}{reviewers}\n", theme.label("Reviewers:")));
             }
             s.push_str(&format!(
-                "  Comments: {}  /  Tasks: {}\n",
-                pr.comment_count, pr.task_count
+                "  {} {}  |  {} {}\n",
+                theme.label("Comments:"),
+                pr.comment_count,
+                theme.label("Tasks:"),
+                pr.task_count
             ));
             if let Some(u) = &pr.url {
-                s.push_str(&format!("  URL:   {u}\n"));
+                s.push_str(&format!("  {}{u}\n", theme.label("URL:")));
             }
         }
-        None => s.push_str("\nPR: none (no open PR for this branch)\n"),
+        None => s.push_str(&format!(
+            "\n  {} PR: none\n",
+            theme.dim("(no open PR for this branch)")
+        )),
     }
 
     match &out.pipeline {
         Some(p) => {
-            s.push_str("\nCI - last pipeline\n");
+            let dur_str = human_duration(p.duration_seconds);
+            s.push_str(&format!("\n{} Pipeline\n", theme.bullet(),));
+            s.push_str(&format!("{}\n", theme.separator()));
             s.push_str(&format!(
-                "  {} {} ({})\n",
+                "  {}  {}  ({dur_str})\n",
                 theme.status_glyph(&p.state),
                 p.state,
-                human_duration(p.duration_seconds)
             ));
             if let Some(b) = &p.branch {
-                s.push_str(&format!("  Branch: {b}"));
+                s.push_str(&format!("  {}{b}\n", theme.label("Branch:")));
             }
             s.push_str(&format!(
-                "  /  Commit: {}\n",
+                "  {}{}\n",
+                theme.label("Commit:"),
                 p.commit.as_deref().unwrap_or("-")
             ));
             if !p.failing_steps.is_empty() {
-                s.push_str(&format!("  Failing: {}\n", p.failing_steps.join(", ")));
+                s.push_str(&format!(
+                    "  {}{}\n",
+                    theme.label("Failing:"),
+                    p.failing_steps.join(", ")
+                ));
             }
             if let Some(u) = &p.url {
-                s.push_str(&format!("  URL:    {u}\n"));
+                s.push_str(&format!("  {}{u}\n", theme.label("URL:")));
             }
             if !p.steps.is_empty() {
-                s.push_str("  Steps:\n");
+                s.push_str(&format!("  {}\n", theme.label("Steps:")));
                 for st in &p.steps {
                     s.push_str(&format!(
                         "    {} {:<18}  {}\n",
@@ -311,11 +347,28 @@ fn render_human(out: &StatusOut) -> String {
                 }
             }
         }
-        None => s.push_str("\nCI: no pipeline found for this branch\n"),
+        None => s.push_str(&format!(
+            "\n  {} CI: none\n",
+            theme.dim("(no pipeline for this branch)")
+        )),
+    }
+
+    if !out.commit_statuses.is_empty() {
+        s.push_str(&format!("\n{} Build Statuses\n", theme.bullet()));
+        s.push_str(&format!("{}\n", theme.separator()));
+        for cs in &out.commit_statuses {
+            let (glyph, colored) = match cs.state.to_ascii_uppercase().as_str() {
+                "SUCCESSFUL" => ("[ok]", theme.success(&cs.state)),
+                "FAILED" => ("[X]", theme.error(&cs.state)),
+                "INPROGRESS" => ("[~]", theme.warn(&cs.state)),
+                _ => ("[?]", theme.dim(&cs.state)),
+            };
+            s.push_str(&format!("  {} {}  {}\n", glyph, colored, cs.key));
+        }
     }
 
     if !out.suggested_commands.is_empty() {
-        s.push_str("\nNext:\n");
+        s.push_str(&format!("\n{}\n", theme.label("Next:")));
         for cmd in &out.suggested_commands {
             s.push_str(&format!("  {cmd}\n"));
         }
@@ -327,6 +380,76 @@ fn render_human(out: &StatusOut) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renders_sections_and_separators() {
+        let out = StatusOut {
+            repo: RepoSummary {
+                workspace: "ws".into(),
+                slug: "repo".into(),
+                full_name: "ws/repo".into(),
+            },
+            branch: "feat".into(),
+            commit: "abc123".into(),
+            pr: Some(PrSummary {
+                id: 42,
+                state: "OPEN".into(),
+                title: "Add stuff".into(),
+                source: "feat".into(),
+                destination: "main".into(),
+                url: Some("https://...".into()),
+                author: Some("Alice".into()),
+                comment_count: 3,
+                task_count: 1,
+                reviewers: vec![],
+            }),
+            pipeline: Some(PipelineSummary {
+                uuid: "p-1".into(),
+                state: "SUCCESSFUL".into(),
+                duration_seconds: 468,
+                branch: Some("feat".into()),
+                commit: Some("abc123".into()),
+                url: Some("https://...".into()),
+                failing_steps: vec![],
+                steps: vec![StepSummary {
+                    uuid: "s-1".into(),
+                    name: "Build".into(),
+                    state: "SUCCESSFUL".into(),
+                    duration_seconds: 300,
+                }],
+            }),
+            commit_statuses: vec![],
+            suggested_commands: vec!["bb open pr".into(), "bb open ci".into()],
+        };
+        let out = render_human(&out);
+        assert!(out.contains("ws/repo"), "header with bold repo name");
+        assert!(out.contains("Branch:"), "label prefix");
+        assert!(out.contains("PR #42"), "PR section");
+        assert!(out.contains("●") || out.contains("*"), "bullet marker");
+        assert!(out.contains("SUCCESSFUL"), "pipeline state");
+        assert!(out.contains("7m 48s"), "human duration");
+        assert!(out.contains("Next:"), "suggestions section");
+    }
+
+    #[test]
+    fn renders_empty_state() {
+        let out = StatusOut {
+            repo: RepoSummary {
+                workspace: "w".into(),
+                slug: "r".into(),
+                full_name: "w/r".into(),
+            },
+            branch: "main".into(),
+            commit: "abc".into(),
+            pr: None,
+            pipeline: None,
+            commit_statuses: vec![],
+            suggested_commands: vec![],
+        };
+        let out = render_human(&out);
+        assert!(out.contains("no open PR"));
+        assert!(out.contains("no pipeline"));
+    }
 
     #[test]
     fn suggests_failed_log_command_for_failed_pipeline() {

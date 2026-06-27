@@ -79,10 +79,57 @@ pub type Result<T, E = BitbucketError> = std::result::Result<T, E>;
 /// Convenience for the top-level `main`: print a friendly message to stderr
 /// and return the right process exit code.
 pub fn report(e: &BitbucketError) -> std::process::ExitCode {
-    let code = e.exit_code();
     eprintln!("bb: {e}");
     if matches!(e, BitbucketError::NoCredentials) {
         eprintln!("hint: run `bb auth setup`, or set BITBUCKET_USERNAME + BITBUCKET_TOKEN");
     }
-    code.as_process()
+    e.exit_code().as_process()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_credentials_maps_to_auth_exit() {
+        let e = BitbucketError::NoCredentials;
+        assert_eq!(e.exit_code(), ExitCode::Auth);
+    }
+
+    #[test]
+    fn not_found_gives_notfound_exit() {
+        let e = BitbucketError::NotFound("missing".into());
+        assert_eq!(e.exit_code(), ExitCode::NotFound);
+    }
+
+    #[test]
+    fn generic_other_is_exit_code_1() {
+        let e = BitbucketError::Other("something went wrong".into());
+        assert_eq!(e.exit_code(), ExitCode::Generic);
+    }
+
+    #[test]
+    fn rate_limit_maps_correctly() {
+        let e = BitbucketError::RateLimit("".into());
+        assert_eq!(e.exit_code(), ExitCode::RateLimit);
+    }
+
+    #[test]
+    fn pipeline_failed_maps_correctly() {
+        let e = BitbucketError::PipelineFailed;
+        assert_eq!(e.exit_code(), ExitCode::PipelineFailed);
+    }
+
+    #[test]
+    fn auth_failed_maps_to_auth() {
+        let e = BitbucketError::AuthFailed("bad token".into());
+        assert_eq!(e.exit_code(), ExitCode::Auth);
+    }
+
+    #[test]
+    fn full_display_includes_cause() {
+        let e = BitbucketError::Other("disk full".into());
+        let msg = format!("{e}");
+        assert!(msg.contains("disk full"));
+    }
 }

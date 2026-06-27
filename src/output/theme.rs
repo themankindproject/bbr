@@ -72,6 +72,35 @@ impl Theme {
         }
     }
 
+    /// Dimmed label for field names (e.g. "Branch:", "Commit:").
+    pub fn label(&self, s: &str) -> String {
+        if self.colors {
+            format!("{} ", s.dimmed())
+        } else {
+            format!("{s} ")
+        }
+    }
+
+    /// Separator line matching the terminal width.
+    pub fn separator(&self) -> String {
+        let width = terminal_width().unwrap_or(72);
+        let line = "─".repeat(width.min(72));
+        if self.colors {
+            line.dimmed().to_string()
+        } else {
+            line
+        }
+    }
+
+    /// A subtle section header glyph.
+    pub fn bullet(&self) -> String {
+        if self.colors {
+            "●".to_string()
+        } else {
+            "*".to_string()
+        }
+    }
+
     /// Status glyph that is safe in plain (no-color) output.
     pub fn status_glyph(&self, state: &str) -> String {
         let upper = state.to_ascii_uppercase();
@@ -85,6 +114,26 @@ impl Theme {
         }
         .to_string()
     }
+}
+
+/// Best-effort terminal width via `stty size`.
+fn terminal_width() -> Option<usize> {
+    use std::process::Command;
+    let output = Command::new("stty")
+        .arg("size")
+        .arg("-F")
+        .arg("/dev/stderr")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    let fields: Vec<&str> = stdout.split_whitespace().collect();
+    if fields.len() < 2 {
+        return None;
+    }
+    fields[1].parse::<usize>().ok()
 }
 
 #[cfg(test)]

@@ -17,9 +17,27 @@ pub struct OpenOut {
 
 pub async fn run(g: &GlobalArgs, action: Option<OpenAction>) -> Result<()> {
     let action = action.unwrap_or(OpenAction::Repo);
+    let repo = match action {
+        OpenAction::Repo | OpenAction::PrList | OpenAction::Pipelines => current_repo()?,
+        _ => current_repo()?,
+    };
     let (target, url) = match action {
         OpenAction::Repo => repo_url(g).await?,
+        OpenAction::PrList => (
+            "pr-list".into(),
+            format!(
+                "https://bitbucket.org/{}/{}/pull-requests",
+                repo.workspace, repo.slug
+            ),
+        ),
         OpenAction::Pr { id } => pr_url(g, id).await?,
+        OpenAction::Pipelines => (
+            "pipelines".into(),
+            format!(
+                "https://bitbucket.org/{}/{}/pipelines",
+                repo.workspace, repo.slug
+            ),
+        ),
         OpenAction::Ci { branch } => ci_url(g, branch.as_deref()).await?,
     };
 
@@ -118,4 +136,43 @@ fn opener_command(url: &str) -> std::process::Command {
     let mut cmd = std::process::Command::new("xdg-open");
     cmd.arg(url);
     cmd
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_out_serializes_correctly() {
+        let out = OpenOut {
+            target: "pr".into(),
+            url: "https://bitbucket.org/ws/r/pull-requests/1".into(),
+            opened: true,
+        };
+        let json = serde_json::to_value(out).unwrap();
+        assert_eq!(json.get("target").and_then(|v| v.as_str()), Some("pr"));
+        assert!(json.get("opened").and_then(|v| v.as_bool()).unwrap());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn opener_uses_xdg_open_on_linux() {
+        #[cfg(not(target_os = "macos"))]
+        {
+            let cmd = opener_command("https://example.com");
+            let prog = cmd.get_program().to_str().unwrap().to_string();
+            assert!(prog.contains("xdg-open"), "expected xdg-open, got {prog}");
+        }
+    }
+
+    #[test]
+    fn open_out_defaults_opened_false_in_json_mode() {
+        let out = OpenOut {
+            target: "repo".into(),
+            url: "https://bitbucket.org/ws/r".into(),
+            opened: false,
+        };
+        let json = serde_json::to_string_pretty(&out).unwrap();
+        assert!(json.contains("\"opened\": false"));
+    }
 }

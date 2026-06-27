@@ -83,7 +83,8 @@ impl PullRequest {
 pub struct BranchRef {
     #[serde(default)]
     pub branch: Option<Named>,
-    pub repository: RepoRef,
+    #[serde(default)]
+    pub repository: Option<RepoRef>,
     #[serde(default)]
     pub commit: Option<CommitRef>,
 }
@@ -219,14 +220,20 @@ pub struct CommentContent {
 }
 
 impl BitbucketClient {
-    /// `GET /repositories/{ws}/{slug}/pullrequests?pagelen=N&q=state="OPEN"`
+    /// `GET /repositories/{ws}/{slug}/pullrequests`
+    ///
+    /// When `limit > 100` (Bitbucket's max page size), this follows `next`
+    /// links across multiple pages automatically.
     pub async fn list_prs(
         &self,
         workspace: &str,
         slug: &str,
         state: PrState,
         limit: u32,
-    ) -> Result<Paginated<PullRequest>> {
+        author: Option<&str>,
+        source_branch: Option<&str>,
+    ) -> Result<Vec<PullRequest>> {
+        let pagelen = limit.min(100);
         let mut path = format!(
             "/repositories/{workspace}/{slug}/pullrequests?\
              fields=values.id,values.state,values.title,\
@@ -234,13 +241,28 @@ impl BitbucketClient {
              values.author.display_name,values.links.html.href,\
              values.comment_count,values.task_count,values.close_source_branch,\
              values.updated_on&\
-             pagelen={limit}&sort=-updated_on"
+             pagelen={pagelen}&sort=-updated_on"
         );
+        let mut q_parts: Vec<String> = Vec::new();
         if let Some(s) = state.as_query() {
-            // Bitbucket's q parameter uses double-quoted strings; URL-encode as %22.
-            path.push_str(&format!("&q=state%3D%22{s}%22"));
+            q_parts.push(format!("state%3D%22{s}%22"));
         }
-        self.send(reqwest::Method::GET, &path, None).await
+        if let Some(a) = author {
+            q_parts.push(format!("author.display_name%3D%22{}%22", url_encode(a)));
+        }
+        if let Some(b) = source_branch {
+            q_parts.push(format!("source.branch.name%3D%22{}%22", url_encode(b)));
+        }
+        if !q_parts.is_empty() {
+            path.push_str(&format!("&q={}", q_parts.join("+AND+")));
+        }
+
+        if limit > 100 {
+            self.fetch_all_pages(&path, limit as usize).await
+        } else {
+            let page: Paginated<PullRequest> = self.send(reqwest::Method::GET, &path, None).await?;
+            Ok(page.values)
+        }
     }
 
     /// `GET /repositories/{ws}/{slug}/pullrequests/{id}`
@@ -310,6 +332,50 @@ impl BitbucketClient {
         let body = serde_json::json!({});
         let raw = serde_json::to_string(&body)?;
         self.send(reqwest::Method::POST, &path, Some(&raw)).await
+    }
+
+    /// `POST /repositories/{ws}/{slug}/pullrequests/{id}/approve`
+    pub async fn approve_pr(&self, workspace: &str, slug: &str, id: u64) -> Result<PullRequest> {
+        let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}/approve");
+        let body = serde_json::json!({});
+        let raw = serde_json::to_string(&body)?;
+        self.send(reqwest::Method::POST, &path, Some(&raw)).await
+    }
+
+    /// `DELETE /repositories/{ws}/{slug}/pullrequests/{id}/approve`
+    pub async fn unapprove_pr(&self, workspace: &str, slug: &str, id: u64) -> Result<()> {
+        let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}/approve");
+        let _: serde_json::Value = self.send(reqwest::Method::DELETE, &path, None).await?;
+        Ok(())
+    }
+
+    /// `POST /repositories/{ws}/{slug}/pullrequests/{id}/decline`
+    pub async fn decline_pr(&self, workspace: &str, slug: &str, id: u64) -> Result<PullRequest> {
+        let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}/decline");
+        let body = serde_json::json!({});
+        let raw = serde_json::to_string(&body)?;
+        self.send(reqwest::Method::POST, &path, Some(&raw)).await
+    }
+
+    /// `GET /repositories/{ws}/{slug}/pullrequests/{id}/diff`
+    pub async fn pr_diff(&self, workspace: &str, slug: &str, id: u64) -> Result<String> {
+        let url = self.url(&format!(
+            "/repositories/{workspace}/{slug}/pullrequests/{id}/diff"
+        ));
+        let resp = self
+            .inner
+            .get(&url)
+            .header(reqwest::header::AUTHORIZATION, self.auth_header())
+            .header(reqwest::header::ACCEPT, "text/plain")
+            .send()
+            .await
+            .map_err(BitbucketError::Http)?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.map_err(BitbucketError::Http)?;
+            return Err(super::map_error(status, &body));
+        }
+        resp.text().await.map_err(BitbucketError::Http)
     }
 }
 

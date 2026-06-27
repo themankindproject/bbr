@@ -7,6 +7,7 @@ pub mod pr;
 pub mod repo;
 pub mod status;
 
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use indicatif::{ProgressBar, ProgressStyle};
@@ -14,7 +15,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use crate::api::BitbucketClient;
 use crate::cli::{resolve_api_base, GlobalArgs};
 use crate::error::{BitbucketError, Result};
-use crate::git::{self, RepoIdentity};
+use crate::git::{self, Head, RepoIdentity};
 
 /// Resolve credentials + API base into a ready-to-use client.
 pub fn client(g: &GlobalArgs) -> Result<BitbucketClient> {
@@ -23,10 +24,27 @@ pub fn client(g: &GlobalArgs) -> Result<BitbucketClient> {
     creds.into_client(&base)
 }
 
-/// Detect the current repo identity from git, falling back to an explicit
-/// workspace override stored in the credentials file.
+static CACHED_REPO: OnceLock<RepoIdentity> = OnceLock::new();
+static CACHED_HEAD: OnceLock<Head> = OnceLock::new();
+
+/// Detect the current repo identity from git (cached per process).
 pub fn current_repo() -> Result<RepoIdentity> {
-    git::detect_repo()
+    if let Some(r) = CACHED_REPO.get() {
+        return Ok(r.clone());
+    }
+    let repo = git::detect_repo()?;
+    let _ = CACHED_REPO.set(repo.clone());
+    Ok(repo)
+}
+
+/// Current branch + commit (cached per process).
+pub fn current_head() -> Result<Head> {
+    if let Some(h) = CACHED_HEAD.get() {
+        return Ok(h.clone());
+    }
+    let head = git::head()?;
+    let _ = CACHED_HEAD.set(head.clone());
+    Ok(head)
 }
 
 /// Read body text from one of: direct `--body`, a `--body-file`, or stdin

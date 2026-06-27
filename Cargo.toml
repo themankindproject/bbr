@@ -31,7 +31,6 @@ clap_complete = "=4.5.4"
 # HTTP / async
 reqwest = { version = "=0.12.4", default-features = false, features = ["json", "rustls-tls", "stream"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "io-util", "fs", "signal"] }
-futures-util = "0.3"
 
 # Serde / JSON
 serde = { version = "1", features = ["derive"] }
@@ -39,7 +38,6 @@ serde_json = "1"
 toml = "0.8"
 
 # Errors / logging
-anyhow = "1"
 thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
@@ -49,12 +47,8 @@ comfy-table = "=7.1.4"
 indicatif = "0.17"
 colored = "2"
 
-# Time
-chrono = { version = "0.4", features = ["serde"] }
-
 # Config / dirs / misc
 dirs = "5"
-url = "2"
 xdg = "2"
 rpassword = "7"
 
