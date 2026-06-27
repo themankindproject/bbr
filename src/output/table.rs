@@ -14,9 +14,9 @@ impl Table {
     pub fn new() -> Self {
         let mut inner = ComfyTable::new();
         inner
-            .load_preset(comfy_table::presets::UTF8_FULL)
-            .apply_modifier(comfy_table::modifiers::UTF8_ROUND_CORNERS)
-            .set_content_arrangement(ContentArrangement::Dynamic);
+            .load_preset(comfy_table::presets::NOTHING)
+            .set_style(comfy_table::TableComponent::HeaderLines, '─')
+            .set_content_arrangement(ContentArrangement::Disabled);
         if !std::io::stdout().is_terminal() {
             inner.force_no_tty();
         }
@@ -29,7 +29,19 @@ impl Table {
         S: Into<String>,
     {
         let cells: Vec<String> = headers.into_iter().map(Into::into).collect();
-        self.inner.set_header(cells);
+        self.inner.set_header(cells.clone());
+        for (i, cell) in cells.iter().enumerate() {
+            let lower = cell.to_lowercase();
+            if lower == "id" {
+                if let Some(col) = self.inner.column_mut(i) {
+                    col.set_cell_alignment(comfy_table::CellAlignment::Right);
+                }
+            } else if lower == "state" {
+                if let Some(col) = self.inner.column_mut(i) {
+                    col.set_cell_alignment(comfy_table::CellAlignment::Center);
+                }
+            }
+        }
         self
     }
 

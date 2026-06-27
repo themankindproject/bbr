@@ -29,8 +29,9 @@ clap = { version = "=4.5.6", features = ["derive", "env", "wrap_help"] }
 clap_complete = "=4.5.4"
 
 # HTTP / async
-reqwest = { version = "=0.12.4", default-features = false, features = ["json", "rustls-tls", "stream"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "io-util", "fs", "signal"] }
+futures = "0.3"
+reqwest = { version = "=0.12.4", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 
 # Serde / JSON
 serde = { version = "1", features = ["derive"] }
@@ -43,7 +44,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # Pretty output
-comfy-table = "=7.1.4"
+comfy-table = { version = "=7.1.4", features = ["custom_styling"] }
 indicatif = "0.17"
 colored = "2"
 

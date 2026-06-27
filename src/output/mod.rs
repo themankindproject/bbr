@@ -4,7 +4,8 @@ pub mod json;
 pub mod table;
 pub mod theme;
 
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
+use std::process::{Command, Stdio};
 
 use crate::error::Result;
 
@@ -35,16 +36,73 @@ impl Formatter {
             Formatter::Human => print_block(human),
         }
     }
+
+    /// Print a serializable value with pagination if stdout is a terminal.
+    pub fn print_paginated<T: serde::Serialize>(&self, value: &T, human: &str) -> Result<()> {
+        match self {
+            Formatter::Json => json::print_json(value),
+            Formatter::Human => print_paginated(human),
+        }
+    }
 }
 
 /// Write a human-readable block to stdout.
 pub fn print_block(s: &str) -> Result<()> {
     let mut out = io::stdout().lock();
-    out.write_all(s.as_bytes())
-        .map_err(crate::error::BitbucketError::Io)?;
+    out.write_all(s.as_bytes())?;
     if !s.ends_with('\n') {
-        out.write_all(b"\n")
-            .map_err(crate::error::BitbucketError::Io)?;
+        out.write_all(b"\n")?;
     }
     Ok(())
+}
+
+/// Write a human-readable block to stdout with optional pagination using less/PAGER.
+pub fn print_paginated(s: &str) -> Result<()> {
+    if !io::stdout().is_terminal() {
+        return print_block(s);
+    }
+
+    let pager_env = std::env::var("PAGER").unwrap_or_else(|_| "less".to_string());
+    let mut cmd = if pager_env == "less" {
+        let mut c = Command::new("less");
+        c.args(["-F", "-R", "-X"]);
+        c
+    } else {
+        let mut parts = pager_env.split_whitespace();
+        if let Some(bin) = parts.next() {
+            let mut c = Command::new(bin);
+            for arg in parts {
+                c.arg(arg);
+            }
+            c
+        } else {
+            return print_block(s);
+        }
+    };
+
+    cmd.stdin(Stdio::piped());
+
+    if let Ok(mut child) = cmd.spawn() {
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(s.as_bytes());
+            if !s.ends_with('\n') {
+                let _ = stdin.write_all(b"\n");
+            }
+        }
+        let _ = child.wait();
+        Ok(())
+    } else {
+        print_block(s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_print_paginated_falls_back_when_not_terminal() {
+        let res = print_paginated("hello test");
+        assert!(res.is_ok());
+    }
 }

@@ -1,5 +1,6 @@
 //! Color / decoration theme. Respects `NO_COLOR` and TTY detection.
 
+use std::borrow::Cow;
 use std::io::{self, IsTerminal};
 use std::sync::OnceLock;
 
@@ -32,43 +33,43 @@ impl Theme {
 
     // --- semantic helpers -------------------------------------------------
 
-    pub fn success(&self, s: &str) -> String {
+    pub fn success<'a>(&self, s: &'a str) -> Cow<'a, str> {
         if self.colors {
-            s.green().to_string()
+            Cow::Owned(s.green().to_string())
         } else {
-            s.to_string()
+            Cow::Borrowed(s)
         }
     }
 
-    pub fn warn(&self, s: &str) -> String {
+    pub fn warn<'a>(&self, s: &'a str) -> Cow<'a, str> {
         if self.colors {
-            s.yellow().to_string()
+            Cow::Owned(s.yellow().to_string())
         } else {
-            s.to_string()
+            Cow::Borrowed(s)
         }
     }
 
-    pub fn error(&self, s: &str) -> String {
+    pub fn error<'a>(&self, s: &'a str) -> Cow<'a, str> {
         if self.colors {
-            s.red().to_string()
+            Cow::Owned(s.red().to_string())
         } else {
-            s.to_string()
+            Cow::Borrowed(s)
         }
     }
 
-    pub fn dim(&self, s: &str) -> String {
+    pub fn dim<'a>(&self, s: &'a str) -> Cow<'a, str> {
         if self.colors {
-            s.dimmed().to_string()
+            Cow::Owned(s.dimmed().to_string())
         } else {
-            s.to_string()
+            Cow::Borrowed(s)
         }
     }
 
-    pub fn bold(&self, s: &str) -> String {
+    pub fn bold<'a>(&self, s: &'a str) -> Cow<'a, str> {
         if self.colors {
-            s.bold().to_string()
+            Cow::Owned(s.bold().to_string())
         } else {
-            s.to_string()
+            Cow::Borrowed(s)
         }
     }
 
@@ -93,47 +94,52 @@ impl Theme {
     }
 
     /// A subtle section header glyph.
-    pub fn bullet(&self) -> String {
+    pub fn bullet(&self) -> &'static str {
         if self.colors {
-            "●".to_string()
+            "●"
         } else {
-            "*".to_string()
+            "*"
         }
     }
 
     /// Status glyph that is safe in plain (no-color) output.
     pub fn status_glyph(&self, state: &str) -> String {
-        let upper = state.to_ascii_uppercase();
-        match upper.as_str() {
-            "SUCCESSFUL" | "SUCCESS" | "PASSED" => self.success("[ok]"),
-            "FAILED" | "ERROR" => self.error("[X]"),
-            "STOPPED" | "CANCELLED" | "CANCELED" => self.warn("[!]"),
-            "INPROGRESS" | "IN_PROGRESS" | "RUNNING" => self.warn("[~]"),
-            "PENDING" | "QUEUED" => self.dim("[.]"),
-            _ => self.dim("[?]"),
+        if matches_ignore_ascii_case(state, &["SUCCESSFUL", "SUCCESS", "PASSED"]) {
+            self.success("[ok]").into_owned()
+        } else if matches_ignore_ascii_case(state, &["FAILED", "ERROR"]) {
+            self.error("[X]").into_owned()
+        } else if matches_ignore_ascii_case(state, &["STOPPED", "CANCELLED", "CANCELED"]) {
+            self.warn("[!]").into_owned()
+        } else if matches_ignore_ascii_case(state, &["INPROGRESS", "IN_PROGRESS", "RUNNING"]) {
+            self.warn("[~]").into_owned()
+        } else if matches_ignore_ascii_case(state, &["PENDING", "QUEUED"]) {
+            self.dim("[.]").into_owned()
+        } else {
+            self.dim("[?]").into_owned()
         }
-        .to_string()
     }
+}
+
+fn matches_ignore_ascii_case(s: &str, values: &[&str]) -> bool {
+    values.iter().any(|v| s.eq_ignore_ascii_case(v))
 }
 
 /// Best-effort terminal width via `stty size`.
 fn terminal_width() -> Option<usize> {
-    use std::process::Command;
-    let output = Command::new("stty")
-        .arg("size")
-        .arg("-F")
-        .arg("/dev/stderr")
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8(output.stdout).ok()?;
-    let fields: Vec<&str> = stdout.split_whitespace().collect();
-    if fields.len() < 2 {
-        return None;
-    }
-    fields[1].parse::<usize>().ok()
+    static WIDTH: OnceLock<Option<usize>> = OnceLock::new();
+    *WIDTH.get_or_init(|| {
+        use std::process::Command;
+        let output = Command::new("stty").arg("size").output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let stdout = String::from_utf8(output.stdout).ok()?;
+        let fields: Vec<&str> = stdout.split_whitespace().collect();
+        if fields.len() < 2 {
+            return None;
+        }
+        fields[1].parse::<usize>().ok()
+    })
 }
 
 #[cfg(test)]
