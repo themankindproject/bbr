@@ -283,7 +283,7 @@ pub async fn logs(
                 .ok_or_else(|| {
                     BitbucketError::NotFound(format!("no pipeline for branch '{branch}'"))
                 })?;
-            (normalize_uuid(&pipeline.uuid), true)
+            (pipeline.uuid, true)
         }
     };
 

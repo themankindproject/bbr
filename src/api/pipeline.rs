@@ -248,8 +248,6 @@ impl BitbucketClient {
         uuid: &str,
         step: &str,
     ) -> Result<StepLog> {
-        let uuid = normalize_uuid(uuid);
-        let step = normalize_uuid(step);
         let url = self.url(&format!(
             "/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/{step}/log"
         ));
