@@ -6,7 +6,7 @@ use crate::api::pipeline::Pipeline;
 use crate::api::pr::PullRequest;
 use crate::cli::GlobalArgs;
 use crate::commands::{client, current_repo};
-use crate::error::Result;
+use crate::error::{BitbucketError, Result};
 use crate::git;
 use crate::output::theme::Theme;
 use crate::output::Formatter;
@@ -54,16 +54,16 @@ pub async fn run(g: &GlobalArgs) -> Result<()> {
     let head = git::head()?;
     let client = client(g)?;
 
-    let pr = client
-        .pr_for_branch(&repo.workspace, &repo.slug, &head.branch)
-        .await
-        .ok()
-        .flatten();
-    let pipeline = client
-        .latest_pipeline(&repo.workspace, &repo.slug, Some(&head.branch))
-        .await
-        .ok()
-        .flatten();
+    let pr = fetch_optional(
+        client
+            .pr_for_branch(&repo.workspace, &repo.slug, &head.branch)
+            .await,
+    )?;
+    let pipeline = fetch_optional(
+        client
+            .latest_pipeline(&repo.workspace, &repo.slug, Some(&head.branch))
+            .await,
+    )?;
 
     let steps = match &pipeline {
         Some(p) => client
@@ -95,6 +95,16 @@ pub async fn run(g: &GlobalArgs) -> Result<()> {
     let fmt = Formatter::from_json_flag(g.json);
     let human = render_human(&out);
     fmt.print(&out, &human)
+}
+
+/// Treat Not-Found as an optional value; propagate auth / HTTP errors.
+fn fetch_optional<T>(r: Result<Option<T>>) -> Result<Option<T>> {
+    match r {
+        Ok(v) => Ok(v),
+        Err(BitbucketError::NotFound(_)) => Ok(None),
+        Err(e @ BitbucketError::AuthFailed(_)) | Err(e @ BitbucketError::NoCredentials) => Err(e),
+        Err(_) => Ok(None),
+    }
 }
 
 fn pr_summary(pr: &PullRequest) -> PrSummary {
