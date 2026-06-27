@@ -30,19 +30,34 @@ pub struct Pipeline {
 
 impl Pipeline {
     pub fn is_terminal(&self) -> bool {
+        let name = self.effective_result_name();
         matches!(
-            self.result.as_ref().map(|r| r.name.as_str()),
+            name,
             Some("SUCCESSFUL") | Some("FAILED") | Some("STOPPED") | Some("ERROR")
         )
     }
 
     pub fn state_name(&self) -> &str {
-        if let Some(r) = &self.result {
-            if !r.name.is_empty() {
-                return &r.name;
+        if let Some(r) = self.effective_result_name() {
+            if !r.is_empty() {
+                return r;
             }
         }
         &self.state.name
+    }
+
+    fn effective_result_name(&self) -> Option<&str> {
+        self.result
+            .as_ref()
+            .filter(|r| !r.name.is_empty())
+            .map(|r| r.name.as_str())
+            .or_else(|| {
+                self.state
+                    .result
+                    .as_ref()
+                    .filter(|r| !r.name.is_empty())
+                    .map(|r| r.name.as_str())
+            })
     }
 }
 
