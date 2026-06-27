@@ -87,14 +87,24 @@ pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
             Ok(out) => {
                 let human = render_human(&out);
                 // Clear previous output (ANSI escape: cursor up + clear)
-                print!("\x1B[2J\x1B[H");
-                print!("{} (refreshing every {interval_secs}s — Ctrl+C to stop)\n\n", theme.bold("bb status --watch"));
+                eprint!("\x1B[2J\x1B[H");
+                eprint!(
+                    "{} (refreshing every {interval_secs}s — Ctrl+C to stop)\n\n",
+                    theme.bold("bb status --watch")
+                );
                 let fmt = Formatter::from_json_flag(g.json);
                 fmt.print(&out, &human)?;
             }
             Err(e) => {
-                print!("\x1B[2J\x1B[H");
+                eprint!("\x1B[2J\x1B[H");
                 eprintln!("bb: {e}");
+                if matches!(
+                    e,
+                    crate::error::BitbucketError::AuthFailed(_)
+                        | crate::error::BitbucketError::RateLimit(_)
+                ) {
+                    return Err(e);
+                }
             }
         }
         tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
@@ -113,9 +123,10 @@ async fn run_inner(g: &GlobalArgs) -> Result<StatusOut> {
     let head = current_head()?;
     let client = client(g)?;
 
-    let (pr, pipeline) = tokio::try_join!(
+    let (pr, pipeline, commit_statuses_page) = tokio::try_join!(
         client.pr_for_branch(&repo.workspace, &repo.slug, &head.branch),
         client.latest_pipeline(&repo.workspace, &repo.slug, Some(&head.branch)),
+        client.commit_statuses(&repo.workspace, &repo.slug, &head.commit),
     )?;
 
     let raw_steps = match &pipeline {
@@ -126,26 +137,18 @@ async fn run_inner(g: &GlobalArgs) -> Result<StatusOut> {
             .unwrap_or_default(),
         None => Vec::new(),
     };
-    let steps = raw_steps.iter().map(step_summary).collect::<Vec<_>>();
-    let pipeline_summary = pipeline
-        .as_ref()
-        .map(|p| pipeline_summary(p, &raw_steps, steps.clone()));
     let pr_summary = pr.as_ref().map(pr_summary);
+    let pipeline_summary = pipeline.as_ref().map(|p| pipeline_summary(p, &raw_steps));
 
-    let commit_statuses = client
-        .commit_statuses(&repo.workspace, &repo.slug, &head.commit)
-        .await
-        .map(|page| {
-            page.values
-                .iter()
-                .map(|s| BuildStatusSummary {
-                    state: s.state.clone(),
-                    key: s.key.clone(),
-                    url: s.url.clone(),
-                })
-                .collect()
+    let commit_statuses: Vec<BuildStatusSummary> = commit_statuses_page
+        .values
+        .iter()
+        .map(|s| BuildStatusSummary {
+            state: s.state.clone(),
+            key: s.key.clone(),
+            url: s.url.clone(),
         })
-        .unwrap_or_default();
+        .collect();
 
     let suggested_commands = suggested_commands(&pr_summary, &pipeline_summary);
 
@@ -169,18 +172,8 @@ fn pr_summary(pr: &PullRequest) -> PrSummary {
         id: pr.id,
         state: pr.state.clone(),
         title: pr.title.clone(),
-        source: pr
-            .source
-            .branch
-            .as_ref()
-            .map(|b| b.name.clone())
-            .unwrap_or_default(),
-        destination: pr
-            .destination
-            .branch
-            .as_ref()
-            .map(|b| b.name.clone())
-            .unwrap_or_default(),
+        source: pr.source_branch().to_string(),
+        destination: pr.destination_branch().to_string(),
         url: pr.links.html.href.clone(),
         author: pr.author.as_ref().map(|a| a.display_name.clone()),
         comment_count: pr.comment_count,
@@ -215,11 +208,7 @@ fn reviewer_summary(p: &Participant) -> ReviewerSummary {
     }
 }
 
-fn pipeline_summary(
-    p: &Pipeline,
-    raw_steps: &[PipelineStep],
-    steps: Vec<StepSummary>,
-) -> PipelineSummary {
+fn pipeline_summary(p: &Pipeline, raw_steps: &[PipelineStep]) -> PipelineSummary {
     PipelineSummary {
         uuid: p.uuid.clone(),
         state: p.state_name().to_string(),
@@ -232,7 +221,7 @@ fn pipeline_summary(
             .filter(|s| s.is_failed())
             .map(|s| s.name.clone())
             .collect(),
-        steps,
+        steps: raw_steps.iter().map(step_summary).collect(),
     }
 }
 
@@ -362,13 +351,21 @@ fn render_human(out: &StatusOut) -> String {
                 s.push_str(&format!("  {}{u}\n", theme.label("URL:")));
             }
             if !p.steps.is_empty() {
+                let max_width = p
+                    .steps
+                    .iter()
+                    .map(|s| s.name.chars().count())
+                    .max()
+                    .unwrap_or(0)
+                    .max(18);
                 s.push_str(&format!("  {}\n", theme.label("Steps:")));
                 for st in &p.steps {
                     s.push_str(&format!(
-                        "    {} {:<18}  {}\n",
+                        "    {} {:<width$}  {}\n",
                         theme.status_glyph(&st.state),
                         st.name,
-                        human_duration(st.duration_seconds)
+                        human_duration(st.duration_seconds),
+                        width = max_width
                     ));
                 }
             }

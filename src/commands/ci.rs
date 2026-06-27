@@ -8,9 +8,8 @@ use tokio::time;
 use crate::api::pipeline::{normalize_uuid, PipelineStep};
 use crate::api::BitbucketClient;
 use crate::cli::GlobalArgs;
-use crate::commands::{client, confirm, current_repo, human_duration, make_spinner};
+use crate::commands::{client, confirm, current_head, current_repo, human_duration, make_spinner};
 use crate::error::{BitbucketError, Result};
-use crate::git;
 use crate::output::theme::Theme;
 use crate::output::Formatter;
 
@@ -18,6 +17,12 @@ use crate::output::Formatter;
 pub struct CiStatusOut {
     pub branch: String,
     pub pipeline: Option<PipelineOut>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CiListOut {
+    pub branch: String,
+    pub pipelines: Vec<PipelineOut>,
 }
 
 #[derive(Debug, Serialize)]
@@ -63,7 +68,7 @@ pub async fn list(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> Result<()
     let repo = current_repo()?;
     let branch = match branch {
         Some(b) => b.to_string(),
-        None => git::current_branch()?,
+        None => current_head()?.branch,
     };
     let client = client(g)?;
 
@@ -74,34 +79,37 @@ pub async fn list(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> Result<()
         .await?;
     spinner.finish_and_clear();
 
-    let out = CiStatusOut {
-        branch: branch.clone(),
-        pipeline: None,
-    };
     let fmt = Formatter::from_json_flag(g.json);
     if pipelines.is_empty() {
+        let out = CiListOut {
+            branch: branch.clone(),
+            pipelines: Vec::new(),
+        };
         let human = format!("No pipelines for branch '{branch}'.");
         return fmt.print(&out, &human);
     }
 
-    let mut steps_map: std::collections::HashMap<String, Vec<StepOut>> =
-        std::collections::HashMap::new();
-    for p in &pipelines {
-        if let Ok(s) = steps_for_pipeline(&client, &repo.workspace, &repo.slug, &p.uuid).await {
-            steps_map.insert(p.uuid.clone(), s.iter().map(step_out).collect());
-        }
-    }
+    let step_futures: Vec<_> = pipelines
+        .iter()
+        .map(|p| steps_for_pipeline(&client, &repo.workspace, &repo.slug, &p.uuid))
+        .collect();
+    let all_steps: Vec<Vec<PipelineStep>> = futures::future::join_all(step_futures)
+        .await
+        .into_iter()
+        .map(|r| r.unwrap_or_default())
+        .collect();
 
     let pips: Vec<PipelineOut> = pipelines
         .iter()
-        .map(|p| PipelineOut {
+        .zip(all_steps.iter())
+        .map(|(p, raw_steps)| PipelineOut {
             uuid: p.uuid.clone(),
             build_number: p.build_number,
             state: p.state_name().to_string(),
             duration_seconds: p.duration_in_seconds,
             branch: p.target.ref_name.clone(),
             commit: p.target.commit.as_ref().map(|c| c.hash.clone()),
-            steps: steps_map.remove(&p.uuid).unwrap_or_default(),
+            steps: raw_steps.iter().map(step_out).collect(),
         })
         .collect();
 
@@ -109,6 +117,13 @@ pub async fn list(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> Result<()
     let mut human = format!("Branch: {}\n", theme.bold(&branch));
     human.push_str(&format!("{}\n", theme.separator()));
     for p in &pips {
+        let max_width = p
+            .steps
+            .iter()
+            .map(|s| s.name.chars().count())
+            .max()
+            .unwrap_or(0)
+            .max(18);
         human.push_str(&format!(
             "  {}  #{}  {}  ({})\n",
             theme.status_glyph(&p.state),
@@ -118,13 +133,18 @@ pub async fn list(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> Result<()
         ));
         for s in &p.steps {
             human.push_str(&format!(
-                "    {} {:<18}  {}\n",
+                "    {} {:<width$}  {}\n",
                 theme.status_glyph(&s.state),
                 s.name,
                 human_duration(s.duration_seconds),
+                width = max_width
             ));
         }
     }
+    let out = CiListOut {
+        branch: branch.clone(),
+        pipelines: pips,
+    };
     fmt.print(&out, &human)
 }
 
@@ -132,7 +152,7 @@ pub async fn status(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
     let repo = current_repo()?;
     let branch = match branch {
         Some(b) => b.to_string(),
-        None => git::current_branch()?,
+        None => current_head()?.branch,
     };
     let client = client(g)?;
 
@@ -176,7 +196,7 @@ pub async fn watch(
     let repo = current_repo()?;
     let branch = match branch {
         Some(b) => b.to_string(),
-        None => git::current_branch()?,
+        None => current_head()?.branch,
     };
     let client = client(g)?;
 
@@ -241,12 +261,19 @@ pub async fn watch(
         theme.status_glyph(&final_state),
         human_duration(out.duration_seconds)
     );
+    let max_width = steps
+        .iter()
+        .map(|s| s.name.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(18);
     for s in &steps {
         human.push_str(&format!(
-            "\n  {} {:<18}  {}",
+            "\n  {} {:<width$}  {}",
             theme.status_glyph(&s.state),
             s.name,
-            human_duration(s.duration_seconds)
+            human_duration(s.duration_seconds),
+            width = max_width
         ));
     }
     if let Some(log) = failure_log {
@@ -277,7 +304,7 @@ pub async fn logs(
     let (uuid, smart_default) = match uuid {
         Some(uuid) => (normalize_uuid(uuid), false),
         None => {
-            let branch = git::current_branch()?;
+            let branch = current_head()?.branch;
             let pipeline = client
                 .latest_pipeline(&repo.workspace, &repo.slug, Some(&branch))
                 .await?
@@ -311,7 +338,7 @@ pub async fn logs(
 
     let fmt = Formatter::from_json_flag(g.json);
     let human = log.text;
-    fmt.print(&out, &human)
+    fmt.print_paginated(&out, &human)
 }
 
 pub async fn steps(g: &GlobalArgs, uuid: Option<&str>) -> Result<()> {
@@ -320,7 +347,7 @@ pub async fn steps(g: &GlobalArgs, uuid: Option<&str>) -> Result<()> {
     let uuid = match uuid {
         Some(u) => normalize_uuid(u),
         None => {
-            let branch = git::current_branch()?;
+            let branch = current_head()?.branch;
             client
                 .latest_pipeline(&repo.workspace, &repo.slug, Some(&branch))
                 .await?
@@ -338,21 +365,26 @@ pub async fn steps(g: &GlobalArgs, uuid: Option<&str>) -> Result<()> {
         .await?;
     spinner.finish_and_clear();
 
-    let steps: Vec<PipelineOut> = vec![PipelineOut {
+    #[derive(Debug, Serialize)]
+    pub struct CiStepsOut {
+        pub uuid: String,
+        pub steps: Vec<StepOut>,
+    }
+
+    let out = CiStepsOut {
         uuid: uuid.clone(),
-        build_number: 0,
-        state: String::new(),
-        duration_seconds: 0,
-        branch: None,
-        commit: None,
         steps: raw.values.iter().map(step_out).collect(),
-    }];
+    };
 
     let fmt = Formatter::from_json_flag(g.json);
     let theme = Theme::current();
     let mut human = String::new();
     for (i, s) in raw.values.iter().enumerate() {
-        let mark = if s.is_failed() { theme.error("[X]") } else { theme.success("[ok]") };
+        let mark = if s.is_failed() {
+            theme.error("[X]")
+        } else {
+            theme.success("[ok]")
+        };
         human.push_str(&format!(
             "  {} {:<2}  {:<20}  {}  ({})\n",
             mark,
@@ -362,7 +394,7 @@ pub async fn steps(g: &GlobalArgs, uuid: Option<&str>) -> Result<()> {
             human_duration(s.duration_in_seconds),
         ));
     }
-    fmt.print(&steps, &human)
+    fmt.print(&out, &human)
 }
 
 pub async fn stop(g: &GlobalArgs, uuid: Option<&str>, branch: Option<&str>) -> Result<()> {
@@ -373,7 +405,7 @@ pub async fn stop(g: &GlobalArgs, uuid: Option<&str>, branch: Option<&str>) -> R
         None => {
             let branch = match branch {
                 Some(b) => b.to_string(),
-                None => git::current_branch()?,
+                None => current_head()?.branch,
             };
             client
                 .latest_pipeline(&repo.workspace, &repo.slug, Some(&branch))
@@ -401,7 +433,7 @@ pub async fn rerun(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
     let repo = current_repo()?;
     let branch = match branch {
         Some(b) => b.to_string(),
-        None => git::current_branch()?,
+        None => current_head()?.branch,
     };
     let client = client(g)?;
 
@@ -543,13 +575,21 @@ fn render_status(out: &CiStatusOut) -> String {
                 p.commit.as_deref().unwrap_or("-")
             ));
             if !p.steps.is_empty() {
+                let max_width = p
+                    .steps
+                    .iter()
+                    .map(|s| s.name.chars().count())
+                    .max()
+                    .unwrap_or(0)
+                    .max(18);
                 s.push_str(&format!("  {}\n", theme.label("Steps:")));
                 for st in &p.steps {
                     s.push_str(&format!(
-                        "    {} {:<18}  {}\n",
+                        "    {} {:<width$}  {}\n",
                         theme.status_glyph(&st.state),
                         st.name,
-                        human_duration(st.duration_seconds)
+                        human_duration(st.duration_seconds),
+                        width = max_width
                     ));
                 }
             }
