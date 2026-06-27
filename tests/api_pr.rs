@@ -50,6 +50,8 @@ async fn lists_open_prs() {
     assert_eq!(pr.id, 467);
     assert_eq!(pr.state, "OPEN");
     assert_eq!(pr.source.branch.as_ref().unwrap().name, "feat/x");
+    assert_eq!(pr.source_branch(), "feat/x");
+    assert_eq!(pr.destination_branch(), "main");
     assert_eq!(
         pr.web_url(),
         Some("https://bitbucket.org/sdadev/bvrm/pull-requests/467")

@@ -25,15 +25,6 @@ pub struct BuildStatus {
     pub updated_on: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BuildStatusPage {
-    #[serde(default)]
-    pub size: u64,
-    #[serde(default)]
-    pub pagelen: u64,
-    pub values: Vec<BuildStatus>,
-}
-
 impl BitbucketClient {
     /// `GET /repositories/{ws}/{slug}/commit/{commit}/statuses`
     pub async fn commit_statuses(
@@ -41,7 +32,7 @@ impl BitbucketClient {
         workspace: &str,
         slug: &str,
         commit: &str,
-    ) -> Result<BuildStatusPage> {
+    ) -> Result<super::Paginated<BuildStatus>> {
         let path = format!("/repositories/{workspace}/{slug}/commit/{commit}/statuses");
         self.send(reqwest::Method::GET, &path, None).await
     }
@@ -75,7 +66,7 @@ mod tests {
                 { "state": "FAILED", "key": "k2", "name": "n2", "url": "https://..." }
             ]
         });
-        let page: BuildStatusPage = serde_json::from_value(json).unwrap();
+        let page: crate::api::Paginated<BuildStatus> = serde_json::from_value(json).unwrap();
         assert_eq!(page.values.len(), 2);
         assert!(page.values[1].state == "FAILED");
     }
@@ -83,7 +74,7 @@ mod tests {
     #[test]
     fn build_status_defaults_on_empty() {
         let json = serde_json::json!({ "values": [] });
-        let page: BuildStatusPage = serde_json::from_value(json).unwrap();
+        let page: crate::api::Paginated<BuildStatus> = serde_json::from_value(json).unwrap();
         assert!(page.size == 0);
         assert!(page.values.is_empty());
     }

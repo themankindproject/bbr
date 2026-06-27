@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 use super::BitbucketClient;
-use crate::error::{BitbucketError, Result};
+use crate::error::Result;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Pipeline {
@@ -189,7 +189,7 @@ impl BitbucketClient {
         if limit > 100 {
             self.fetch_all_pages(&path, limit as usize).await
         } else {
-            let page: super::pr::Paginated<Pipeline> =
+            let page: super::Paginated<Pipeline> =
                 self.send(reqwest::Method::GET, &path, None).await?;
             Ok(page.values)
         }
@@ -213,8 +213,7 @@ impl BitbucketClient {
                 super::pr::url_encode(b)
             ));
         }
-        let page: super::pr::Paginated<Pipeline> =
-            self.send(reqwest::Method::GET, &path, None).await?;
+        let page: super::Paginated<Pipeline> = self.send(reqwest::Method::GET, &path, None).await?;
         Ok(page.values.into_iter().next())
     }
 
@@ -232,7 +231,7 @@ impl BitbucketClient {
         workspace: &str,
         slug: &str,
         uuid: &str,
-    ) -> Result<super::pr::Paginated<PipelineStep>> {
+    ) -> Result<super::Paginated<PipelineStep>> {
         let path = format!(
             "/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/?\
              fields=values.uuid,values.name,values.state,values.duration_in_seconds&\
@@ -248,23 +247,8 @@ impl BitbucketClient {
         uuid: &str,
         step: &str,
     ) -> Result<StepLog> {
-        let url = self.url(&format!(
-            "/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/{step}/log"
-        ));
-        let resp = self
-            .inner
-            .get(&url)
-            .header(reqwest::header::AUTHORIZATION, self.auth_header())
-            .header(reqwest::header::ACCEPT, "*/*")
-            .send()
-            .await
-            .map_err(BitbucketError::Http)?;
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.map_err(BitbucketError::Http)?;
-            return Err(super::map_error(status, &body));
-        }
-        let text = resp.text().await.map_err(BitbucketError::Http)?;
+        let path = format!("/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/{step}/log");
+        let text = self.send_raw(reqwest::Method::GET, &path, "*/*").await?;
         Ok(StepLog { text })
     }
 
@@ -275,16 +259,13 @@ impl BitbucketClient {
         uuid: &str,
     ) -> Result<Pipeline> {
         let path = format!("/repositories/{workspace}/{slug}/pipelines/{uuid}/rerun");
-        let body = serde_json::Value::Null;
-        self.send(reqwest::Method::POST, &path, Some(&body.to_string()))
-            .await
+        self.send(reqwest::Method::POST, &path, Some("null")).await
     }
 
     pub async fn stop_pipeline(&self, workspace: &str, slug: &str, uuid: &str) -> Result<()> {
         let path = format!("/repositories/{workspace}/{slug}/pipelines/{uuid}/stopPipeline");
-        let body = serde_json::Value::Null;
         let _: serde_json::Value = self
-            .send(reqwest::Method::POST, &path, Some(&body.to_string()))
+            .send(reqwest::Method::POST, &path, Some("null"))
             .await?;
         Ok(())
     }

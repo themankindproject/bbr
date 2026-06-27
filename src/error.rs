@@ -36,7 +36,7 @@ pub enum BitbucketError {
     #[error("not found: {0}")]
     NotFound(String),
 
-    #[error("Bitbucket API rate limit exceeded{0}")]
+    #[error("Bitbucket API rate limit exceeded: {0}")]
     RateLimit(String),
 
     #[error("HTTP error: {0}")]
@@ -112,6 +112,15 @@ mod tests {
     fn rate_limit_maps_correctly() {
         let e = BitbucketError::RateLimit("".into());
         assert_eq!(e.exit_code(), ExitCode::RateLimit);
+    }
+
+    #[test]
+    fn rate_limit_display_separates_context() {
+        let e = BitbucketError::RateLimit("HTTP 429: retry later".into());
+        assert_eq!(
+            format!("{e}"),
+            "Bitbucket API rate limit exceeded: HTTP 429: retry later"
+        );
     }
 
     #[test]

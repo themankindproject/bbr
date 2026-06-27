@@ -76,6 +76,22 @@ impl PullRequest {
     pub fn web_url(&self) -> Option<&str> {
         self.links.html.href.as_deref()
     }
+
+    pub fn source_branch(&self) -> &str {
+        self.source
+            .branch
+            .as_ref()
+            .map(|b| b.name.as_str())
+            .unwrap_or_default()
+    }
+
+    pub fn destination_branch(&self) -> &str {
+        self.destination
+            .branch
+            .as_ref()
+            .map(|b| b.name.as_str())
+            .unwrap_or_default()
+    }
 }
 
 /// `{branch_name} -> {branch_name}` plus repo metadata.
@@ -161,22 +177,6 @@ pub struct Markdown {
     pub raw: String,
     #[serde(default)]
     pub markup: Option<String>,
-}
-
-/// A paginated collection wrapper.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Paginated<T> {
-    #[serde(default)]
-    pub size: u64,
-    #[serde(default)]
-    pub page: u64,
-    #[serde(default)]
-    pub pagelen: u64,
-    #[serde(default)]
-    pub next: Option<String>,
-    #[serde(default)]
-    pub previous: Option<String>,
-    pub values: Vec<T>,
 }
 
 /// Body for `POST /repositories/{ws}/{slug}/pullrequests`.
@@ -277,7 +277,8 @@ impl BitbucketClient {
         if limit > 100 {
             self.fetch_all_pages(&path, limit as usize).await
         } else {
-            let page: Paginated<PullRequest> = self.send(reqwest::Method::GET, &path, None).await?;
+            let page: super::Paginated<PullRequest> =
+                self.send(reqwest::Method::GET, &path, None).await?;
             Ok(page.values)
         }
     }
@@ -316,7 +317,8 @@ impl BitbucketClient {
              pagelen=1&sort=-updated_on&q=source.branch.name%3D%22{}%22+AND+state%3D%22OPEN%22",
             url_encode(branch),
         );
-        let page: Paginated<PullRequest> = self.send(reqwest::Method::GET, &path, None).await?;
+        let page: super::Paginated<PullRequest> =
+            self.send(reqwest::Method::GET, &path, None).await?;
         Ok(page.values.into_iter().next())
     }
 
@@ -367,17 +369,13 @@ impl BitbucketClient {
     /// `POST /repositories/{ws}/{slug}/pullrequests/{id}/merge`
     pub async fn merge_pr(&self, workspace: &str, slug: &str, id: u64) -> Result<PullRequest> {
         let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}/merge");
-        let body = serde_json::json!({});
-        let raw = serde_json::to_string(&body)?;
-        self.send(reqwest::Method::POST, &path, Some(&raw)).await
+        self.send(reqwest::Method::POST, &path, Some("{}")).await
     }
 
     /// `POST /repositories/{ws}/{slug}/pullrequests/{id}/approve`
     pub async fn approve_pr(&self, workspace: &str, slug: &str, id: u64) -> Result<PullRequest> {
         let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}/approve");
-        let body = serde_json::json!({});
-        let raw = serde_json::to_string(&body)?;
-        self.send(reqwest::Method::POST, &path, Some(&raw)).await
+        self.send(reqwest::Method::POST, &path, Some("{}")).await
     }
 
     /// `DELETE /repositories/{ws}/{slug}/pullrequests/{id}/approve`
@@ -390,30 +388,14 @@ impl BitbucketClient {
     /// `POST /repositories/{ws}/{slug}/pullrequests/{id}/decline`
     pub async fn decline_pr(&self, workspace: &str, slug: &str, id: u64) -> Result<PullRequest> {
         let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}/decline");
-        let body = serde_json::json!({});
-        let raw = serde_json::to_string(&body)?;
-        self.send(reqwest::Method::POST, &path, Some(&raw)).await
+        self.send(reqwest::Method::POST, &path, Some("{}")).await
     }
 
     /// `GET /repositories/{ws}/{slug}/pullrequests/{id}/diff`
     pub async fn pr_diff(&self, workspace: &str, slug: &str, id: u64) -> Result<String> {
-        let url = self.url(&format!(
-            "/repositories/{workspace}/{slug}/pullrequests/{id}/diff"
-        ));
-        let resp = self
-            .inner
-            .get(&url)
-            .header(reqwest::header::AUTHORIZATION, self.auth_header())
-            .header(reqwest::header::ACCEPT, "text/plain")
-            .send()
+        let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}/diff");
+        self.send_raw(reqwest::Method::GET, &path, "text/plain")
             .await
-            .map_err(BitbucketError::Http)?;
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.map_err(BitbucketError::Http)?;
-            return Err(super::map_error(status, &body));
-        }
-        resp.text().await.map_err(BitbucketError::Http)
     }
 }
 

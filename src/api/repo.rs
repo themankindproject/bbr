@@ -83,7 +83,7 @@ impl BitbucketClient {
         workspace: &str,
         slug: &str,
         limit: u32,
-    ) -> Result<super::pr::Paginated<Branch>> {
+    ) -> Result<super::Paginated<Branch>> {
         let path = format!(
             "/repositories/{workspace}/{slug}/refs/branches?pagelen={limit}&sort=target.date"
         );
@@ -97,11 +97,9 @@ impl BitbucketClient {
         slug: &str,
         branch: Option<&str>,
         limit: u32,
-    ) -> Result<super::pr::Paginated<Commit>> {
+    ) -> Result<super::Paginated<Commit>> {
         let pagelen = limit.min(100);
-        let mut path = format!(
-            "/repositories/{workspace}/{slug}/commits?pagelen={pagelen}"
-        );
+        let mut path = format!("/repositories/{workspace}/{slug}/commits?pagelen={pagelen}");
         if let Some(b) = branch {
             path.push_str(&format!("&include={}", super::pr::url_encode(b)));
         }

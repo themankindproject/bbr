@@ -16,17 +16,41 @@ use crate::error::{BitbucketError, Result};
 /// Default page size when listing collections.
 pub const DEFAULT_PAGE_SIZE: u32 = 25;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Paginated<T> {
+    #[serde(default)]
+    pub size: u64,
+    #[serde(default)]
+    pub page: u64,
+    #[serde(default)]
+    pub pagelen: u64,
+    #[serde(default)]
+    pub next: Option<String>,
+    #[serde(default)]
+    pub previous: Option<String>,
+    pub values: Vec<T>,
+}
+
 /// Bitbucket Cloud REST API v2 wrapper.
 #[derive(Debug, Clone)]
 pub struct BitbucketClient {
     base_url: String,
     inner: Client,
     creds: Credentials,
+    auth_header: String,
 }
 
 impl BitbucketClient {
     /// Construct a new client. Uses rustls and a 30s timeout.
     pub fn new(base_url: &str, creds: Credentials) -> Result<Self> {
+        let auth_header = match creds.kind {
+            CredentialKind::Pat => format!("Bearer {}", creds.secret),
+            CredentialKind::AppPassword | CredentialKind::ApiToken => {
+                let raw = format!("{}:{}", creds.username, creds.secret);
+                let encoded = base64_encode(raw.as_bytes());
+                format!("Basic {encoded}")
+            }
+        };
         let inner = Client::builder()
             .user_agent(concat!("bbr/", env!("CARGO_PKG_VERSION")))
             .timeout(std::time::Duration::from_secs(30))
@@ -36,24 +60,13 @@ impl BitbucketClient {
             base_url: base_url.trim_end_matches('/').to_string(),
             inner,
             creds,
+            auth_header,
         })
     }
 
     /// Credentials accessor (used by `bb auth status`).
     pub fn creds(&self) -> &Credentials {
         &self.creds
-    }
-
-    pub(crate) fn auth_header(&self) -> String {
-        match self.creds.kind {
-            CredentialKind::Pat => format!("Bearer {}", self.creds.secret),
-            CredentialKind::AppPassword | CredentialKind::ApiToken => {
-                // HTTP Basic with username:secret
-                let raw = format!("{}:{}", self.creds.username, self.creds.secret);
-                let encoded = base64_encode(raw.as_bytes());
-                format!("Basic {encoded}")
-            }
-        }
     }
 
     /// Build a full URL from a path (path may start with `/`).
@@ -73,12 +86,12 @@ impl BitbucketClient {
     ) -> Result<T> {
         const MAX_RETRIES: u8 = 2;
         let mut attempt: u8 = 0;
+        let url = self.url(path);
         loop {
-            let url = self.url(path);
             let mut req = self
                 .inner
                 .request(method.clone(), &url)
-                .header(AUTHORIZATION, self.auth_header())
+                .header(AUTHORIZATION, &self.auth_header)
                 .header(ACCEPT, "application/json");
             if let Some(b) = body {
                 req = req
@@ -87,7 +100,7 @@ impl BitbucketClient {
             }
             let resp = req.send().await.map_err(BitbucketError::Http)?;
             match self.decode(resp).await {
-                Err(BitbucketError::RateLimit(msg)) if attempt < MAX_RETRIES => {
+                Err(BitbucketError::RateLimit(_msg)) if attempt < MAX_RETRIES => {
                     attempt += 1;
                     let base = u64::from(attempt) * 5;
                     let jitter = std::time::SystemTime::now()
@@ -98,7 +111,6 @@ impl BitbucketClient {
                     let wait = std::time::Duration::from_secs(base + u64::from(jitter));
                     tracing::warn!("rate limited, retrying in {:?} (attempt {attempt})", wait);
                     tokio::time::sleep(wait).await;
-                    let _ = msg;
                 }
                 other => return other,
             }
@@ -129,8 +141,7 @@ impl BitbucketClient {
         let mut all = Vec::new();
         let mut next_path = path.to_string();
         loop {
-            let page: crate::api::pr::Paginated<T> =
-                self.send(Method::GET, &next_path, None).await?;
+            let page: crate::api::Paginated<T> = self.send(Method::GET, &next_path, None).await?;
             let remaining = limit.saturating_sub(all.len());
             all.extend(page.values.into_iter().take(remaining));
             if all.len() >= limit {
@@ -144,6 +155,46 @@ impl BitbucketClient {
             }
         }
         Ok(all)
+    }
+
+    /// Issue a request and return the raw text body.
+    /// Used for non-JSON endpoints (e.g. diff, logs).
+    pub async fn send_raw(&self, method: Method, path: &str, accept: &str) -> Result<String> {
+        const MAX_RETRIES: u8 = 2;
+        let mut attempt: u8 = 0;
+        let url = self.url(path);
+        loop {
+            let resp = self
+                .inner
+                .request(method.clone(), &url)
+                .header(AUTHORIZATION, &self.auth_header)
+                .header(ACCEPT, accept)
+                .send()
+                .await
+                .map_err(BitbucketError::Http)?;
+            let status = resp.status();
+            let body = resp.text().await.map_err(BitbucketError::Http)?;
+            if !status.is_success() {
+                let err = map_error(status, &body);
+                match err {
+                    BitbucketError::RateLimit(_msg) if attempt < MAX_RETRIES => {
+                        attempt += 1;
+                        let base = u64::from(attempt) * 5;
+                        let jitter = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .subsec_nanos()
+                            % 3;
+                        let wait = std::time::Duration::from_secs(base + u64::from(jitter));
+                        tracing::warn!("rate limited, retrying in {:?} (attempt {attempt})", wait);
+                        tokio::time::sleep(wait).await;
+                        continue;
+                    }
+                    other => return Err(other),
+                }
+            }
+            return Ok(body);
+        }
     }
 
     async fn decode<T: DeserializeOwned>(&self, resp: reqwest::Response) -> Result<T> {
@@ -195,7 +246,7 @@ pub fn map_error(status: StatusCode, body: &str) -> BitbucketError {
         .and_then(|e| e.error.fields.as_ref())
         .filter(|f| !f.is_null() && !f.as_object().map_or(true, |o| o.is_empty()));
 
-    let mut full = msg.clone();
+    let mut full = msg;
     if let Some(d) = detail {
         if !full.is_empty() {
             full.push_str(". ");
@@ -234,7 +285,9 @@ pub fn map_error(status: StatusCode, body: &str) -> BitbucketError {
     match status {
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => BitbucketError::AuthFailed(full),
         StatusCode::NOT_FOUND => BitbucketError::NotFound(full),
-        StatusCode::TOO_MANY_REQUESTS => BitbucketError::RateLimit(format!(": HTTP {status}")),
+        StatusCode::TOO_MANY_REQUESTS => {
+            BitbucketError::RateLimit(format!("HTTP {status}: {full}"))
+        }
         _ => BitbucketError::Other(format!("HTTP {status}: {full}")),
     }
 }
