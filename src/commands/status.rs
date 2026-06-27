@@ -78,7 +78,37 @@ pub struct StepSummary {
     pub duration_seconds: u64,
 }
 
+pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
+    let theme = Theme::current();
+    loop {
+        // Run status and capture output
+        let result = run_inner(g).await;
+        match result {
+            Ok(out) => {
+                let human = render_human(&out);
+                // Clear previous output (ANSI escape: cursor up + clear)
+                print!("\x1B[2J\x1B[H");
+                print!("{} (refreshing every {interval_secs}s — Ctrl+C to stop)\n\n", theme.bold("bb status --watch"));
+                let fmt = Formatter::from_json_flag(g.json);
+                fmt.print(&out, &human)?;
+            }
+            Err(e) => {
+                print!("\x1B[2J\x1B[H");
+                eprintln!("bb: {e}");
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
+    }
+}
+
 pub async fn run(g: &GlobalArgs) -> Result<()> {
+    let out = run_inner(g).await?;
+    let fmt = Formatter::from_json_flag(g.json);
+    let human = render_human(&out);
+    fmt.print(&out, &human)
+}
+
+async fn run_inner(g: &GlobalArgs) -> Result<StatusOut> {
     let repo = current_repo()?;
     let head = current_head()?;
     let client = client(g)?;
@@ -119,7 +149,7 @@ pub async fn run(g: &GlobalArgs) -> Result<()> {
 
     let suggested_commands = suggested_commands(&pr_summary, &pipeline_summary);
 
-    let out = StatusOut {
+    Ok(StatusOut {
         repo: RepoSummary {
             workspace: repo.workspace.clone(),
             slug: repo.slug.clone(),
@@ -131,11 +161,7 @@ pub async fn run(g: &GlobalArgs) -> Result<()> {
         pipeline: pipeline_summary,
         commit_statuses,
         suggested_commands,
-    };
-
-    let fmt = Formatter::from_json_flag(g.json);
-    let human = render_human(&out);
-    fmt.print(&out, &human)
+    })
 }
 
 fn pr_summary(pr: &PullRequest) -> PrSummary {

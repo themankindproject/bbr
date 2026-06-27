@@ -52,6 +52,12 @@ pub enum Command {
     Status {
         #[command(flatten)]
         g: GlobalArgs,
+        /// Watch mode — refresh every N seconds.
+        #[arg(long)]
+        watch: bool,
+        /// Poll interval in seconds (used with --watch).
+        #[arg(long, default_value_t = 5)]
+        interval: u64,
     },
     /// Pull request operations.
     Pr {
@@ -106,6 +112,9 @@ pub enum PrAction {
     View {
         /// Pull request ID (defaults to current branch's open PR).
         id: Option<u64>,
+        /// Show the diff inline.
+        #[arg(long)]
+        diff: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -140,6 +149,8 @@ pub enum PrAction {
         body_file: Option<String>,
         #[arg(long, help = "read body from stdin")]
         body_stdin: bool,
+        #[arg(long, help = "reply to a specific comment ID")]
+        reply_to: Option<u64>,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -176,6 +187,16 @@ pub enum PrAction {
     /// Show the diff for a pull request.
     Diff {
         id: u64,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Update a pull request (title, description).
+    Update {
+        id: u64,
+        #[arg(long, help = "new title")]
+        title: Option<String>,
+        #[arg(long, help = "new description body")]
+        description: Option<String>,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -220,6 +241,15 @@ pub enum CiAction {
         failed: bool,
         #[arg(long, help = "select the latest step automatically")]
         latest: bool,
+        #[arg(long, help = "write log to file instead of stdout")]
+        output: Option<String>,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// List steps for a pipeline (defaults to latest pipeline on current branch).
+    Steps {
+        /// Pipeline UUID (defaults to latest pipeline on current branch).
+        uuid: Option<String>,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -248,6 +278,22 @@ pub enum RepoAction {
         #[command(flatten)]
         g: GlobalArgs,
     },
+    /// List remote branches.
+    Branches {
+        #[arg(long, help = "max results", default_value_t = 20)]
+        limit: u32,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// List recent commits.
+    Commits {
+        #[arg(long, help = "branch name (default: current branch)")]
+        branch: Option<String>,
+        #[arg(long, help = "max results", default_value_t = 20)]
+        limit: u32,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -271,13 +317,18 @@ pub enum OpenAction {
 pub enum AuthAction {
     /// Interactive credential setup.
     Setup,
-    /// Verify stored credentials work.
+    /// Show current credential status.
     Status {
         #[command(flatten)]
         g: GlobalArgs,
     },
     /// Remove stored credentials.
     Logout {
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Validate credentials by calling the API.
+    Test {
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -313,7 +364,13 @@ pub async fn run() -> ExitCode {
 async fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
         None => commands::status::run(&cli.global).await,
-        Some(Command::Status { g }) => commands::status::run(&g).await,
+        Some(Command::Status { g, watch, interval }) => {
+            if watch {
+                commands::status::run_watch(&g, interval).await
+            } else {
+                commands::status::run(&g).await
+            }
+        }
         Some(Command::Pr { action }) => match action {
             PrAction::List {
                 state,
@@ -331,7 +388,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 )
                 .await
             }
-            PrAction::View { id, g } => commands::pr::view(&g, id).await,
+            PrAction::View { id, diff, g } => commands::pr::view(&g, id, diff).await,
             PrAction::Create {
                 title,
                 body,
@@ -361,10 +418,18 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 body,
                 body_file,
                 body_stdin,
+                reply_to,
                 g,
             } => {
-                commands::pr::comment(&g, id, body.as_deref(), body_file.as_deref(), body_stdin)
-                    .await
+                commands::pr::comment(
+                    &g,
+                    id,
+                    body.as_deref(),
+                    body_file.as_deref(),
+                    body_stdin,
+                    reply_to,
+                )
+                .await
             }
             PrAction::Merge { id, g } => commands::pr::merge(&g, id).await,
             PrAction::Approve { id, g } => commands::pr::approve(&g, id).await,
@@ -372,6 +437,12 @@ async fn dispatch(cli: Cli) -> Result<()> {
             PrAction::Decline { id, g } => commands::pr::decline(&g, id).await,
             PrAction::Checkout { id, g } => commands::pr::checkout(&g, id).await,
             PrAction::Diff { id, g } => commands::pr::diff(&g, id).await,
+            PrAction::Update {
+                id,
+                title,
+                description,
+                g,
+            } => commands::pr::update(&g, id, title.as_deref(), description.as_deref()).await,
         },
         Some(Command::Ci { action }) => match action {
             CiAction::Status { branch, g } => commands::ci::status(&g, branch.as_deref()).await,
@@ -386,8 +457,19 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 step,
                 failed,
                 latest,
+                output,
                 g,
-            } => commands::ci::logs(&g, uuid.as_deref(), step.as_deref(), failed, latest).await,
+            } => {
+                commands::ci::logs(
+                    &g,
+                    uuid.as_deref(),
+                    step.as_deref(),
+                    failed,
+                    latest,
+                    output.as_deref(),
+                )
+                .await
+            }
             CiAction::List { branch, limit, g } => {
                 commands::ci::list(&g, branch.as_deref(), limit).await
             }
@@ -395,15 +477,21 @@ async fn dispatch(cli: Cli) -> Result<()> {
             CiAction::Stop { uuid, branch, g } => {
                 commands::ci::stop(&g, uuid.as_deref(), branch.as_deref()).await
             }
+            CiAction::Steps { uuid, g } => commands::ci::steps(&g, uuid.as_deref()).await,
         },
         Some(Command::Repo { action }) => match action {
             RepoAction::Info { g } => commands::repo::info(&g).await,
+            RepoAction::Branches { limit, g } => commands::repo::list_branches(&g, limit).await,
+            RepoAction::Commits { branch, limit, g } => {
+                commands::repo::list_commits(&g, branch.as_deref(), limit).await
+            }
         },
         Some(Command::Open { action, g }) => commands::open::run(&g, action).await,
         Some(Command::Auth { action }) => match action {
             AuthAction::Setup => commands::auth::setup(),
             AuthAction::Status { g } => commands::auth::status(&g).await,
             AuthAction::Logout { g } => commands::auth::logout(&g),
+            AuthAction::Test { g } => commands::auth::test(&g).await,
         },
         Some(Command::Completion { shell }) => {
             generate(shell, &mut Cli::command(), "bb", &mut io::stdout());

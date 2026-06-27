@@ -212,11 +212,28 @@ pub struct ReviewerRef {
 #[derive(Debug, Serialize)]
 pub struct CreateCommentRequest {
     pub content: CommentContent,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<CommentParent>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CommentParent {
+    pub id: u64,
 }
 
 #[derive(Debug, Serialize)]
 pub struct CommentContent {
     pub raw: String,
+}
+
+/// Body for `PUT /repositories/{ws}/{slug}/pullrequests/{id}`.
+#[derive(Debug, Serialize)]
+pub struct UpdatePrRequest {
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub close_source_branch: Option<bool>,
 }
 
 impl BitbucketClient {
@@ -315,15 +332,36 @@ impl BitbucketClient {
     }
 
     /// `POST /repositories/{ws}/{slug}/pullrequests/{id}/comments`
-    pub async fn comment_pr(&self, workspace: &str, slug: &str, id: u64, text: &str) -> Result<()> {
+    pub async fn comment_pr(
+        &self,
+        workspace: &str,
+        slug: &str,
+        id: u64,
+        text: &str,
+        reply_to: Option<u64>,
+    ) -> Result<()> {
         let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}/comments");
         let body = CreateCommentRequest {
             content: CommentContent {
                 raw: text.to_string(),
             },
+            parent: reply_to.map(|p| CommentParent { id: p }),
         };
         let _: serde_json::Value = self.post(&path, &body).await?;
         Ok(())
+    }
+
+    /// `PUT /repositories/{ws}/{slug}/pullrequests/{id}`
+    pub async fn update_pr(
+        &self,
+        workspace: &str,
+        slug: &str,
+        id: u64,
+        body: &UpdatePrRequest,
+    ) -> Result<PullRequest> {
+        let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}");
+        let raw = serde_json::to_string(body)?;
+        self.send(reqwest::Method::PUT, &path, Some(&raw)).await
     }
 
     /// `POST /repositories/{ws}/{slug}/pullrequests/{id}/merge`

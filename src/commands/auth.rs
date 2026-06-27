@@ -131,6 +131,26 @@ pub async fn status(g: &GlobalArgs) -> Result<()> {
     fmt.print(&out, &human)
 }
 
+/// Validate credentials by calling the API.
+pub async fn test(g: &GlobalArgs) -> Result<()> {
+    let creds = auth::resolve()?;
+    let client = client(g)?;
+
+    let user = client.current_user().await?;
+    let out = serde_json::json!({
+        "authenticated": true,
+        "display_name": user.display_name,
+        "uuid": user.uuid,
+        "credential_type": format!("{:?}", creds.kind),
+    });
+    let human = format!(
+        "✓ Authenticated as {} ({})",
+        user.display_name,
+        creds.username
+    );
+    Formatter::from_json_flag(g.json).print(&out, &human)
+}
+
 /// Remove stored credentials.
 pub fn logout(g: &GlobalArgs) -> Result<()> {
     let removed = config::delete_credentials()?;

@@ -270,6 +270,7 @@ pub async fn logs(
     step: Option<&str>,
     failed: bool,
     latest: bool,
+    output: Option<&str>,
 ) -> Result<()> {
     let repo = current_repo()?;
     let client = client(g)?;
@@ -300,9 +301,68 @@ pub async fn logs(
         log: log.text.clone(),
     };
 
+    if let Some(path) = output {
+        std::fs::write(path, &log.text)
+            .map_err(|e| BitbucketError::Other(format!("writing {path}: {e}")))?;
+        let fmt = Formatter::from_json_flag(g.json);
+        let human = format!("Wrote {} bytes to {path}", log.text.len());
+        return fmt.print(&out, &human);
+    }
+
     let fmt = Formatter::from_json_flag(g.json);
     let human = log.text;
     fmt.print(&out, &human)
+}
+
+pub async fn steps(g: &GlobalArgs, uuid: Option<&str>) -> Result<()> {
+    let repo = current_repo()?;
+    let client = client(g)?;
+    let uuid = match uuid {
+        Some(u) => normalize_uuid(u),
+        None => {
+            let branch = git::current_branch()?;
+            client
+                .latest_pipeline(&repo.workspace, &repo.slug, Some(&branch))
+                .await?
+                .ok_or_else(|| {
+                    BitbucketError::NotFound(format!("no pipeline for branch '{branch}'"))
+                })?
+                .uuid
+        }
+    };
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Fetching steps...");
+    let raw = client
+        .list_steps(&repo.workspace, &repo.slug, &uuid)
+        .await?;
+    spinner.finish_and_clear();
+
+    let steps: Vec<PipelineOut> = vec![PipelineOut {
+        uuid: uuid.clone(),
+        build_number: 0,
+        state: String::new(),
+        duration_seconds: 0,
+        branch: None,
+        commit: None,
+        steps: raw.values.iter().map(step_out).collect(),
+    }];
+
+    let fmt = Formatter::from_json_flag(g.json);
+    let theme = Theme::current();
+    let mut human = String::new();
+    for (i, s) in raw.values.iter().enumerate() {
+        let mark = if s.is_failed() { theme.error("[X]") } else { theme.success("[ok]") };
+        human.push_str(&format!(
+            "  {} {:<2}  {:<20}  {}  ({})\n",
+            mark,
+            i + 1,
+            s.name,
+            s.state_name(),
+            human_duration(s.duration_in_seconds),
+        ));
+    }
+    fmt.print(&steps, &human)
 }
 
 pub async fn stop(g: &GlobalArgs, uuid: Option<&str>, branch: Option<&str>) -> Result<()> {

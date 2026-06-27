@@ -3,7 +3,7 @@
 use serde::Serialize;
 
 use crate::api::pr::{
-    CreateBranchRef, CreateNamed, CreatePrRequest, PrState, PullRequest, ReviewerRef,
+    CreateBranchRef, CreateNamed, CreatePrRequest, PrState, PullRequest, ReviewerRef, UpdatePrRequest,
 };
 use crate::cli::GlobalArgs;
 use crate::commands::{client, confirm, current_repo, make_spinner, resolve_body};
@@ -102,7 +102,7 @@ pub async fn list(
     fmt.print(&out, &human)
 }
 
-pub async fn view(g: &GlobalArgs, id: Option<u64>) -> Result<()> {
+pub async fn view(g: &GlobalArgs, id: Option<u64>, show_diff: bool) -> Result<()> {
     let repo = current_repo()?;
     let client = client(g)?;
 
@@ -144,7 +144,16 @@ pub async fn view(g: &GlobalArgs, id: Option<u64>) -> Result<()> {
     };
 
     let fmt = Formatter::from_json_flag(g.json);
-    let human = render_view(&out);
+    let mut human = render_view(&out);
+
+    if show_diff {
+        let spinner = make_spinner(g.json);
+        spinner.set_message("Fetching diff...");
+        let diff = client.pr_diff(&repo.workspace, &repo.slug, pr.id).await?;
+        spinner.finish_and_clear();
+        human.push_str(&format!("\n\n{}", diff));
+    }
+
     fmt.print(&out, &human)
 }
 
@@ -239,12 +248,13 @@ pub async fn comment(
     body: Option<&str>,
     body_file: Option<&str>,
     body_stdin: bool,
+    reply_to: Option<u64>,
 ) -> Result<()> {
     let repo = current_repo()?;
     let client = client(g)?;
     let text = resolve_body(body, body_file, body_stdin)?;
     client
-        .comment_pr(&repo.workspace, &repo.slug, id, &text)
+        .comment_pr(&repo.workspace, &repo.slug, id, &text, reply_to)
         .await?;
 
     let out = PrCommentOut {
@@ -252,7 +262,11 @@ pub async fn comment(
         posted: true,
     };
     let fmt = Formatter::from_json_flag(g.json);
-    let human = format!("Commented on PR #{}", id);
+    let human = if reply_to.is_some() {
+        format!("Replied to comment on PR #{}", id)
+    } else {
+        format!("Commented on PR #{}", id)
+    };
     fmt.print(&out, &human)
 }
 
@@ -416,6 +430,64 @@ pub async fn checkout(g: &GlobalArgs, id: u64) -> Result<()> {
         &serde_json::json!({ "id": id, "branch": branch }),
         &format!("Checked out PR #{}: {}", id, branch),
     )
+}
+
+pub async fn update(
+    g: &GlobalArgs,
+    id: u64,
+    new_title: Option<&str>,
+    new_description: Option<&str>,
+) -> Result<()> {
+    let repo = current_repo()?;
+    let client = client(g)?;
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Fetching PR details...");
+    let pr = client.get_pr(&repo.workspace, &repo.slug, id).await?;
+    spinner.finish_and_clear();
+
+    let req = UpdatePrRequest {
+        title: new_title.unwrap_or(&pr.title).to_string(),
+        description: new_description
+            .map(|d| d.to_string())
+            .or_else(|| pr.description.clone()),
+        close_source_branch: None,
+    };
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Updating PR...");
+    let pr = client
+        .update_pr(&repo.workspace, &repo.slug, id, &req)
+        .await?;
+    spinner.finish_and_clear();
+
+    let out = PrViewOut {
+        id: pr.id,
+        state: pr.state.clone(),
+        title: pr.title.clone(),
+        description: pr.description.clone(),
+        source: pr
+            .source
+            .branch
+            .as_ref()
+            .map(|b| b.name.clone())
+            .unwrap_or_default(),
+        destination: pr
+            .destination
+            .branch
+            .as_ref()
+            .map(|b| b.name.clone())
+            .unwrap_or_default(),
+        author: pr.author.as_ref().map(|a| a.display_name.clone()),
+        url: pr.links.html.href.clone(),
+        comment_count: pr.comment_count,
+        task_count: pr.task_count,
+        close_source_branch: pr.close_source_branch,
+    };
+
+    let fmt = Formatter::from_json_flag(g.json);
+    let human = format!("Updated PR #{}", id);
+    fmt.print(&out, &human)
 }
 
 pub async fn diff(g: &GlobalArgs, id: u64) -> Result<()> {

@@ -48,6 +48,28 @@ pub struct Branch {
     pub links: super::pr::Links,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Commit {
+    #[serde(default)]
+    pub hash: String,
+    #[serde(default)]
+    pub message: String,
+    #[serde(default)]
+    pub date: Option<String>,
+    #[serde(default)]
+    pub links: super::pr::Links,
+    #[serde(default)]
+    pub author: Option<CommitAuthor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitAuthor {
+    #[serde(default)]
+    pub raw: String,
+    #[serde(default)]
+    pub user: Option<super::pr::User>,
+}
+
 impl BitbucketClient {
     /// `GET /repositories/{ws}/{slug}`
     pub async fn get_repo(&self, workspace: &str, slug: &str) -> Result<Repository> {
@@ -65,6 +87,24 @@ impl BitbucketClient {
         let path = format!(
             "/repositories/{workspace}/{slug}/refs/branches?pagelen={limit}&sort=target.date"
         );
+        self.send(reqwest::Method::GET, &path, None).await
+    }
+
+    /// `GET /repositories/{ws}/{slug}/commits?pagelen=N&include=branch`
+    pub async fn list_commits(
+        &self,
+        workspace: &str,
+        slug: &str,
+        branch: Option<&str>,
+        limit: u32,
+    ) -> Result<super::pr::Paginated<Commit>> {
+        let pagelen = limit.min(100);
+        let mut path = format!(
+            "/repositories/{workspace}/{slug}/commits?pagelen={pagelen}"
+        );
+        if let Some(b) = branch {
+            path.push_str(&format!("&include={}", super::pr::url_encode(b)));
+        }
         self.send(reqwest::Method::GET, &path, None).await
     }
 
