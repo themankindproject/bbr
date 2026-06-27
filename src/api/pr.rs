@@ -90,6 +90,7 @@ pub struct BranchRef {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Named {
+    #[serde(default)]
     pub name: String,
 }
 
@@ -97,6 +98,7 @@ pub struct Named {
 pub struct RepoRef {
     #[serde(default)]
     pub full_name: String,
+    #[serde(default)]
     pub name: String,
     #[serde(rename = "type")]
     pub kind: String,
@@ -133,6 +135,7 @@ pub struct Participant {
     pub nickname: Option<String>,
     #[serde(default)]
     pub uuid: Option<String>,
+    #[serde(default)]
     pub role: String,
     #[serde(default)]
     pub approved: bool,

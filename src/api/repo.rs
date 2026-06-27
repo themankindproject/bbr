@@ -11,6 +11,7 @@ pub struct Repository {
     pub uuid: String,
     #[serde(default)]
     pub full_name: String,
+    #[serde(default)]
     pub name: String,
     pub slug: String,
     #[serde(default)]
@@ -37,6 +38,7 @@ pub struct Repository {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Branch {
+    #[serde(default)]
     pub name: String,
     #[serde(default)]
     pub merged: bool,

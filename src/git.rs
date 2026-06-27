@@ -59,11 +59,12 @@ pub fn head() -> Result<Head> {
 
 /// Parse a Bitbucket Cloud remote URL into a [`RepoIdentity`].
 ///
-/// Accepts both HTTPS (`https://bitbucket.org/<ws>/<slug>.git`) and SSH
-/// (`git@bitbucket.org:<ws>/<slug>.git`) forms.
+/// Accepts HTTPS (`https://bitbucket.org/<ws>/<slug>.git`), SSH
+/// (`git@bitbucket.org:<ws>/<slug>.git`), and SSH host alias
+/// (`git@alias:<ws>/<slug>.git`) forms.
 pub fn parse_remote_url(url: &str) -> Option<RepoIdentity> {
     let url = url.trim().trim_end_matches(".git");
-    // strip credentials embedded in https url: https://user:pass@bitbucket.org/ws/slug
+    // strip credentials embedded in https url: https://user:pass@host/ws/slug
     let no_scheme = url
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))
@@ -72,11 +73,11 @@ pub fn parse_remote_url(url: &str) -> Option<RepoIdentity> {
             rest.split('@').next_back().unwrap_or(rest)
         });
 
-    // Drop the host segment, keeping "<workspace>/<slug>".
     let path: &str = if let Some(rest) = no_scheme {
         rest.split_once('/').map(|(_, tail)| tail)?
     } else {
-        url.strip_prefix("git@bitbucket.org:")?
+        url.strip_prefix("git@")
+            .and_then(|rest| rest.split_once(':').map(|(_, path)| path))?
     };
 
     let mut parts = path.splitn(2, '/');
@@ -92,28 +93,23 @@ pub fn parse_remote_url(url: &str) -> Option<RepoIdentity> {
 }
 
 /// Detect the Bitbucket repo identity from the `origin` remote (falling back
-/// to any remote whose URL points at `bitbucket.org`).
+/// to scanning all remotes).
 pub fn detect_repo() -> Result<RepoIdentity> {
     // Prefer `origin` explicitly before scanning all remotes.
     if let Ok(url) = git(&["remote", "get-url", "origin"]) {
-        if url.contains("bitbucket.org") {
-            if let Some(id) = parse_remote_url(&url) {
-                return Ok(id);
-            }
+        if let Some(id) = parse_remote_url(&url) {
+            return Ok(id);
         }
     }
-    // Fall back to the first remote that resolves to bitbucket.org.
+    // Fall back to scanning all remotes.
     let remotes = git(&["remote", "-v"])?;
     for line in remotes.lines() {
-        // lines look like: "origin\tgit@bitbucket.org:ws/slug.git (fetch)"
         let mut parts = line.split('\t');
         let _name = parts.next();
         let rest = parts.next().unwrap_or("");
         let url = rest.split_whitespace().next().unwrap_or("");
-        if url.contains("bitbucket.org") {
-            if let Some(id) = parse_remote_url(url) {
-                return Ok(id);
-            }
+        if let Some(id) = parse_remote_url(url) {
+            return Ok(id);
         }
     }
     Err(BitbucketError::Git(
@@ -148,7 +144,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_bitbucket() {
-        assert!(parse_remote_url("git@github.com:foo/bar.git").is_none());
+    fn parses_ssh_url_with_any_host() {
+        let id = parse_remote_url("git@github.com:foo/bar.git").unwrap();
+        assert_eq!(id.workspace, "foo");
+        assert_eq!(id.slug, "bar");
     }
 }

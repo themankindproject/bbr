@@ -66,6 +66,7 @@ pub struct PipelineResult {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Named {
+    #[serde(default)]
     pub name: String,
 }
 
