@@ -248,6 +248,8 @@ impl BitbucketClient {
         uuid: &str,
         step: &str,
     ) -> Result<StepLog> {
+        let uuid = normalize_uuid(uuid);
+        let step = normalize_uuid(step);
         let url = self.url(&format!(
             "/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/{step}/log"
         ));
@@ -255,7 +257,7 @@ impl BitbucketClient {
             .inner
             .get(&url)
             .header(reqwest::header::AUTHORIZATION, self.auth_header())
-            .header(reqwest::header::ACCEPT, "text/plain")
+            .header(reqwest::header::ACCEPT, "*/*")
             .send()
             .await
             .map_err(BitbucketError::Http)?;
