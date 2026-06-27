@@ -120,6 +120,24 @@ pub struct PipelineStep {
     pub links: super::pr::Links,
 }
 
+impl PipelineStep {
+    pub fn state_name(&self) -> &str {
+        if let Some(r) = &self.state.result {
+            if !r.name.is_empty() {
+                return &r.name;
+            }
+        }
+        &self.state.name
+    }
+
+    pub fn is_failed(&self) -> bool {
+        matches!(
+            self.state_name().to_ascii_uppercase().as_str(),
+            "FAILED" | "ERROR" | "STOPPED"
+        )
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Command {
     #[serde(default)]

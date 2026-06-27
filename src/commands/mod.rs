@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod ci;
+pub mod open;
 pub mod pr;
 pub mod repo;
 pub mod status;

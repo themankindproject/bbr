@@ -68,6 +68,13 @@ pub enum Command {
         #[command(subcommand)]
         action: RepoAction,
     },
+    /// Open Bitbucket pages in your browser.
+    Open {
+        #[command(subcommand)]
+        action: Option<OpenAction>,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
     /// Credential management.
     Auth {
         #[command(subcommand)]
@@ -145,15 +152,21 @@ pub enum CiAction {
         branch: Option<String>,
         #[arg(long, default_value_t = 5)]
         interval_secs: u64,
+        #[arg(long, help = "print failing step log when the pipeline fails")]
+        logs: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },
-    /// Fetch logs for a pipeline (or a specific step).
+    /// Fetch logs for a pipeline (defaults to latest pipeline on current branch).
     Logs {
-        /// Pipeline UUID (with or without braces).
-        uuid: String,
-        #[arg(long, help = "specific step UUID")]
+        /// Pipeline UUID (with or without braces). Defaults to latest pipeline on current branch.
+        uuid: Option<String>,
+        #[arg(long, help = "specific step UUID or step name")]
         step: Option<String>,
+        #[arg(long, help = "select the failing step automatically")]
+        failed: bool,
+        #[arg(long, help = "select the latest step automatically")]
+        latest: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -165,6 +178,19 @@ pub enum RepoAction {
     Info {
         #[command(flatten)]
         g: GlobalArgs,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum OpenAction {
+    /// Open the repository page.
+    Repo,
+    /// Open a pull request (defaults to current branch's open PR).
+    Pr { id: Option<u64> },
+    /// Open the latest pipeline for the current branch.
+    Ci {
+        #[arg(long)]
+        branch: Option<String>,
     },
 }
 
@@ -252,15 +278,21 @@ async fn dispatch(cli: Cli) -> Result<()> {
             CiAction::Watch {
                 branch,
                 interval_secs,
+                logs,
                 g,
-            } => commands::ci::watch(&g, branch.as_deref(), interval_secs).await,
-            CiAction::Logs { uuid, step, g } => {
-                commands::ci::logs(&g, &uuid, step.as_deref()).await
-            }
+            } => commands::ci::watch(&g, branch.as_deref(), interval_secs, logs).await,
+            CiAction::Logs {
+                uuid,
+                step,
+                failed,
+                latest,
+                g,
+            } => commands::ci::logs(&g, uuid.as_deref(), step.as_deref(), failed, latest).await,
         },
         Command::Repo { action } => match action {
             RepoAction::Info { g } => commands::repo::info(&g).await,
         },
+        Command::Open { action, g } => commands::open::run(&g, action).await,
         Command::Auth { action } => match action {
             AuthAction::Setup => commands::auth::setup(),
             AuthAction::Status { g } => commands::auth::status(&g).await,
