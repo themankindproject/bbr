@@ -11,12 +11,15 @@ Bitbucket never had.
 
 ```text
 $ bb status
+Repo: sdadev/bvrm-backend
 On branch: feat/av1-ffprobe-timeout  (commit 765d8bec)
 
 PR #467 — open
   feat/av1-ffprobe-timeout -> main
   Title: create frame_utils_1_2 with ffprobe-based AV1 detection
   Author: bravo1goingdark
+  Reviewers: Ash approved, Sam pending
+  Comments: 5  /  Tasks: 1
   URL:   https://bitbucket.org/sdadev/bvrm-backend/pull-requests/467
 
 CI - last pipeline
@@ -24,6 +27,10 @@ CI - last pipeline
   Branch: test-ci  /  Commit: 4644ec4b
   Steps:
     [ok] Run Tests        172s
+
+Next:
+  bb open pr
+  bb open ci
 ```
 
 ## Overview
@@ -31,9 +38,10 @@ CI - last pipeline
 | Feature | Status |
 |---------|--------|
 | **PR lifecycle** | `list`, `view`, `create`, `comment` |
-| **CI / pipelines** | `status`, `watch` (live-tail), `logs` |
+| **CI / pipelines** | `status`, `watch --logs`, `logs --failed` |
 | **Auth** | PAT + legacy app password, env / config-file |
 | **Output** | `--json` stable schema for agents, pretty tables for humans |
+| **Browser shortcuts** | `bb open`, `bb open pr`, `bb open ci` |
 | **Shell** | bash / zsh / fish completions via `bb completion` |
 | **Binary** | single static binary, < 5 MB stripped, zero runtime deps |
 
@@ -46,7 +54,7 @@ Perfect for:
 
 ```bash
 # from source
-cargo install --git https://github.com/themankindproject/bbr
+cargo install --locked --git https://github.com/themankindproject/bbr
 
 # pre-built binary (releases page)
 curl -sSf https://github.com/themankindproject/bbr/releases/latest/download/bbr-x86_64-unknown-linux-gnu.tar.gz | tar xz
@@ -75,7 +83,9 @@ bb status            # PR + CI for current branch
 bb pr list           # open PRs in this repo
 bb pr create --title "Fix X" --body-file pr.md
 bb ci status         # last pipeline for current branch
-bb ci watch          # live-tail a running pipeline
+bb ci logs --failed  # failed step log from latest pipeline
+bb ci watch --logs   # live-tail and print failing logs on failure
+bb open pr           # open current branch's PR
 ```
 
 ## Features
@@ -102,14 +112,17 @@ bb pr comment <id> --body B
 
 ```bash
 bb ci status [--branch B]
-bb ci watch  [--branch B]            # live tail, exits non-zero on failure
-bb ci logs   <pipeline-uuid>         # fetch step logs
+bb ci watch  [--branch B] [--logs]   # exits non-zero on failure
+bb ci logs   [pipeline-uuid]         # defaults to latest pipeline/current branch
+bb ci logs   --failed                # fetch failed step log automatically
+bb ci logs   --step "Run Tests"      # step UUID or step name
 ```
 
 ### Repository and auth
 
 ```bash
 bb repo info                         # show workspace/slug for current dir
+bb open [repo|pr|ci]                 # open Bitbucket in your browser
 bb auth setup                        # interactive credential setup
 bb auth status                       # verify stored credentials work
 bb auth logout                       # remove stored credentials
@@ -210,6 +223,7 @@ src/
 │   ├── status.rs     # `bb status` — merged PR + CI view
 │   ├── pr.rs         # `bb pr` subcommands
 │   ├── ci.rs         # `bb ci` subcommands
+│   ├── open.rs       # `bb open` browser shortcuts
 │   ├── auth.rs       # `bb auth` subcommands
 │   └── repo.rs       # `bb repo info`
 └── output/

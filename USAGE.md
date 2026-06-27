@@ -13,6 +13,7 @@
   - [`bb pr`](#bb-pr) — pull request operations
   - [`bb ci`](#bb-ci) — pipeline operations
   - [`bb repo`](#bb-repo) — repository metadata
+  - [`bb open`](#bb-open) — browser shortcuts
   - [`bb auth`](#bb-auth) — credential management
   - [`bb completion`](#bb-completion) — shell completions
 - [Authentication](#authentication)
@@ -33,7 +34,7 @@
 
 ```bash
 # from source
-cargo install --git https://github.com/themankindproject/bbr
+cargo install --locked --git https://github.com/themankindproject/bbr
 
 # pre-built binary (releases page)
 curl -sSf https://github.com/themankindproject/bbr/releases/latest/download/bbr-x86_64-unknown-linux-gnu.tar.gz | tar xz
@@ -58,7 +59,9 @@ bb status            # PR + CI for current branch
 bb pr list           # open PRs
 bb pr create --title "Fix X" --body-file pr.md
 bb ci status         # last pipeline
-bb ci watch          # live-tail
+bb ci logs --failed  # failed step log from latest pipeline
+bb ci watch --logs   # live-tail and print failing logs on failure
+bb open pr           # open current branch's PR
 ```
 
 ---
@@ -108,12 +111,15 @@ The killer feature — shows PR + CI for the current branch in one view.
 
 ```bash
 $ bb status
+Repo: sdadev/bvrm-backend
 On branch: feat/av1-ffprobe-timeout  (commit 765d8bec)
 
 PR #467 — open
   feat/av1-ffprobe-timeout -> main
   Title: create frame_utils_1_2 with ffprobe-based AV1 detection
   Author: bravo1goingdark
+  Reviewers: Ash approved, Sam pending
+  Comments: 5  /  Tasks: 1
   URL:   https://bitbucket.org/sdadev/bvrm-backend/pull-requests/467
 
 CI - last pipeline
@@ -121,6 +127,10 @@ CI - last pipeline
   Branch: test-ci  /  Commit: 4644ec4b
   Steps:
     [ok] Run Tests        172s
+
+Next:
+  bb open pr
+  bb open ci
 ```
 
 #### JSON output
@@ -128,6 +138,11 @@ CI - last pipeline
 ```bash
 $ bb status --json
 {
+  "repo": {
+    "workspace": "sdadev",
+    "slug": "bvrm-backend",
+    "full_name": "sdadev/bvrm-backend"
+  },
   "branch": "feat/av1-ffprobe-timeout",
   "commit": "765d8bec",
   "pr": {
@@ -137,7 +152,13 @@ $ bb status --json
     "source": "feat/av1-ffprobe-timeout",
     "destination": "main",
     "url": "https://bitbucket.org/sdadev/bvrm-backend/pull-requests/467",
-    "author": "bravo1goingdark"
+    "author": "bravo1goingdark",
+    "comment_count": 5,
+    "task_count": 1,
+    "reviewers": [
+      { "display_name": "Ash", "approved": true },
+      { "display_name": "Sam", "approved": false }
+    ]
   },
   "pipeline": {
     "uuid": "{abc-123}",
@@ -145,10 +166,13 @@ $ bb status --json
     "duration_seconds": 172,
     "branch": "test-ci",
     "commit": "4644ec4b",
+    "url": "https://bitbucket.org/sdadev/bvrm-backend/pipelines/results/42",
+    "failing_steps": [],
     "steps": [
-      { "name": "Run Tests", "state": "SUCCESSFUL", "duration_seconds": 172 }
+      { "uuid": "{step-1}", "name": "Run Tests", "state": "SUCCESSFUL", "duration_seconds": 172 }
     ]
-  }
+  },
+  "suggested_commands": ["bb open pr", "bb open ci"]
 }
 ```
 
@@ -265,15 +289,21 @@ Options:
 |------|-------------|---------|
 | `--branch` | Branch to watch | current branch |
 | `--interval-secs` | Poll interval | `5` |
+| `--logs` | Print the failing step log when the pipeline fails | `false` |
 | `--json` | Emit JSON | `false` |
 
 #### `bb ci logs`
 
-Fetch logs for a pipeline step.
+Fetch logs for a pipeline step. With no UUID, it uses the latest pipeline for the current branch and prefers a failed step.
 
 ```bash
-bb ci logs {abc-123}                    # first step's log
-bb ci logs {abc-123} --step {step-1}    # specific step
+bb ci logs                              # smart default: failed step, else latest step
+bb ci logs --failed                     # require a failed step
+bb ci logs --latest                     # latest step from latest pipeline
+bb ci logs {abc-123}                    # first step's log for a specific pipeline
+bb ci logs {abc-123} --failed           # failed step for a specific pipeline
+bb ci logs {abc-123} --step {step-1}    # specific step UUID
+bb ci logs {abc-123} --step "Run Tests" # specific step name
 ```
 
 ---
@@ -295,6 +325,21 @@ url:       https://bitbucket.org/sdadev/bvrm-backend
 
 ---
 
+### `bb open`
+
+Open Bitbucket pages in your browser. With `--json`, `bb` prints the URL and does not launch a browser.
+
+```bash
+bb open              # repository page
+bb open repo         # repository page
+bb open pr           # current branch's open PR
+bb open pr 467       # PR by ID
+bb open ci           # latest pipeline for current branch
+bb open ci --branch main
+```
+
+---
+
 ### `bb auth`
 
 Credential management.
@@ -311,8 +356,9 @@ $ bb auth setup
 
 Bitbucket username (email): you@example.com
   Credential type:
-    1) Personal Access Token (recommended)
-    2) App password (legacy)
+    1) Atlassian API Token (recommended, from id.atlassian.com)
+    2) Personal Access Token (from bitbucket.org)
+    3) App password (legacy)
 Choose [1]: 1
 Secret: ********
   Stored credentials in: ~/.config/bb/credentials.toml
