@@ -123,11 +123,7 @@ fn fetch_optional<T>(r: Result<Option<T>>) -> Result<Option<T>> {
     match r {
         Ok(v) => Ok(v),
         Err(BitbucketError::NotFound(_)) => Ok(None),
-        Err(e @ BitbucketError::AuthFailed(_))
-        | Err(e @ BitbucketError::NoCredentials)
-        | Err(e @ BitbucketError::RateLimit(_))
-        | Err(e @ BitbucketError::Http(_)) => Err(e),
-        Err(_) => Ok(None),
+        Err(e) => Err(e),
     }
 }
 

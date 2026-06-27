@@ -1,8 +1,8 @@
 //! Pretty table rendering for humans.
 
-use comfy_table::{ContentArrangement, Table as ComfyTable};
+use std::io::IsTerminal;
 
-use super::theme::Theme;
+use comfy_table::{ContentArrangement, Table as ComfyTable};
 
 /// A small wrapper around `comfy_table::Table` that applies our theme and
 /// honors `NO_COLOR` / non-TTY.
@@ -17,7 +17,7 @@ impl Table {
             .load_preset(comfy_table::presets::UTF8_FULL)
             .apply_modifier(comfy_table::modifiers::UTF8_ROUND_CORNERS)
             .set_content_arrangement(ContentArrangement::Dynamic);
-        if !Theme::current().colors_enabled() {
+        if !std::io::stdout().is_terminal() {
             inner.force_no_tty();
         }
         Self { inner }

@@ -153,7 +153,7 @@ On failure, `success` is `false` and the process exits with code `5`.
   "workspace": "sdadev",
   "slug": "bvrm",
   "full_name": "sdadev/bvrm",
-  "scim": "git",
+  "scm": "git",
   "private": true,
   "language": "Rust",
   "description": "...",

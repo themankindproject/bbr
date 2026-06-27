@@ -34,7 +34,13 @@ fn git(args: &[&str]) -> Result<String> {
 
 /// Current branch name. Errors with a friendly message if HEAD is detached.
 pub fn current_branch() -> Result<String> {
-    git(&["rev-parse", "--abbrev-ref", "HEAD"])
+    let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"])?;
+    if branch == "HEAD" {
+        return Err(BitbucketError::Git(
+            "HEAD is detached (not on any branch)".into(),
+        ));
+    }
+    Ok(branch)
 }
 
 /// Short (12-char) commit hash for HEAD.

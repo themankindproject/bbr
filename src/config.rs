@@ -124,7 +124,7 @@ fn write_private(path: &std::path::Path, contents: &str) -> std::io::Result<()> 
     #[cfg(unix)]
     {
         use std::io::Write;
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        use std::os::unix::fs::OpenOptionsExt;
         fs::OpenOptions::new()
             .write(true)
             .create(true)
@@ -132,7 +132,6 @@ fn write_private(path: &std::path::Path, contents: &str) -> std::io::Result<()> 
             .mode(0o600)
             .open(path)?
             .write_all(contents.as_bytes())?;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
         Ok(())
     }
     #[cfg(not(unix))]

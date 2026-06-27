@@ -63,7 +63,7 @@ impl BitbucketClient {
 
     /// Issue a request and return the deserialized body.
     /// Automatically retries up to 2 times on HTTP 429 (rate-limit) with
-    /// exponential back-off (5 s, 10 s).
+    /// linear back-off (5 s, 10 s) + jitter.
     pub async fn send<T: DeserializeOwned>(
         &self,
         method: Method,
@@ -88,7 +88,13 @@ impl BitbucketClient {
             match self.decode(resp).await {
                 Err(BitbucketError::RateLimit(msg)) if attempt < MAX_RETRIES => {
                     attempt += 1;
-                    let wait = std::time::Duration::from_secs(u64::from(attempt) * 5);
+                    let base = u64::from(attempt) * 5;
+                    let jitter = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .subsec_nanos()
+                        % 3;
+                    let wait = std::time::Duration::from_secs(base + u64::from(jitter));
                     tracing::warn!("rate limited, retrying in {:?} (attempt {attempt})", wait);
                     tokio::time::sleep(wait).await;
                     let _ = msg;
