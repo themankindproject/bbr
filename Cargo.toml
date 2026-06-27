@@ -25,11 +25,11 @@ path = "src/main.rs"
 
 [dependencies]
 # CLI
-clap = { version = "4.5", features = ["derive", "env", "wrap_help"] }
-clap_complete = "4.5"
+clap = { version = "=4.5.6", features = ["derive", "env", "wrap_help"] }
+clap_complete = "=4.5.4"
 
 # HTTP / async
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest = { version = "=0.12.4", default-features = false, features = ["json", "rustls-tls", "stream"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "io-util", "fs", "signal"] }
 futures-util = "0.3"
 
@@ -45,7 +45,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # Pretty output
-comfy-table = "7"
+comfy-table = "=7.1.4"
 indicatif = "0.17"
 colored = "2"
 
@@ -56,7 +56,7 @@ chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
 url = "2"
 xdg = "2"
-rpassword = "7"
+rpassword = "=7.3.1"
 
 [dev-dependencies]
 wiremock = "0.6"
