@@ -3,10 +3,13 @@
 use serde::Serialize;
 
 use crate::api::pr::{
-    CreateBranchRef, CreateNamed, CreatePrRequest, PrState, PullRequest, ReviewerRef, UpdatePrRequest,
+    CreateBranchRef, CreateNamed, CreatePrRequest, PrState, PullRequest, ReviewerRef,
+    UpdatePrRequest,
 };
 use crate::cli::GlobalArgs;
-use crate::commands::{client, confirm, current_repo, make_spinner, resolve_body};
+use crate::commands::{
+    client, confirm, current_head, current_repo, make_spinner, resolve_body, truncate,
+};
 use crate::error::{BitbucketError, Result};
 use crate::git;
 use crate::output::table::Table;
@@ -48,6 +51,24 @@ pub struct PrViewOut {
     pub comment_count: u64,
     pub task_count: u64,
     pub close_source_branch: bool,
+}
+
+impl From<&PullRequest> for PrViewOut {
+    fn from(pr: &PullRequest) -> Self {
+        Self {
+            id: pr.id,
+            state: pr.state.clone(),
+            title: pr.title.clone(),
+            description: pr.description.clone(),
+            source: pr.source_branch().to_string(),
+            destination: pr.destination_branch().to_string(),
+            author: pr.author.as_ref().map(|a| a.display_name.clone()),
+            url: pr.links.html.href.clone(),
+            comment_count: pr.comment_count,
+            task_count: pr.task_count,
+            close_source_branch: pr.close_source_branch,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -109,7 +130,7 @@ pub async fn view(g: &GlobalArgs, id: Option<u64>, show_diff: bool) -> Result<()
     let pr = match id {
         Some(id) => client.get_pr(&repo.workspace, &repo.slug, id).await?,
         None => {
-            let head = git::head()?;
+            let head = current_head()?;
             client
                 .pr_for_branch(&repo.workspace, &repo.slug, &head.branch)
                 .await?
@@ -119,29 +140,7 @@ pub async fn view(g: &GlobalArgs, id: Option<u64>, show_diff: bool) -> Result<()
         }
     };
 
-    let out = PrViewOut {
-        id: pr.id,
-        state: pr.state.clone(),
-        title: pr.title.clone(),
-        description: pr.description.clone(),
-        source: pr
-            .source
-            .branch
-            .as_ref()
-            .map(|b| b.name.clone())
-            .unwrap_or_default(),
-        destination: pr
-            .destination
-            .branch
-            .as_ref()
-            .map(|b| b.name.clone())
-            .unwrap_or_default(),
-        author: pr.author.as_ref().map(|a| a.display_name.clone()),
-        url: pr.links.html.href.clone(),
-        comment_count: pr.comment_count,
-        task_count: pr.task_count,
-        close_source_branch: pr.close_source_branch,
-    };
+    let out = PrViewOut::from(&pr);
 
     let fmt = Formatter::from_json_flag(g.json);
     let mut human = render_view(&out);
@@ -154,7 +153,7 @@ pub async fn view(g: &GlobalArgs, id: Option<u64>, show_diff: bool) -> Result<()
         human.push_str(&format!("\n\n{}", diff));
     }
 
-    fmt.print(&out, &human)
+    fmt.print_paginated(&out, &human)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -174,7 +173,7 @@ pub async fn create(
 
     let source_branch = match src {
         Some(s) => s.to_string(),
-        None => git::current_branch()?,
+        None => current_head()?.branch,
     };
     let destination_branch = match dst {
         Some(d) => d.to_string(),
@@ -305,29 +304,7 @@ pub async fn decline(g: &GlobalArgs, id: u64) -> Result<()> {
     spinner.set_message("Declining...");
     let pr = client.decline_pr(&repo.workspace, &repo.slug, id).await?;
     spinner.finish_and_clear();
-    let out = PrViewOut {
-        id: pr.id,
-        state: pr.state.clone(),
-        title: pr.title.clone(),
-        description: pr.description.clone(),
-        source: pr
-            .source
-            .branch
-            .as_ref()
-            .map(|b| b.name.clone())
-            .unwrap_or_default(),
-        destination: pr
-            .destination
-            .branch
-            .as_ref()
-            .map(|b| b.name.clone())
-            .unwrap_or_default(),
-        author: pr.author.as_ref().map(|a| a.display_name.clone()),
-        url: pr.links.html.href.clone(),
-        comment_count: pr.comment_count,
-        task_count: pr.task_count,
-        close_source_branch: pr.close_source_branch,
-    };
+    let out = PrViewOut::from(&pr);
     let fmt = Formatter::from_json_flag(g.json);
     fmt.print(&out, &format!("Declined PR #{}", id))
 }
@@ -346,16 +323,8 @@ pub async fn merge(g: &GlobalArgs, id: u64) -> Result<()> {
             "Merge PR #{} ({}) from {} into {}? [y/N] ",
             pr.id,
             pr.title,
-            pr.source
-                .branch
-                .as_ref()
-                .map(|b| b.name.as_str())
-                .unwrap_or("?"),
-            pr.destination
-                .branch
-                .as_ref()
-                .map(|b| b.name.as_str())
-                .unwrap_or("?"),
+            empty_as_unknown(pr.source_branch()),
+            empty_as_unknown(pr.destination_branch()),
         ))?
     {
         let fmt = Formatter::from_json_flag(g.json);
@@ -369,29 +338,7 @@ pub async fn merge(g: &GlobalArgs, id: u64) -> Result<()> {
     let pr = client.merge_pr(&repo.workspace, &repo.slug, id).await?;
     spinner.finish_and_clear();
 
-    let out = PrViewOut {
-        id: pr.id,
-        state: pr.state.clone(),
-        title: pr.title.clone(),
-        description: pr.description.clone(),
-        source: pr
-            .source
-            .branch
-            .as_ref()
-            .map(|b| b.name.clone())
-            .unwrap_or_default(),
-        destination: pr
-            .destination
-            .branch
-            .as_ref()
-            .map(|b| b.name.clone())
-            .unwrap_or_default(),
-        author: pr.author.as_ref().map(|a| a.display_name.clone()),
-        url: pr.links.html.href.clone(),
-        comment_count: pr.comment_count,
-        task_count: pr.task_count,
-        close_source_branch: pr.close_source_branch,
-    };
+    let out = PrViewOut::from(&pr);
 
     let fmt = Formatter::from_json_flag(g.json);
     let human = format!("Merged PR #{}", id);
@@ -461,29 +408,7 @@ pub async fn update(
         .await?;
     spinner.finish_and_clear();
 
-    let out = PrViewOut {
-        id: pr.id,
-        state: pr.state.clone(),
-        title: pr.title.clone(),
-        description: pr.description.clone(),
-        source: pr
-            .source
-            .branch
-            .as_ref()
-            .map(|b| b.name.clone())
-            .unwrap_or_default(),
-        destination: pr
-            .destination
-            .branch
-            .as_ref()
-            .map(|b| b.name.clone())
-            .unwrap_or_default(),
-        author: pr.author.as_ref().map(|a| a.display_name.clone()),
-        url: pr.links.html.href.clone(),
-        comment_count: pr.comment_count,
-        task_count: pr.task_count,
-        close_source_branch: pr.close_source_branch,
-    };
+    let out = PrViewOut::from(&pr);
 
     let fmt = Formatter::from_json_flag(g.json);
     let human = format!("Updated PR #{}", id);
@@ -500,7 +425,7 @@ pub async fn diff(g: &GlobalArgs, id: u64) -> Result<()> {
     spinner.finish_and_clear();
 
     let fmt = Formatter::from_json_flag(g.json);
-    fmt.print(&serde_json::json!({ "id": id, "diff": body }), &body)
+    fmt.print_paginated(&serde_json::json!({ "id": id, "diff": body }), &body)
 }
 
 // ---- helpers --------------------------------------------------------------
@@ -510,21 +435,19 @@ fn summarize(pr: &PullRequest) -> PrSummary {
         id: pr.id,
         state: pr.state.clone(),
         title: pr.title.clone(),
-        source: pr
-            .source
-            .branch
-            .as_ref()
-            .map(|b| b.name.clone())
-            .unwrap_or_default(),
-        destination: pr
-            .destination
-            .branch
-            .as_ref()
-            .map(|b| b.name.clone())
-            .unwrap_or_default(),
+        source: pr.source_branch().to_string(),
+        destination: pr.destination_branch().to_string(),
         author: pr.author.as_ref().map(|a| a.display_name.clone()),
         url: pr.links.html.href.clone(),
         updated_on: pr.updated_on.clone(),
+    }
+}
+
+fn empty_as_unknown(s: &str) -> &str {
+    if s.is_empty() {
+        "?"
+    } else {
+        s
     }
 }
 
@@ -571,7 +494,7 @@ fn render_list(out: &PrListOut) -> String {
         };
         table = table.add_row([
             pr.id.to_string(),
-            state,
+            state.into_owned(),
             truncate(&pr.title, 60),
             truncate(&format!("{} -> {}", pr.source, pr.destination), 50),
             pr.author.clone().unwrap_or_else(|| "-".into()),
@@ -620,16 +543,6 @@ fn render_view(out: &PrViewOut) -> String {
         s.push_str(&format!("\n  {}{u}", theme.label("URL:")));
     }
     s
-}
-
-fn truncate(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        s.to_string()
-    } else {
-        let mut out: String = s.chars().take(n.saturating_sub(1)).collect();
-        out.push('…');
-        out
-    }
 }
 
 fn truncate_desc(s: &str, n: usize) -> String {

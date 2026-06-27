@@ -97,9 +97,13 @@ pub enum Command {
 pub enum PrAction {
     /// List pull requests in the current repo.
     List {
-        #[arg(long, help = "filter by state (open|merged|declined|all)")]
+        #[arg(
+            long,
+            help = "filter by state (open|merged|declined|all)",
+            default_value = "open"
+        )]
         state: String,
-        #[arg(long, help = "max results to return")]
+        #[arg(long, help = "max results to return", default_value_t = 25)]
         limit: u32,
         #[arg(long, help = "filter by author display name")]
         author: Option<String>,
@@ -335,10 +339,8 @@ pub enum AuthAction {
 }
 
 /// Resolve the API base URL (flag > env > default).
-pub fn resolve_api_base(g: &GlobalArgs) -> String {
-    g.api_base
-        .clone()
-        .unwrap_or_else(|| DEFAULT_API_BASE.to_string())
+pub fn resolve_api_base(g: &GlobalArgs) -> &str {
+    g.api_base.as_deref().unwrap_or(DEFAULT_API_BASE)
 }
 
 /// Entry point invoked by `main`. Returns a process exit code.
@@ -513,11 +515,6 @@ fn init_tracing(verbose: u8) {
         .with_writer(std::io::stderr)
         .with_ansi(io::stderr().is_terminal())
         .init();
-}
-
-/// Helper for commands that need to know if stdout is a terminal.
-pub fn stdout_is_tty() -> bool {
-    io::stdout().is_terminal()
 }
 
 // Re-export so command modules can construct a `--json` formatter easily.

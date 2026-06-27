@@ -145,8 +145,7 @@ pub async fn test(g: &GlobalArgs) -> Result<()> {
     });
     let human = format!(
         "✓ Authenticated as {} ({})",
-        user.display_name,
-        creds.username
+        user.display_name, creds.username
     );
     Formatter::from_json_flag(g.json).print(&out, &human)
 }

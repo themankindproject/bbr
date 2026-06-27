@@ -3,9 +3,8 @@
 use serde::Serialize;
 
 use crate::cli::{GlobalArgs, OpenAction};
-use crate::commands::{client, current_repo};
+use crate::commands::{client, current_head, current_repo};
 use crate::error::{BitbucketError, Result};
-use crate::git;
 use crate::output::Formatter;
 
 #[derive(Debug, Serialize)]
@@ -17,10 +16,7 @@ pub struct OpenOut {
 
 pub async fn run(g: &GlobalArgs, action: Option<OpenAction>) -> Result<()> {
     let action = action.unwrap_or(OpenAction::Repo);
-    let repo = match action {
-        OpenAction::Repo | OpenAction::PrList | OpenAction::Pipelines => current_repo()?,
-        _ => current_repo()?,
-    };
+    let repo = current_repo()?;
     let (target, url) = match action {
         OpenAction::Repo => repo_url(g).await?,
         OpenAction::PrList => (
@@ -69,7 +65,7 @@ async fn pr_url(g: &GlobalArgs, id: Option<u64>) -> Result<(String, String)> {
     let pr = match id {
         Some(id) => client.get_pr(&repo.workspace, &repo.slug, id).await?,
         None => {
-            let head = git::head()?;
+            let head = current_head()?;
             client
                 .pr_for_branch(&repo.workspace, &repo.slug, &head.branch)
                 .await?
@@ -88,7 +84,7 @@ async fn ci_url(g: &GlobalArgs, branch: Option<&str>) -> Result<(String, String)
     let repo = current_repo()?;
     let branch = match branch {
         Some(b) => b.to_string(),
-        None => git::current_branch()?,
+        None => current_head()?.branch,
     };
     let client = client(g)?;
     let pipeline = client

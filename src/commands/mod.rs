@@ -21,7 +21,7 @@ use crate::git::{self, Head, RepoIdentity};
 pub fn client(g: &GlobalArgs) -> Result<BitbucketClient> {
     let creds = crate::auth::resolve()?;
     let base = resolve_api_base(g);
-    creds.into_client(&base)
+    creds.into_client(base)
 }
 
 static CACHED_REPO: OnceLock<RepoIdentity> = OnceLock::new();
@@ -103,6 +103,17 @@ pub fn human_duration(secs: u64) -> String {
     }
 }
 
+/// Truncate a string to `n` characters, appending an ellipsis if truncated.
+pub fn truncate(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(n).collect();
+        out.push('…');
+        out
+    }
+}
+
 /// Prompt the user for a yes/no confirmation on stderr.
 /// Returns `true` if the user typed `y` or `yes`.
 pub fn confirm(msg: &str) -> Result<bool> {
@@ -115,8 +126,6 @@ pub fn confirm(msg: &str) -> Result<bool> {
         .lock()
         .read_line(&mut line)
         .map_err(BitbucketError::Io)?;
-    Ok(matches!(
-        line.trim().to_ascii_lowercase().as_str(),
-        "y" | "yes"
-    ))
+    let trimmed = line.trim();
+    Ok(trimmed.eq_ignore_ascii_case("y") || trimmed.eq_ignore_ascii_case("yes"))
 }

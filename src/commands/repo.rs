@@ -3,7 +3,7 @@
 use serde::Serialize;
 
 use crate::cli::GlobalArgs;
-use crate::commands::{client, current_repo};
+use crate::commands::{client, current_repo, make_spinner, truncate};
 use crate::error::Result;
 use crate::output::table::Table;
 use crate::output::theme::Theme;
@@ -71,7 +71,7 @@ pub async fn list_branches(g: &GlobalArgs, limit: u32) -> Result<()> {
     let repo = current_repo()?;
     let client = client(g)?;
 
-    let spinner = make_spinner_import(g.json);
+    let spinner = make_spinner(g.json);
     spinner.set_message("Fetching branches...");
     let page = client
         .list_branches(&repo.workspace, &repo.slug, limit)
@@ -99,7 +99,7 @@ pub async fn list_commits(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> R
     let repo = current_repo()?;
     let client = client(g)?;
 
-    let spinner = make_spinner_import(g.json);
+    let spinner = make_spinner(g.json);
     spinner.set_message("Fetching commits...");
     let page = client
         .list_commits(&repo.workspace, &repo.slug, branch, limit)
@@ -133,31 +133,6 @@ pub async fn list_commits(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> R
 
 fn first_line(s: &str) -> String {
     s.lines().next().unwrap_or("").to_string()
-}
-
-fn truncate(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        s.to_string()
-    } else {
-        let mut out: String = s.chars().take(n).collect();
-        out.push('…');
-        out
-    }
-}
-
-fn make_spinner_import(json: bool) -> indicatif::ProgressBar {
-    // Re-use the same spinner logic as commands::mod
-    if json {
-        indicatif::ProgressBar::hidden()
-    } else {
-        let pb = indicatif::ProgressBar::new_spinner();
-        pb.enable_steady_tick(std::time::Duration::from_millis(120));
-        pb.set_style(
-            indicatif::ProgressStyle::with_template("{spinner} {msg}")
-                .unwrap_or_else(|_| indicatif::ProgressStyle::default_spinner()),
-        );
-        pb
-    }
 }
 
 #[cfg(test)]
