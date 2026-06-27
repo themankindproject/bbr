@@ -7,7 +7,8 @@ pub mod status;
 
 use reqwest::header::{ACCEPT, AUTHORIZATION};
 use reqwest::{Client, Method, StatusCode};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::auth::{CredentialKind, Credentials};
 use crate::error::{BitbucketError, Result};
@@ -136,15 +137,78 @@ impl BitbucketClient {
     }
 }
 
+/// Bitbucket standardized error envelope.
+#[derive(Debug, Deserialize)]
+struct ApiErrorEnvelope {
+    error: ApiErrorDetail,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApiErrorDetail {
+    message: Option<String>,
+    detail: Option<String>,
+    #[serde(default)]
+    fields: Option<serde_json::Value>,
+}
+
 /// Map an HTTP failure status into the right [`BitbucketError`] variant.
 pub fn map_error(status: StatusCode, body: &str) -> BitbucketError {
-    match status {
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-            BitbucketError::AuthFailed(format!("HTTP {status}: {}", one_line(body)))
+    let parsed: Option<ApiErrorEnvelope> = serde_json::from_str(body).ok();
+    let msg = parsed
+        .as_ref()
+        .and_then(|e| e.error.message.as_deref())
+        .unwrap_or("")
+        .to_string();
+    let detail = parsed
+        .as_ref()
+        .and_then(|e| e.error.detail.as_deref())
+        .filter(|d| !d.is_empty());
+    let fields = parsed
+        .as_ref()
+        .and_then(|e| e.error.fields.as_ref())
+        .filter(|f| !f.is_null() && !f.as_object().map_or(true, |o| o.is_empty()));
+
+    let mut full = msg.clone();
+    if let Some(d) = detail {
+        if !full.is_empty() {
+            full.push_str(". ");
         }
-        StatusCode::NOT_FOUND => BitbucketError::NotFound(one_line(body)),
+        full.push_str(d);
+    }
+    if let Some(f) = fields {
+        if !full.is_empty() {
+            full.push(' ');
+        }
+        if let Some(map) = f.as_object() {
+            let pairs: Vec<String> = map
+                .iter()
+                .filter_map(|(k, v)| {
+                    let arr = v.as_array()?;
+                    let items: Vec<String> = arr
+                        .iter()
+                        .filter_map(|e| e.as_str().map(|s| format!("{k}: {s}")))
+                        .collect();
+                    if items.is_empty() {
+                        None
+                    } else {
+                        Some(items.join("; "))
+                    }
+                })
+                .collect();
+            if !pairs.is_empty() {
+                full.push_str(&format!("({})", pairs.join("; ")));
+            }
+        }
+    }
+    if full.is_empty() {
+        full = one_line(body);
+    }
+
+    match status {
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => BitbucketError::AuthFailed(full),
+        StatusCode::NOT_FOUND => BitbucketError::NotFound(full),
         StatusCode::TOO_MANY_REQUESTS => BitbucketError::RateLimit(format!(": HTTP {status}")),
-        _ => BitbucketError::Other(format!("HTTP {status}: {}", one_line(body))),
+        _ => BitbucketError::Other(format!("HTTP {status}: {full}")),
     }
 }
 

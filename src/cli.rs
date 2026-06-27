@@ -43,7 +43,7 @@ pub struct Cli {
     pub global: GlobalArgs,
 
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -135,6 +135,12 @@ pub enum PrAction {
         #[command(flatten)]
         g: GlobalArgs,
     },
+    /// Merge a pull request.
+    Merge {
+        id: u64,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -167,6 +173,13 @@ pub enum CiAction {
         failed: bool,
         #[arg(long, help = "select the latest step automatically")]
         latest: bool,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Rerun the latest pipeline for a branch.
+    Rerun {
+        #[arg(long)]
+        branch: Option<String>,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -236,8 +249,9 @@ pub async fn run() -> ExitCode {
 
 async fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::Status { g } => commands::status::run(&g).await,
-        Command::Pr { action } => match action {
+        None => commands::status::run(&cli.global).await,
+        Some(Command::Status { g }) => commands::status::run(&g).await,
+        Some(Command::Pr { action }) => match action {
             PrAction::List { state, limit, g } => commands::pr::list(&g, &state, limit).await,
             PrAction::View { id, g } => commands::pr::view(&g, id).await,
             PrAction::Create {
@@ -272,8 +286,9 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 commands::pr::comment(&g, id, body.as_deref(), body_file.as_deref(), body_stdin)
                     .await
             }
+            PrAction::Merge { id, g } => commands::pr::merge(&g, id).await,
         },
-        Command::Ci { action } => match action {
+        Some(Command::Ci { action }) => match action {
             CiAction::Status { branch, g } => commands::ci::status(&g, branch.as_deref()).await,
             CiAction::Watch {
                 branch,
@@ -288,17 +303,18 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 latest,
                 g,
             } => commands::ci::logs(&g, uuid.as_deref(), step.as_deref(), failed, latest).await,
+            CiAction::Rerun { branch, g } => commands::ci::rerun(&g, branch.as_deref()).await,
         },
-        Command::Repo { action } => match action {
+        Some(Command::Repo { action }) => match action {
             RepoAction::Info { g } => commands::repo::info(&g).await,
         },
-        Command::Open { action, g } => commands::open::run(&g, action).await,
-        Command::Auth { action } => match action {
+        Some(Command::Open { action, g }) => commands::open::run(&g, action).await,
+        Some(Command::Auth { action }) => match action {
             AuthAction::Setup => commands::auth::setup(),
             AuthAction::Status { g } => commands::auth::status(&g).await,
             AuthAction::Logout => commands::auth::logout(),
         },
-        Command::Completion { shell } => {
+        Some(Command::Completion { shell }) => {
             generate(shell, &mut Cli::command(), "bb", &mut io::stdout());
             Ok(())
         }

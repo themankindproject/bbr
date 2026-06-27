@@ -5,7 +5,7 @@ use serde::Serialize;
 use crate::api::pipeline::{Pipeline, PipelineStep};
 use crate::api::pr::{Participant, PullRequest};
 use crate::cli::GlobalArgs;
-use crate::commands::{client, current_repo};
+use crate::commands::{client, current_repo, human_duration};
 use crate::error::{BitbucketError, Result};
 use crate::git;
 use crate::output::theme::Theme;
@@ -187,13 +187,8 @@ fn pipeline_summary(
         uuid: p.uuid.clone(),
         state: p.state_name().to_string(),
         duration_seconds: p.duration_in_seconds,
-        branch: p.target.ref_.as_ref().map(|r| r.name.clone()),
-        commit: p
-            .target
-            .ref_
-            .as_ref()
-            .and_then(|r| r.target.as_ref())
-            .map(|t| t.hash.clone()),
+        branch: p.target.ref_name.clone(),
+        commit: p.target.commit.as_ref().map(|c| c.hash.clone()),
         url: p.links.html.href.clone(),
         failing_steps: raw_steps
             .iter()
@@ -286,10 +281,10 @@ fn render_human(out: &StatusOut) -> String {
         Some(p) => {
             s.push_str("\nCI - last pipeline\n");
             s.push_str(&format!(
-                "  {} {} ({}s)\n",
+                "  {} {} ({})\n",
                 theme.status_glyph(&p.state),
                 p.state,
-                p.duration_seconds
+                human_duration(p.duration_seconds)
             ));
             if let Some(b) = &p.branch {
                 s.push_str(&format!("  Branch: {b}"));
@@ -308,10 +303,10 @@ fn render_human(out: &StatusOut) -> String {
                 s.push_str("  Steps:\n");
                 for st in &p.steps {
                     s.push_str(&format!(
-                        "    {} {:<18}  {}s\n",
+                        "    {} {:<18}  {}\n",
                         theme.status_glyph(&st.state),
                         st.name,
-                        st.duration_seconds
+                        human_duration(st.duration_seconds)
                     ));
                 }
             }

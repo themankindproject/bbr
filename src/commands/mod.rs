@@ -7,6 +7,10 @@ pub mod pr;
 pub mod repo;
 pub mod status;
 
+use std::time::Duration;
+
+use indicatif::{ProgressBar, ProgressStyle};
+
 use crate::api::BitbucketClient;
 use crate::cli::{resolve_api_base, GlobalArgs};
 use crate::error::{BitbucketError, Result};
@@ -49,5 +53,52 @@ pub fn resolve_body(
     }
     Err(BitbucketError::Other(
         "no body provided (use --body, --body-file, or --body-stdin)".into(),
+    ))
+}
+
+/// Create a spinner if stdout is a TTY and we're not in JSON mode.
+pub fn make_spinner(json: bool) -> ProgressBar {
+    if json {
+        ProgressBar::hidden()
+    } else {
+        let pb = ProgressBar::new_spinner();
+        pb.enable_steady_tick(Duration::from_millis(120));
+        pb.set_style(
+            ProgressStyle::with_template("{spinner} {msg}")
+                .unwrap_or_else(|_| ProgressStyle::default_spinner()),
+        );
+        pb
+    }
+}
+
+/// Format seconds as a human-friendly duration string.
+pub fn human_duration(secs: u64) -> String {
+    let hours = secs / 3600;
+    let mins = (secs % 3600) / 60;
+    let secs = secs % 60;
+    if hours > 0 {
+        format!("{}h {}m {}s", hours, mins, secs)
+    } else if mins > 0 {
+        format!("{}m {}s", mins, secs)
+    } else {
+        format!("{}s", secs)
+    }
+}
+
+/// Prompt the user for a yes/no confirmation on stderr.
+/// Returns `true` if the user typed `y` or `yes`.
+pub fn confirm(msg: &str) -> Result<bool> {
+    use std::io::{BufRead, Write};
+    let mut out = std::io::stderr().lock();
+    out.write_all(msg.as_bytes()).map_err(BitbucketError::Io)?;
+    out.flush().map_err(BitbucketError::Io)?;
+    let mut line = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .map_err(BitbucketError::Io)?;
+    Ok(matches!(
+        line.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
     ))
 }

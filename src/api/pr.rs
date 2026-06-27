@@ -228,7 +228,13 @@ impl BitbucketClient {
         limit: u32,
     ) -> Result<Paginated<PullRequest>> {
         let mut path = format!(
-            "/repositories/{workspace}/{slug}/pullrequests?pagelen={limit}&sort=-updated_on"
+            "/repositories/{workspace}/{slug}/pullrequests?\
+             fields=values.id,values.state,values.title,\
+             values.source.branch.name,values.destination.branch.name,\
+             values.author.display_name,values.links.html.href,\
+             values.comment_count,values.task_count,values.close_source_branch,\
+             values.updated_on&\
+             pagelen={limit}&sort=-updated_on"
         );
         if let Some(s) = state.as_query() {
             // Bitbucket's q parameter uses double-quoted strings; URL-encode as %22.
@@ -239,7 +245,15 @@ impl BitbucketClient {
 
     /// `GET /repositories/{ws}/{slug}/pullrequests/{id}`
     pub async fn get_pr(&self, workspace: &str, slug: &str, id: u64) -> Result<PullRequest> {
-        let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}");
+        let path = format!(
+            "/repositories/{workspace}/{slug}/pullrequests/{id}?\
+             fields=id,state,title,description,\
+             source.branch.name,destination.branch.name,\
+             author.display_name,links.html.href,\
+             comment_count,task_count,close_source_branch,\
+             participants.display_name,participants.role,participants.approved,\
+             reviewers.display_name,reviewers.role,reviewers.approved"
+        );
         self.send(reqwest::Method::GET, &path, None).await
     }
 
@@ -252,7 +266,15 @@ impl BitbucketClient {
     ) -> Result<Option<PullRequest>> {
         // Bitbucket supports filtering by source branch name.
         let path = format!(
-            "/repositories/{workspace}/{slug}/pullrequests?pagelen=1&sort=-updated_on&q=source.branch.name%3D%22{}%22+AND+state%3D%22OPEN%22",
+            "/repositories/{workspace}/{slug}/pullrequests?\
+             fields=values.id,values.state,values.title,\
+             values.source.branch.name,values.destination.branch.name,\
+             values.author.display_name,values.links.html.href,\
+             values.comment_count,values.task_count,values.close_source_branch,\
+             values.updated_on,\
+             values.participants.display_name,values.participants.role,values.participants.approved,\
+             values.reviewers.display_name,values.reviewers.role,values.reviewers.approved&\
+             pagelen=1&sort=-updated_on&q=source.branch.name%3D%22{}%22+AND+state%3D%22OPEN%22",
             url_encode(branch),
         );
         let page: Paginated<PullRequest> = self.send(reqwest::Method::GET, &path, None).await?;
@@ -280,6 +302,14 @@ impl BitbucketClient {
         };
         let _: serde_json::Value = self.post(&path, &body).await?;
         Ok(())
+    }
+
+    /// `POST /repositories/{ws}/{slug}/pullrequests/{id}/merge`
+    pub async fn merge_pr(&self, workspace: &str, slug: &str, id: u64) -> Result<PullRequest> {
+        let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}/merge");
+        let body = serde_json::json!({});
+        let raw = serde_json::to_string(&body)?;
+        self.send(reqwest::Method::POST, &path, Some(&raw)).await
     }
 }
 

@@ -91,12 +91,12 @@ pub async fn status(g: &GlobalArgs) -> Result<()> {
     };
 
     let client = client(g);
-    let (authenticated, display_name, account_id) = match client {
+    let (authenticated, display_name, account_id, error_msg) = match client {
         Ok(c) => match c.current_user().await {
-            Ok(u) => (true, Some(u.display_name), u.uuid),
-            Err(_) => (false, None, None),
+            Ok(u) => (true, Some(u.display_name), u.uuid, None),
+            Err(e) => (false, None, None, Some(e.to_string())),
         },
-        Err(_) => (false, None, None),
+        Err(e) => (false, None, None, Some(e.to_string())),
     };
 
     let out = AuthStatusOut {
@@ -121,7 +121,12 @@ pub async fn status(g: &GlobalArgs) -> Result<()> {
             out.source
         )
     } else {
-        "Not authenticated. Run `bb auth setup`.".to_string()
+        let mut msg = "Not authenticated.".to_string();
+        if let Some(err) = &error_msg {
+            msg.push_str(&format!(" {err}"));
+        }
+        msg.push_str(" Run `bb auth setup`.");
+        msg
     };
     fmt.print(&out, &human)
 }

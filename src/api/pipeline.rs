@@ -1,12 +1,9 @@
-//! Pipeline + step endpoints and types.
-
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use super::BitbucketClient;
 use crate::error::{BitbucketError, Result};
 
-/// A pipeline run.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Pipeline {
     #[serde(default)]
     pub uuid: String,
@@ -61,7 +58,7 @@ impl Pipeline {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct PipelineState {
     #[serde(default)]
     pub name: String,
@@ -71,48 +68,42 @@ pub struct PipelineState {
     pub result: Option<PipelineResult>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct PipelineResult {
     #[serde(default)]
     pub name: String,
     #[serde(default)]
+    #[serde(rename = "type")]
     pub type_: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Named {
     #[serde(default)]
     pub name: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct PipelineTarget {
-    #[serde(rename = "ref", default)]
-    pub ref_: Option<PipelineRef>,
+    #[serde(default)]
+    pub ref_name: Option<String>,
+    #[serde(default)]
+    pub ref_type: Option<String>,
+    #[serde(default)]
+    pub commit: Option<CommitRef>,
     #[serde(default)]
     pub selector: Option<Named>,
     #[serde(rename = "type", default)]
     pub kind: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct PipelineRef {
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub target: Option<CommitRef>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct CommitRef {
     #[serde(default)]
     pub hash: String,
-    #[serde(default)]
-    pub commit: Option<super::pr::CommitRef>,
 }
 
-/// A step within a pipeline.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct PipelineStep {
     #[serde(default)]
     pub uuid: String,
@@ -154,7 +145,7 @@ impl PipelineStep {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Command {
     #[serde(default)]
     pub command: String,
@@ -162,22 +153,30 @@ pub struct Command {
     pub name: Option<String>,
 }
 
-/// Log output (text/plain) for a step.
 pub struct StepLog {
     pub text: String,
 }
 
+pub fn normalize_uuid(s: &str) -> String {
+    s.trim()
+        .trim_start_matches('{')
+        .trim_end_matches('}')
+        .to_string()
+}
+
 impl BitbucketClient {
-    /// `GET /repositories/{ws}/{slug}/pipelines/?pagelen=1&sort=-created_on`
-    /// (optionally filtered by branch).
     pub async fn latest_pipeline(
         &self,
         workspace: &str,
         slug: &str,
         branch: Option<&str>,
     ) -> Result<Option<Pipeline>> {
-        let mut path =
-            format!("/repositories/{workspace}/{slug}/pipelines/?pagelen=1&sort=-created_on");
+        let mut path = format!(
+            "/repositories/{workspace}/{slug}/pipelines/?\
+             fields=values.uuid,values.build_number,values.state,values.result,\
+             values.duration_in_seconds,values.target.ref_name,values.target.commit.hash&\
+             pagelen=1&sort=-created_on"
+        );
         if let Some(b) = branch {
             path.push_str(&format!(
                 "&q=target.ref_name%3D%22{}%22",
@@ -189,26 +188,29 @@ impl BitbucketClient {
         Ok(page.values.into_iter().next())
     }
 
-    /// `GET /repositories/{ws}/{slug}/pipelines/{uuid}`
     pub async fn get_pipeline(&self, workspace: &str, slug: &str, uuid: &str) -> Result<Pipeline> {
-        let uuid = normalize_uuid(uuid);
-        let path = format!("/repositories/{workspace}/{slug}/pipelines/{uuid}");
+        let path = format!(
+            "/repositories/{workspace}/{slug}/pipelines/{uuid}?\
+             fields=uuid,build_number,state,result,duration_in_seconds,\
+             target.ref_name,target.commit.hash,links.html.href"
+        );
         self.send(reqwest::Method::GET, &path, None).await
     }
 
-    /// `GET /repositories/{ws}/{slug}/pipelines/{uuid}/steps/`
     pub async fn list_steps(
         &self,
         workspace: &str,
         slug: &str,
         uuid: &str,
     ) -> Result<super::pr::Paginated<PipelineStep>> {
-        let uuid = normalize_uuid(uuid);
-        let path = format!("/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/?sort=order");
+        let path = format!(
+            "/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/?\
+             fields=values.uuid,values.name,values.state,values.duration_in_seconds&\
+             sort=order"
+        );
         self.send(reqwest::Method::GET, &path, None).await
     }
 
-    /// `GET /repositories/{ws}/{slug}/pipelines/{uuid}/steps/{step}/log`
     pub async fn step_log(
         &self,
         workspace: &str,
@@ -216,8 +218,6 @@ impl BitbucketClient {
         uuid: &str,
         step: &str,
     ) -> Result<StepLog> {
-        let uuid = normalize_uuid(uuid);
-        let step = normalize_uuid(step);
         let url = self.url(&format!(
             "/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/{step}/log"
         ));
@@ -237,15 +237,16 @@ impl BitbucketClient {
         let text = resp.text().await.map_err(BitbucketError::Http)?;
         Ok(StepLog { text })
     }
-}
 
-// Local helpers; `super::pr_url_encode` and `base64_encode` live in mod.rs / pr.rs.
-// We re-expose them via small wrappers to keep `pr.rs` as the single encoder.
-
-/// Strip the wrapping `{...}` that Bitbucket uses on UUIDs.
-pub fn normalize_uuid(s: &str) -> String {
-    s.trim()
-        .trim_start_matches('{')
-        .trim_end_matches('}')
-        .to_string()
+    pub async fn rerun_pipeline(
+        &self,
+        workspace: &str,
+        slug: &str,
+        uuid: &str,
+    ) -> Result<Pipeline> {
+        let path = format!("/repositories/{workspace}/{slug}/pipelines/{uuid}/rerun");
+        let body = serde_json::Value::Null;
+        self.send(reqwest::Method::POST, &path, Some(&body.to_string()))
+            .await
+    }
 }

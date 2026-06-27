@@ -6,7 +6,7 @@ use crate::api::pr::{
     CreateBranchRef, CreateNamed, CreatePrRequest, PrState, PullRequest, ReviewerRef,
 };
 use crate::cli::GlobalArgs;
-use crate::commands::{client, current_repo, resolve_body};
+use crate::commands::{client, confirm, current_repo, make_spinner, resolve_body};
 use crate::error::{BitbucketError, Result};
 use crate::git;
 use crate::output::table::Table;
@@ -69,9 +69,12 @@ pub async fn list(g: &GlobalArgs, state: &str, limit: u32) -> Result<()> {
     let state = PrState::parse(state)?;
     let repo = current_repo()?;
     let client = client(g)?;
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Fetching pull requests...");
     let page = client
         .list_prs(&repo.workspace, &repo.slug, state, limit)
         .await?;
+    spinner.finish_and_clear();
 
     let rows: Vec<PrSummary> = page.values.iter().map(summarize).collect();
     let out = PrListOut {
@@ -182,7 +185,10 @@ pub async fn create(
         reviewers: Vec::<ReviewerRef>::new(),
     };
 
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Creating pull request...");
     let pr = client.create_pr(&repo.workspace, &repo.slug, &req).await?;
+    spinner.finish_and_clear();
 
     let out = PrCreateOut {
         id: pr.id,
@@ -196,7 +202,18 @@ pub async fn create(
         out.id,
         out.url.as_deref().unwrap_or("(no url)")
     );
-    fmt.print(&out, &human)
+    if !g.json {
+        if out.url.is_some() {
+            fmt.print(
+                &out,
+                &format!("{human}\nNext: bb open pr {id}", id = out.id),
+            )
+        } else {
+            fmt.print(&out, &human)
+        }
+    } else {
+        fmt.print(&out, &human)
+    }
 }
 
 pub async fn comment(
@@ -220,6 +237,76 @@ pub async fn comment(
     let fmt = Formatter::from_json_flag(g.json);
     let human = format!("Commented on PR #{}", id);
     fmt.print(&out, &human)
+}
+
+pub async fn merge(g: &GlobalArgs, id: u64) -> Result<()> {
+    let repo = current_repo()?;
+    let client = client(g)?;
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Fetching PR details...");
+    let pr = client.get_pr(&repo.workspace, &repo.slug, id).await?;
+    spinner.finish_and_clear();
+
+    if !g.json
+        && !confirm(&format!(
+            "Merge PR #{} ({}) from {} into {}? [y/N] ",
+            pr.id,
+            pr.title,
+            pr.source
+                .branch
+                .as_ref()
+                .map(|b| b.name.as_str())
+                .unwrap_or("?"),
+            pr.destination
+                .branch
+                .as_ref()
+                .map(|b| b.name.as_str())
+                .unwrap_or("?"),
+        ))?
+    {
+        let fmt = Formatter::from_json_flag(g.json);
+        let human = "Aborted.".to_string();
+        fmt.print(&(), &human)?;
+        return Ok(());
+    }
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Merging...");
+    let pr = client.merge_pr(&repo.workspace, &repo.slug, id).await?;
+    spinner.finish_and_clear();
+
+    let out = PrViewOut {
+        id: pr.id,
+        state: pr.state.clone(),
+        title: pr.title.clone(),
+        description: pr.description.clone(),
+        source: pr
+            .source
+            .branch
+            .as_ref()
+            .map(|b| b.name.clone())
+            .unwrap_or_default(),
+        destination: pr
+            .destination
+            .branch
+            .as_ref()
+            .map(|b| b.name.clone())
+            .unwrap_or_default(),
+        author: pr.author.as_ref().map(|a| a.display_name.clone()),
+        url: pr.links.html.href.clone(),
+        comment_count: pr.comment_count,
+        task_count: pr.task_count,
+        close_source_branch: pr.close_source_branch,
+    };
+
+    let fmt = Formatter::from_json_flag(g.json);
+    let human = format!("Merged PR #{}", id);
+    if !g.json {
+        fmt.print(&out, &format!("{human}\nNext: bb status"))
+    } else {
+        fmt.print(&out, &human)
+    }
 }
 
 // ---- helpers --------------------------------------------------------------
@@ -282,12 +369,17 @@ fn render_list(out: &PrListOut) -> String {
     let mut table =
         Table::new().headers(["ID", "State", "Title", "Source -> Destination", "Author"]);
     for pr in &out.pull_requests {
-        let state = theme.bold(&pr.state);
+        let state = match pr.state.to_ascii_uppercase().as_str() {
+            "OPEN" => theme.bold(&pr.state),
+            "MERGED" => theme.success(&pr.state),
+            "DECLINED" | "SUPERSEDED" => theme.error(&pr.state),
+            _ => theme.bold(&pr.state),
+        };
         table = table.add_row([
             pr.id.to_string(),
             state,
             truncate(&pr.title, 60),
-            format!("{} -> {}", pr.source, pr.destination),
+            truncate(&format!("{} -> {}", pr.source, pr.destination), 50),
             pr.author.clone().unwrap_or_else(|| "-".into()),
         ]);
     }
@@ -300,7 +392,7 @@ fn render_view(out: &PrViewOut) -> String {
     s.push_str(&format!("PR #{} — {}\n", out.id, theme.bold(&out.state)));
     s.push_str(&format!("  Title:    {}\n", out.title));
     if let Some(d) = &out.description {
-        s.push_str(&format!("  Desc:     {}\n", d));
+        s.push_str(&format!("  Desc:     {}\n", truncate_desc(d, 200)));
     }
     s.push_str(&format!("  {} -> {}\n", out.source, out.destination));
     s.push_str(&format!(
@@ -326,6 +418,25 @@ fn truncate(s: &str, n: usize) -> String {
     } else {
         let mut out: String = s.chars().take(n.saturating_sub(1)).collect();
         out.push('…');
+        out
+    }
+}
+
+fn truncate_desc(s: &str, n: usize) -> String {
+    let first = s.lines().next().unwrap_or(s);
+    if first.chars().count() <= n {
+        if s.lines().count() > 1 {
+            format!(
+                "{first}\n  (... {}, use --json for full)",
+                "multi-line body"
+            )
+        } else {
+            first.to_string()
+        }
+    } else {
+        let mut out: String = first.chars().take(n.saturating_sub(1)).collect();
+        out.push('…');
+        out.push_str(&format!("\n  (... {}, use --json for full)", "truncated"));
         out
     }
 }

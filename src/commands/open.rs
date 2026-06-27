@@ -77,12 +77,12 @@ async fn ci_url(g: &GlobalArgs, branch: Option<&str>) -> Result<(String, String)
         .latest_pipeline(&repo.workspace, &repo.slug, Some(&branch))
         .await?
         .ok_or_else(|| BitbucketError::NotFound(format!("no pipeline for branch '{branch}'")))?;
-    let url = pipeline.links.html.href.ok_or_else(|| {
-        BitbucketError::NotFound(format!(
-            "pipeline {} does not include an HTML URL",
-            pipeline.uuid
-        ))
-    })?;
+    let url = pipeline.links.html.href.unwrap_or_else(|| {
+        format!(
+            "https://bitbucket.org/{}/{}/pipelines/results/{}",
+            repo.workspace, repo.slug, pipeline.build_number
+        )
+    });
     Ok(("ci".into(), url))
 }
 

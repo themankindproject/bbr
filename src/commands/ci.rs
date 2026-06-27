@@ -2,14 +2,13 @@
 
 use std::time::Duration;
 
-use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
 use tokio::time;
 
 use crate::api::pipeline::{normalize_uuid, PipelineStep};
 use crate::api::BitbucketClient;
 use crate::cli::GlobalArgs;
-use crate::commands::{client, current_repo};
+use crate::commands::{client, confirm, current_repo, human_duration, make_spinner};
 use crate::error::{BitbucketError, Result};
 use crate::git;
 use crate::output::theme::Theme;
@@ -68,15 +67,18 @@ pub async fn status(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
     };
     let client = client(g)?;
 
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Fetching pipeline...");
     let pipeline = client
         .latest_pipeline(&repo.workspace, &repo.slug, Some(&branch))
         .await?
         .ok_or_else(|| BitbucketError::NotFound(format!("no pipeline for branch '{branch}'")))?;
-
+    spinner.set_message("Fetching steps...");
     let steps = steps_for_pipeline(&client, &repo.workspace, &repo.slug, &pipeline.uuid)
         .await
         .map(|steps| steps.iter().map(step_out).collect::<Vec<_>>())
         .unwrap_or_default();
+    spinner.finish_and_clear();
 
     let out = CiStatusOut {
         branch: branch.clone(),
@@ -85,13 +87,8 @@ pub async fn status(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
             build_number: pipeline.build_number,
             state: pipeline.state_name().to_string(),
             duration_seconds: pipeline.duration_in_seconds,
-            branch: pipeline.target.ref_.as_ref().map(|r| r.name.clone()),
-            commit: pipeline
-                .target
-                .ref_
-                .as_ref()
-                .and_then(|r| r.target.as_ref())
-                .map(|t| t.hash.clone()),
+            branch: pipeline.target.ref_name.clone(),
+            commit: pipeline.target.commit.as_ref().map(|c| c.hash.clone()),
             steps,
         }),
     };
@@ -122,17 +119,7 @@ pub async fn watch(
     let uuid = initial.uuid.clone();
     let theme = Theme::current();
 
-    let spinner = if g.json {
-        ProgressBar::hidden()
-    } else {
-        let pb = ProgressBar::new_spinner();
-        pb.enable_steady_tick(Duration::from_millis(120));
-        pb.set_style(
-            ProgressStyle::with_template("{spinner} {msg}")
-                .unwrap_or_else(|_| ProgressStyle::default_spinner()),
-        );
-        pb
-    };
+    let spinner = make_spinner(g.json);
     spinner.println(format!("Watching pipeline {uuid} on {branch}..."));
 
     let mut current = initial;
@@ -181,16 +168,16 @@ pub async fn watch(
 
     let fmt = Formatter::from_json_flag(g.json);
     let mut human = format!(
-        "Pipeline {} in {}s",
+        "Pipeline {} in {}",
         theme.status_glyph(&final_state),
-        out.duration_seconds
+        human_duration(out.duration_seconds)
     );
     for s in &steps {
         human.push_str(&format!(
-            "\n  {} {:<18}  {}s",
+            "\n  {} {:<18}  {}",
             theme.status_glyph(&s.state),
             s.name,
-            s.duration_seconds
+            human_duration(s.duration_seconds)
         ));
     }
     if let Some(log) = failure_log {
@@ -247,6 +234,62 @@ pub async fn logs(
     let fmt = Formatter::from_json_flag(g.json);
     let human = log.text;
     fmt.print(&out, &human)
+}
+
+pub async fn rerun(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
+    let repo = current_repo()?;
+    let branch = match branch {
+        Some(b) => b.to_string(),
+        None => git::current_branch()?,
+    };
+    let client = client(g)?;
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Fetching latest pipeline...");
+    let pipeline = client
+        .latest_pipeline(&repo.workspace, &repo.slug, Some(&branch))
+        .await?
+        .ok_or_else(|| BitbucketError::NotFound(format!("no pipeline for branch '{branch}'")))?;
+    spinner.finish_and_clear();
+
+    if !g.json
+        && !confirm(&format!(
+            "Rerun pipeline #{} (current state: {}) for branch '{}'? [y/N] ",
+            pipeline.build_number,
+            pipeline.state_name(),
+            branch,
+        ))?
+    {
+        let fmt = Formatter::from_json_flag(g.json);
+        fmt.print(&(), "Aborted.")?;
+        return Ok(());
+    }
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Triggering rerun...");
+    let new_pipeline = client
+        .rerun_pipeline(&repo.workspace, &repo.slug, &pipeline.uuid)
+        .await?;
+    spinner.finish_and_clear();
+    let out = CiStatusOut {
+        branch: branch.clone(),
+        pipeline: Some(PipelineOut {
+            uuid: new_pipeline.uuid.clone(),
+            build_number: new_pipeline.build_number,
+            state: new_pipeline.state_name().to_string(),
+            duration_seconds: new_pipeline.duration_in_seconds,
+            branch: new_pipeline.target.ref_name.clone(),
+            commit: new_pipeline.target.commit.as_ref().map(|c| c.hash.clone()),
+            steps: Vec::new(),
+        }),
+    };
+    let fmt = Formatter::from_json_flag(g.json);
+    let human = format!("Reran pipeline #{}", new_pipeline.build_number);
+    if !g.json {
+        fmt.print(&out, &format!("{human}\nNext: bb ci watch"))
+    } else {
+        fmt.print(&out, &human)
+    }
 }
 
 async fn steps_for_pipeline(
@@ -321,10 +364,10 @@ fn render_status(out: &CiStatusOut) -> String {
     match &out.pipeline {
         Some(p) => {
             s.push_str(&format!(
-                "\nPipeline #{}  {}  ({}s)\n",
+                "\nPipeline #{}  {}  ({})\n",
                 p.build_number,
                 theme.status_glyph(&p.state),
-                p.duration_seconds
+                human_duration(p.duration_seconds)
             ));
             s.push_str(&format!(
                 "  Branch: {}  /  Commit: {}\n",
@@ -335,10 +378,10 @@ fn render_status(out: &CiStatusOut) -> String {
                 s.push_str("  Steps:\n");
                 for st in &p.steps {
                     s.push_str(&format!(
-                        "    {} {:<18}  {}s\n",
+                        "    {} {:<18}  {}\n",
                         theme.status_glyph(&st.state),
                         st.name,
-                        st.duration_seconds
+                        human_duration(st.duration_seconds)
                     ));
                 }
             }
