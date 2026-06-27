@@ -113,9 +113,13 @@ impl Credentials {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn env_pat_wins_over_empty() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var(ENV_USERNAME, "u");
         std::env::set_var(ENV_TOKEN, "tok");
         std::env::remove_var(ENV_APP_PASSWORD);
@@ -126,7 +130,20 @@ mod tests {
     }
 
     #[test]
+    fn env_api_token_is_detected() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var(ENV_USERNAME, "u");
+        std::env::set_var(ENV_TOKEN, "ATATT-example");
+        std::env::remove_var(ENV_APP_PASSWORD);
+        let c = from_env().unwrap();
+        assert_eq!(c.kind, CredentialKind::ApiToken);
+        std::env::remove_var(ENV_TOKEN);
+        std::env::remove_var(ENV_USERNAME);
+    }
+
+    #[test]
     fn env_app_password_fallback() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var(ENV_USERNAME, "u");
         std::env::remove_var(ENV_TOKEN);
         std::env::set_var(ENV_APP_PASSWORD, "pw");

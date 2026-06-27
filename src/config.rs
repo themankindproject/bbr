@@ -124,7 +124,7 @@ fn write_private(path: &std::path::Path, contents: &str) -> std::io::Result<()> 
     #[cfg(unix)]
     {
         use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
         fs::OpenOptions::new()
             .write(true)
             .create(true)
@@ -132,6 +132,7 @@ fn write_private(path: &std::path::Path, contents: &str) -> std::io::Result<()> 
             .mode(0o600)
             .open(path)?
             .write_all(contents.as_bytes())?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
         Ok(())
     }
     #[cfg(not(unix))]
@@ -155,10 +156,36 @@ pub fn delete_credentials() -> Result<bool> {
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::sync::Mutex;
     use tempfile::tempdir;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[cfg(unix)]
+    #[test]
+    fn save_credentials_uses_private_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = tempdir().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        let creds = CredentialsFile {
+            default: CredentialProfile {
+                username: "u".into(),
+                token: Some("t".into()),
+                app_password: None,
+                workspace: None,
+            },
+        };
+        let path = save_credentials(&creds).unwrap();
+        let mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        std::env::remove_var("XDG_CONFIG_HOME");
+    }
 
     #[test]
     fn parses_token_profile() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let tmp = tempdir().unwrap();
         // xdg prepends the prefix ("bb") to XDG_CONFIG_HOME, so write inside
         // a `bb` subdirectory.

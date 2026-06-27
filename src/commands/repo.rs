@@ -51,3 +51,25 @@ pub async fn info(g: &GlobalArgs) -> Result<()> {
     }
     fmt.print(&out, &human)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_uses_scm_field_not_scim() {
+        let out = RepoInfoOut {
+            workspace: "w".into(),
+            slug: "s".into(),
+            full_name: "w/s".into(),
+            scm: "git".into(),
+            private: true,
+            language: "rust".into(),
+            description: None,
+            web_url: None,
+        };
+        let json = serde_json::to_value(out).unwrap();
+        assert_eq!(json.get("scm").and_then(|v| v.as_str()), Some("git"));
+        assert!(json.get("scim").is_none());
+    }
+}
