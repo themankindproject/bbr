@@ -24,6 +24,7 @@
 - [Scripting Patterns](#scripting-patterns)
 - [Error Handling](#error-handling)
 - [Performance](#performance)
+- [Roadmap](#roadmap)
 - [Environment Variables](#environment-variables)
 - [License](#license)
 
@@ -489,11 +490,10 @@ Required scopes for a Personal Access Token:
 |-------|--------|
 | `account:read` | Read user info |
 | `repository:read` | Read repos and branches |
-| `repository:write` | Create PRs |
+| `repository:write` | Create PRs and create/update commit statuses |
 | `pullrequest:read` | Read PRs |
 | `pullrequest:write` | Create PRs/comments and request changes |
 | `pipeline:read` | Read pipeline status |
-| `repository:write` | Create/update commit statuses |
 
 ### App password scopes (legacy)
 
@@ -645,6 +645,52 @@ Measured on a typical dev machine:
 | `bb ci watch` | 50-100 ms | polls every 5s |
 
 Cold start includes binary startup + auth resolution. Subsequent API calls are faster.
+
+---
+
+## Roadmap
+
+The implemented command set now covers the common inner loop:
+
+- find the current repo and branch
+- inspect PR state, comments, tasks, commits, statuses, and conflicts
+- create/update/comment/approve/merge PRs
+- inspect and watch pipelines
+- fetch logs and steps
+- list branches/tags/commits
+- publish commit build statuses
+
+The next production-grade improvements should stay workflow-driven rather than
+wrapping the whole Bitbucket API at once.
+
+### Highest-value next commands
+
+| Area | Candidate commands | Notes |
+|------|--------------------|-------|
+| Pipeline test reports | `bb ci tests`, `bb ci tests --failed` | Summarize failing test cases before falling back to full logs |
+| Branch restrictions | `bb branch restrictions`, `bb branch protect` | Useful for repo policy audits and reproducible setup |
+| Reports and annotations | `bb report publish`, `bb report annotations` | Lets CI and agents write lint/test findings into Bitbucket |
+| Source browsing | `bb source ls`, `bb source cat`, `bb source history` | Inspect files at refs without cloning or switching branches |
+| Webhooks | `bb webhooks list/create/delete` | Manage integrations as code |
+| Downloads | `bb downloads list/upload/delete` | Release artifact workflows |
+
+### Suggested implementation order
+
+1. Add read-only CI test report commands.
+2. Add read-only branch restriction listing before write commands.
+3. Add report/annotation publishing for CI integrations.
+4. Add source browsing as read-only commands.
+5. Add webhook and downloads management.
+
+### Design rules for new commands
+
+- Every data command should support `--json`.
+- JSON output should be documented before release.
+- Write commands should have explicit names and avoid surprising defaults.
+- Read commands should default to current repo/current branch when that matches
+  existing `bb status`, `bb pr view`, and `bb ci logs` behavior.
+- Mock-server integration tests should cover endpoint paths, auth headers, and
+  representative response bodies.
 
 ---
 

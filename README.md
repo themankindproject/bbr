@@ -191,11 +191,37 @@ Required scopes for a Personal Access Token:
 |-------|--------|
 | `account:read` | Read user info |
 | `repository:read` | Read repos and branches |
-| `repository:write` | Create PRs |
+| `repository:write` | Create PRs and create/update commit statuses |
 | `pullrequest:read` | Read PRs |
 | `pullrequest:write` | Create PRs/comments and request changes |
 | `pipeline:read` | Read pipeline status |
-| `repository:write` | Create/update commit statuses |
+
+## Roadmap
+
+`bbr` intentionally prioritizes workflows that help agents and developers make
+decisions quickly from a terminal. The current surface covers daily PR, CI, and
+repo inspection. The next useful Bitbucket API areas are:
+
+| Priority | Area | Why it matters |
+|----------|------|----------------|
+| 1 | Pipeline test reports | Show failed test summaries and cases without downloading full logs |
+| 2 | Branch restrictions | Audit and apply repository protection rules from scripts |
+| 3 | Reports and annotations | Publish lint/test findings back to Bitbucket from CI or agents |
+| 4 | Source browsing | `cat`, `ls`, and history for files at a commit without cloning |
+| 5 | Webhooks | Manage repository integrations reproducibly |
+| 6 | Downloads | Upload and manage release artifacts |
+
+Near-term command ideas:
+
+```bash
+bb ci tests [pipeline-uuid] --step "Run Tests"
+bb branch restrictions
+bb branch protect main --require-approvals 2 --require-builds 1
+bb report publish --file report.json
+bb source cat path/to/file.rs --rev main
+bb webhooks list
+bb downloads upload ./artifact.tar.gz
+```
 
 ## Output Format
 
