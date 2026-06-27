@@ -49,6 +49,22 @@ pub struct Branch {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Tag {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub target: Option<super::pr::CommitRef>,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub tagger: Option<CommitAuthor>,
+    #[serde(default)]
+    pub date: Option<String>,
+    #[serde(default)]
+    pub links: super::pr::Links,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Commit {
     #[serde(default)]
     pub hash: String,
@@ -87,6 +103,18 @@ impl BitbucketClient {
         let path = format!(
             "/repositories/{workspace}/{slug}/refs/branches?pagelen={limit}&sort=target.date"
         );
+        self.send(reqwest::Method::GET, &path, None).await
+    }
+
+    /// `GET /repositories/{ws}/{slug}/refs/tags?pagelen=N&sort=-target.date`
+    pub async fn list_tags(
+        &self,
+        workspace: &str,
+        slug: &str,
+        limit: u32,
+    ) -> Result<super::Paginated<Tag>> {
+        let path =
+            format!("/repositories/{workspace}/{slug}/refs/tags?pagelen={limit}&sort=-target.date");
         self.send(reqwest::Method::GET, &path, None).await
     }
 
@@ -157,5 +185,17 @@ mod tests {
             branch.target.as_ref().map(|t| &t.hash),
             Some(&"abc123".into())
         );
+    }
+
+    #[test]
+    fn tag_deserializes() {
+        let json = serde_json::json!({
+            "name": "v1.0.0",
+            "target": { "hash": "def456" },
+            "message": "Release"
+        });
+        let tag: Tag = serde_json::from_value(json).unwrap();
+        assert_eq!(tag.name, "v1.0.0");
+        assert_eq!(tag.target.as_ref().map(|t| t.hash.as_str()), Some("def456"));
     }
 }

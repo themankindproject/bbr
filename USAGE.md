@@ -13,6 +13,7 @@
   - [`bb pr`](#bb-pr) — pull request operations
   - [`bb ci`](#bb-ci) — pipeline operations
   - [`bb repo`](#bb-repo) — repository metadata
+  - [`bb commit`](#bb-commit) — commit build statuses
   - [`bb open`](#bb-open) — browser shortcuts
   - [`bb auth`](#bb-auth) — credential management
   - [`bb completion`](#bb-completion) — shell completions
@@ -58,8 +59,11 @@ bb auth setup
 bb status            # PR + CI for current branch
 bb pr list           # open PRs
 bb pr create --title "Fix X" --body-file pr.md
+bb pr comments       # review comments for current branch's PR
+bb pr tasks          # tasks for current branch's PR
 bb ci status         # last pipeline
 bb ci logs --failed  # failed step log from latest pipeline
+bb commit status set --key lint --state successful --url "$CI_JOB_URL"
 bb ci watch --logs   # live-tail and print failing logs on failure
 bb open pr           # open current branch's PR
 ```
@@ -243,6 +247,26 @@ bb pr comment 467 --body-file review.md
 echo "Approved" | bb pr comment 467 --body-stdin
 ```
 
+#### PR review data
+
+Review subcommands default to the current branch's open PR when the ID is
+omitted.
+
+```bash
+bb pr comments [467] [--limit 50]
+bb pr tasks [467] [--limit 50]
+bb pr commits [467] [--limit 50]
+bb pr statuses [467] [--limit 50]
+bb pr conflicts [467] [--limit 50]
+```
+
+Change requests are explicit write operations:
+
+```bash
+bb pr request-changes 467
+bb pr unrequest-changes 467
+```
+
 ---
 
 ### `bb ci`
@@ -322,6 +346,33 @@ private:   true
 language:  Rust
 url:       https://bitbucket.org/sdadev/bvrm-backend
 ```
+
+```bash
+bb repo branches [--limit 20]
+bb repo tags [--limit 20]
+bb repo commits [--branch main] [--limit 20]
+```
+
+---
+
+### `bb commit`
+
+Commit metadata and build statuses.
+
+Create or update a build status for a commit. If `commit` is omitted, `bb`
+uses the current HEAD commit.
+
+```bash
+bb commit status set [commit] \
+  --key lint \
+  --state successful \
+  --name "Lint" \
+  --url "$CI_JOB_URL" \
+  --description "All checks passed" \
+  --refname "$BITBUCKET_BRANCH"
+```
+
+Accepted states are `successful`, `failed`, `inprogress`, and `stopped`.
 
 ---
 
@@ -440,8 +491,9 @@ Required scopes for a Personal Access Token:
 | `repository:read` | Read repos and branches |
 | `repository:write` | Create PRs |
 | `pullrequest:read` | Read PRs |
-| `pullrequest:write` | Create PRs and comments |
+| `pullrequest:write` | Create PRs/comments and request changes |
 | `pipeline:read` | Read pipeline status |
+| `repository:write` | Create/update commit statuses |
 
 ### App password scopes (legacy)
 

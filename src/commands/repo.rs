@@ -27,6 +27,13 @@ pub struct BranchOut {
 }
 
 #[derive(Debug, Serialize)]
+pub struct TagOut {
+    pub name: String,
+    pub target: Option<String>,
+    pub date: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct CommitOut {
     pub hash: String,
     pub message: String,
@@ -93,6 +100,41 @@ pub async fn list_branches(g: &GlobalArgs, limit: u32) -> Result<()> {
     }
     let human = table.render();
     fmt.print(&branches, &human)
+}
+
+pub async fn list_tags(g: &GlobalArgs, limit: u32) -> Result<()> {
+    let repo = current_repo()?;
+    let client = client(g)?;
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Fetching tags...");
+    let page = client.list_tags(&repo.workspace, &repo.slug, limit).await?;
+    spinner.finish_and_clear();
+
+    let tags: Vec<TagOut> = page
+        .values
+        .iter()
+        .map(|t| TagOut {
+            name: t.name.clone(),
+            target: t.target.as_ref().map(|c| c.hash.clone()),
+            date: t.date.clone(),
+        })
+        .collect();
+
+    let fmt = Formatter::from_json_flag(g.json);
+    let mut table = Table::new().headers(["Tag", "Target", "Date"]);
+    for t in &tags {
+        table = table.add_row([
+            t.name.clone(),
+            t.target
+                .as_deref()
+                .map(|hash| truncate(hash, 12))
+                .unwrap_or_else(|| "-".into()),
+            t.date.clone().unwrap_or_else(|| "-".into()),
+        ]);
+    }
+    let human = table.render();
+    fmt.print(&tags, &human)
 }
 
 pub async fn list_commits(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> Result<()> {

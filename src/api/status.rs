@@ -5,6 +5,20 @@ use serde::{Deserialize, Serialize};
 use super::BitbucketClient;
 use crate::error::Result;
 
+#[derive(Debug, Clone, Serialize)]
+pub struct BuildStatusRequest {
+    pub key: String,
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refname: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildStatus {
     #[serde(default)]
@@ -35,6 +49,18 @@ impl BitbucketClient {
     ) -> Result<super::Paginated<BuildStatus>> {
         let path = format!("/repositories/{workspace}/{slug}/commit/{commit}/statuses");
         self.send(reqwest::Method::GET, &path, None).await
+    }
+
+    /// `POST /repositories/{ws}/{slug}/commit/{commit}/statuses/build`
+    pub async fn create_commit_status(
+        &self,
+        workspace: &str,
+        slug: &str,
+        commit: &str,
+        body: &BuildStatusRequest,
+    ) -> Result<BuildStatus> {
+        let path = format!("/repositories/{workspace}/{slug}/commit/{commit}/statuses/build");
+        self.post(&path, body).await
     }
 }
 

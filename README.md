@@ -37,8 +37,9 @@ Next:
 
 | Feature | Status |
 |---------|--------|
-| **PR lifecycle** | `list`, `view`, `create`, `comment` |
+| **PR lifecycle** | `list`, `view`, `create`, `comment`, review data |
 | **CI / pipelines** | `status`, `watch --logs`, `logs --failed` |
+| **Commit statuses** | create/update build statuses for CI integrations |
 | **Auth** | PAT + legacy app password, env / config-file |
 | **Output** | `--json` stable schema for agents, pretty tables for humans |
 | **Browser shortcuts** | `bb open`, `bb open pr`, `bb open ci` |
@@ -82,8 +83,11 @@ bb auth setup
 bb status            # PR + CI for current branch
 bb pr list           # open PRs in this repo
 bb pr create --title "Fix X" --body-file pr.md
+bb pr comments       # comments for current branch's PR
+bb pr tasks          # tasks for current branch's PR
 bb ci status         # last pipeline for current branch
 bb ci logs --failed  # failed step log from latest pipeline
+bb commit status set --key lint --state successful --url "$CI_JOB_URL"
 bb ci watch --logs   # live-tail and print failing logs on failure
 bb open pr           # open current branch's PR
 ```
@@ -106,6 +110,13 @@ bb pr list [--state open|merged|declined|all]
 bb pr view [<id>]                    # defaults to current branch's PR
 bb pr create --title T --body B [--src S --dst D]
 bb pr comment <id> --body B
+bb pr comments [<id>]
+bb pr tasks [<id>]
+bb pr commits [<id>]
+bb pr statuses [<id>]
+bb pr conflicts [<id>]
+bb pr request-changes <id>
+bb pr unrequest-changes <id>
 ```
 
 ### CI / pipeline operations
@@ -122,6 +133,8 @@ bb ci logs   --step "Run Tests"      # step UUID or step name
 
 ```bash
 bb repo info                         # show workspace/slug for current dir
+bb repo tags                         # list remote tags
+bb commit status set --key K --state successful [commit]
 bb open [repo|pr|ci]                 # open Bitbucket in your browser
 bb auth setup                        # interactive credential setup
 bb auth status                       # verify stored credentials work
@@ -180,8 +193,9 @@ Required scopes for a Personal Access Token:
 | `repository:read` | Read repos and branches |
 | `repository:write` | Create PRs |
 | `pullrequest:read` | Read PRs |
-| `pullrequest:write` | Create PRs and comments |
+| `pullrequest:write` | Create PRs/comments and request changes |
 | `pipeline:read` | Read pipeline status |
+| `repository:write` | Create/update commit statuses |
 
 ## Output Format
 

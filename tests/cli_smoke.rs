@@ -39,6 +39,39 @@ fn emits_bash_completion() {
 }
 
 #[test]
+fn pr_help_lists_review_commands() {
+    Command::cargo_bin("bb")
+        .unwrap()
+        .args(["pr", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("comments"))
+        .stdout(predicate::str::contains("tasks"))
+        .stdout(predicate::str::contains("conflicts"))
+        .stdout(predicate::str::contains("request-changes"));
+}
+
+#[test]
+fn commit_status_help_lists_set() {
+    Command::cargo_bin("bb")
+        .unwrap()
+        .args(["commit", "status", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("set"));
+}
+
+#[test]
+fn repo_help_lists_tags() {
+    Command::cargo_bin("bb")
+        .unwrap()
+        .args(["repo", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("tags"));
+}
+
+#[test]
 fn missing_creds_exits_with_auth_code() {
     // Ensure no env creds leak into the test.
     std::env::remove_var("BITBUCKET_USERNAME");

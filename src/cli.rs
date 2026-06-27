@@ -74,6 +74,11 @@ pub enum Command {
         #[command(subcommand)]
         action: RepoAction,
     },
+    /// Commit metadata and build statuses.
+    Commit {
+        #[command(subcommand)]
+        action: CommitAction,
+    },
     /// Open Bitbucket pages in your browser.
     Open {
         #[command(subcommand)]
@@ -155,6 +160,63 @@ pub enum PrAction {
         body_stdin: bool,
         #[arg(long, help = "reply to a specific comment ID")]
         reply_to: Option<u64>,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// List comments on a pull request.
+    Comments {
+        /// Pull request ID (defaults to current branch's open PR).
+        id: Option<u64>,
+        #[arg(long, help = "max results to return", default_value_t = 50)]
+        limit: u32,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// List tasks on a pull request.
+    Tasks {
+        /// Pull request ID (defaults to current branch's open PR).
+        id: Option<u64>,
+        #[arg(long, help = "max results to return", default_value_t = 50)]
+        limit: u32,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// List commits on a pull request.
+    Commits {
+        /// Pull request ID (defaults to current branch's open PR).
+        id: Option<u64>,
+        #[arg(long, help = "max results to return", default_value_t = 50)]
+        limit: u32,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// List commit statuses on a pull request.
+    Statuses {
+        /// Pull request ID (defaults to current branch's open PR).
+        id: Option<u64>,
+        #[arg(long, help = "max results to return", default_value_t = 50)]
+        limit: u32,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// List merge conflicts on a pull request.
+    Conflicts {
+        /// Pull request ID (defaults to current branch's open PR).
+        id: Option<u64>,
+        #[arg(long, help = "max results to return", default_value_t = 50)]
+        limit: u32,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Request changes on a pull request.
+    RequestChanges {
+        id: u64,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Clear your change request on a pull request.
+    UnrequestChanges {
+        id: u64,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -289,12 +351,51 @@ pub enum RepoAction {
         #[command(flatten)]
         g: GlobalArgs,
     },
+    /// List remote tags.
+    Tags {
+        #[arg(long, help = "max results", default_value_t = 20)]
+        limit: u32,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
     /// List recent commits.
     Commits {
         #[arg(long, help = "branch name (default: current branch)")]
         branch: Option<String>,
         #[arg(long, help = "max results", default_value_t = 20)]
         limit: u32,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CommitAction {
+    /// Commit build-status operations.
+    Status {
+        #[command(subcommand)]
+        action: CommitStatusAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CommitStatusAction {
+    /// Create or update a build status on a commit.
+    Set {
+        /// Commit hash (defaults to current HEAD).
+        commit: Option<String>,
+        #[arg(long, help = "status key, unique per integration")]
+        key: String,
+        #[arg(long, help = "state: successful|failed|inprogress|stopped")]
+        state: String,
+        #[arg(long, help = "display name")]
+        name: Option<String>,
+        #[arg(long, help = "target URL")]
+        url: Option<String>,
+        #[arg(long, help = "short status description")]
+        description: Option<String>,
+        #[arg(long, help = "branch/ref name to associate with pull requests")]
+        refname: Option<String>,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -433,6 +534,13 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 )
                 .await
             }
+            PrAction::Comments { id, limit, g } => commands::pr::comments(&g, id, limit).await,
+            PrAction::Tasks { id, limit, g } => commands::pr::tasks(&g, id, limit).await,
+            PrAction::Commits { id, limit, g } => commands::pr::commits(&g, id, limit).await,
+            PrAction::Statuses { id, limit, g } => commands::pr::statuses(&g, id, limit).await,
+            PrAction::Conflicts { id, limit, g } => commands::pr::conflicts(&g, id, limit).await,
+            PrAction::RequestChanges { id, g } => commands::pr::request_changes(&g, id).await,
+            PrAction::UnrequestChanges { id, g } => commands::pr::unrequest_changes(&g, id).await,
             PrAction::Merge { id, g } => commands::pr::merge(&g, id).await,
             PrAction::Approve { id, g } => commands::pr::approve(&g, id).await,
             PrAction::Unapprove { id, g } => commands::pr::unapprove(&g, id).await,
@@ -484,9 +592,36 @@ async fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Repo { action }) => match action {
             RepoAction::Info { g } => commands::repo::info(&g).await,
             RepoAction::Branches { limit, g } => commands::repo::list_branches(&g, limit).await,
+            RepoAction::Tags { limit, g } => commands::repo::list_tags(&g, limit).await,
             RepoAction::Commits { branch, limit, g } => {
                 commands::repo::list_commits(&g, branch.as_deref(), limit).await
             }
+        },
+        Some(Command::Commit { action }) => match action {
+            CommitAction::Status { action } => match action {
+                CommitStatusAction::Set {
+                    commit,
+                    key,
+                    state,
+                    name,
+                    url,
+                    description,
+                    refname,
+                    g,
+                } => {
+                    commands::commit::set_status(
+                        &g,
+                        commit.as_deref(),
+                        &key,
+                        &state,
+                        name.as_deref(),
+                        url.as_deref(),
+                        description.as_deref(),
+                        refname.as_deref(),
+                    )
+                    .await
+                }
+            },
         },
         Some(Command::Open { action, g }) => commands::open::run(&g, action).await,
         Some(Command::Auth { action }) => match action {

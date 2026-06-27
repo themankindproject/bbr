@@ -3,9 +3,12 @@
 use serde::Serialize;
 
 use crate::api::pr::{
-    CreateBranchRef, CreateNamed, CreatePrRequest, PrState, PullRequest, ReviewerRef,
-    UpdatePrRequest,
+    CreateBranchRef, CreateNamed, CreatePrRequest, PrState, PullRequest, PullRequestComment,
+    PullRequestConflict, PullRequestTask, ReviewerRef, UpdatePrRequest,
 };
+use crate::api::repo::Commit;
+use crate::api::status::BuildStatus;
+use crate::api::BitbucketClient;
 use crate::cli::GlobalArgs;
 use crate::commands::{
     client, confirm, current_head, current_repo, make_spinner, resolve_body, truncate,
@@ -82,6 +85,83 @@ pub struct PrCreateOut {
 pub struct PrCommentOut {
     pub pr_id: u64,
     pub posted: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PrCommentsOut {
+    pub pr_id: u64,
+    pub comments: Vec<PrCommentSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PrCommentSummary {
+    pub id: u64,
+    pub body: String,
+    pub author: Option<String>,
+    pub parent_id: Option<u64>,
+    pub deleted: bool,
+    pub created_on: Option<String>,
+    pub updated_on: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PrTasksOut {
+    pub pr_id: u64,
+    pub tasks: Vec<PrTaskSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PrTaskSummary {
+    pub id: u64,
+    pub state: String,
+    pub body: String,
+    pub creator: Option<String>,
+    pub assignee: Option<String>,
+    pub created_on: Option<String>,
+    pub updated_on: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PrCommitsOut {
+    pub pr_id: u64,
+    pub commits: Vec<PrCommitSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PrCommitSummary {
+    pub hash: String,
+    pub message: String,
+    pub author: Option<String>,
+    pub date: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PrStatusesOut {
+    pub pr_id: u64,
+    pub statuses: Vec<PrStatusSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PrStatusSummary {
+    pub state: String,
+    pub key: String,
+    pub name: String,
+    pub url: String,
+    pub description: Option<String>,
+    pub refname: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PrConflictsOut {
+    pub pr_id: u64,
+    pub conflicts: Vec<PrConflictSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PrConflictSummary {
+    pub path: String,
+    pub conflict_type: Option<String>,
+    pub kind: Option<String>,
 }
 
 // ---- commands -------------------------------------------------------------
@@ -269,6 +349,136 @@ pub async fn comment(
     fmt.print(&out, &human)
 }
 
+pub async fn comments(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()> {
+    let repo = current_repo()?;
+    let client = client(g)?;
+    let id = resolve_pr_id(&client, &repo.workspace, &repo.slug, id).await?;
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Fetching comments...");
+    let comments = client
+        .pr_comments(&repo.workspace, &repo.slug, id, limit)
+        .await?;
+    spinner.finish_and_clear();
+
+    let out = PrCommentsOut {
+        pr_id: id,
+        comments: comments.iter().map(comment_summary).collect(),
+    };
+    let human = render_comments(&out);
+    Formatter::from_json_flag(g.json).print_paginated(&out, &human)
+}
+
+pub async fn tasks(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()> {
+    let repo = current_repo()?;
+    let client = client(g)?;
+    let id = resolve_pr_id(&client, &repo.workspace, &repo.slug, id).await?;
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Fetching tasks...");
+    let tasks = client
+        .pr_tasks(&repo.workspace, &repo.slug, id, limit)
+        .await?;
+    spinner.finish_and_clear();
+
+    let out = PrTasksOut {
+        pr_id: id,
+        tasks: tasks.iter().map(task_summary).collect(),
+    };
+    let human = render_tasks(&out);
+    Formatter::from_json_flag(g.json).print(&out, &human)
+}
+
+pub async fn commits(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()> {
+    let repo = current_repo()?;
+    let client = client(g)?;
+    let id = resolve_pr_id(&client, &repo.workspace, &repo.slug, id).await?;
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Fetching PR commits...");
+    let commits = client
+        .pr_commits(&repo.workspace, &repo.slug, id, limit)
+        .await?;
+    spinner.finish_and_clear();
+
+    let out = PrCommitsOut {
+        pr_id: id,
+        commits: commits.iter().map(commit_summary).collect(),
+    };
+    let human = render_commits(&out);
+    Formatter::from_json_flag(g.json).print(&out, &human)
+}
+
+pub async fn statuses(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()> {
+    let repo = current_repo()?;
+    let client = client(g)?;
+    let id = resolve_pr_id(&client, &repo.workspace, &repo.slug, id).await?;
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Fetching PR statuses...");
+    let statuses = client
+        .pr_statuses(&repo.workspace, &repo.slug, id, limit)
+        .await?;
+    spinner.finish_and_clear();
+
+    let out = PrStatusesOut {
+        pr_id: id,
+        statuses: statuses.iter().map(status_summary).collect(),
+    };
+    let human = render_statuses(&out);
+    Formatter::from_json_flag(g.json).print(&out, &human)
+}
+
+pub async fn conflicts(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()> {
+    let repo = current_repo()?;
+    let client = client(g)?;
+    let id = resolve_pr_id(&client, &repo.workspace, &repo.slug, id).await?;
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Fetching PR conflicts...");
+    let conflicts = client
+        .pr_conflicts(&repo.workspace, &repo.slug, id, limit)
+        .await?;
+    spinner.finish_and_clear();
+
+    let out = PrConflictsOut {
+        pr_id: id,
+        conflicts: conflicts.iter().map(conflict_summary).collect(),
+    };
+    let human = render_conflicts(&out);
+    Formatter::from_json_flag(g.json).print(&out, &human)
+}
+
+pub async fn request_changes(g: &GlobalArgs, id: u64) -> Result<()> {
+    let repo = current_repo()?;
+    let client = client(g)?;
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Requesting changes...");
+    client
+        .request_pr_changes(&repo.workspace, &repo.slug, id)
+        .await?;
+    spinner.finish_and_clear();
+    Formatter::from_json_flag(g.json).print(
+        &serde_json::json!({ "id": id, "changes_requested": true }),
+        &format!("Requested changes on PR #{}", id),
+    )
+}
+
+pub async fn unrequest_changes(g: &GlobalArgs, id: u64) -> Result<()> {
+    let repo = current_repo()?;
+    let client = client(g)?;
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Clearing change request...");
+    client
+        .unrequest_pr_changes(&repo.workspace, &repo.slug, id)
+        .await?;
+    spinner.finish_and_clear();
+    Formatter::from_json_flag(g.json).print(
+        &serde_json::json!({ "id": id, "changes_requested": false }),
+        &format!("Cleared change request on PR #{}", id),
+    )
+}
+
 pub async fn approve(g: &GlobalArgs, id: u64) -> Result<()> {
     let repo = current_repo()?;
     let client = client(g)?;
@@ -443,6 +653,83 @@ fn summarize(pr: &PullRequest) -> PrSummary {
     }
 }
 
+async fn resolve_pr_id(
+    client: &BitbucketClient,
+    workspace: &str,
+    slug: &str,
+    id: Option<u64>,
+) -> Result<u64> {
+    if let Some(id) = id {
+        return Ok(id);
+    }
+    let head = current_head()?;
+    client
+        .pr_for_branch(workspace, slug, &head.branch)
+        .await?
+        .map(|pr| pr.id)
+        .ok_or_else(|| BitbucketError::NotFound(format!("no open PR for branch '{}'", head.branch)))
+}
+
+fn comment_summary(comment: &PullRequestComment) -> PrCommentSummary {
+    PrCommentSummary {
+        id: comment.id,
+        body: comment
+            .content
+            .as_ref()
+            .map(|c| c.raw.clone())
+            .unwrap_or_default(),
+        author: comment.user.as_ref().map(|u| u.display_name.clone()),
+        parent_id: comment.parent.as_ref().map(|p| p.id).filter(|id| *id != 0),
+        deleted: comment.deleted,
+        created_on: comment.created_on.clone(),
+        updated_on: comment.updated_on.clone(),
+    }
+}
+
+fn task_summary(task: &PullRequestTask) -> PrTaskSummary {
+    PrTaskSummary {
+        id: task.id,
+        state: task.state.clone(),
+        body: task
+            .content
+            .as_ref()
+            .map(|c| c.raw.clone())
+            .unwrap_or_default(),
+        creator: task.creator.as_ref().map(|u| u.display_name.clone()),
+        assignee: task.assignee.as_ref().map(|u| u.display_name.clone()),
+        created_on: task.created_on.clone(),
+        updated_on: task.updated_on.clone(),
+    }
+}
+
+fn commit_summary(commit: &Commit) -> PrCommitSummary {
+    PrCommitSummary {
+        hash: commit.hash.clone(),
+        message: commit.message.lines().next().unwrap_or("").to_string(),
+        author: commit.author.as_ref().map(|a| a.raw.clone()),
+        date: commit.date.clone(),
+    }
+}
+
+fn status_summary(status: &BuildStatus) -> PrStatusSummary {
+    PrStatusSummary {
+        state: status.state.clone(),
+        key: status.key.clone(),
+        name: status.name.clone(),
+        url: status.url.clone(),
+        description: status.description.clone(),
+        refname: status.refname.clone(),
+    }
+}
+
+fn conflict_summary(conflict: &PullRequestConflict) -> PrConflictSummary {
+    PrConflictSummary {
+        path: conflict.path.clone(),
+        conflict_type: conflict.conflict_type.clone(),
+        kind: conflict.kind.clone(),
+    }
+}
+
 fn empty_as_unknown(s: &str) -> &str {
     if s.is_empty() {
         "?"
@@ -498,6 +785,115 @@ fn render_list(out: &PrListOut) -> String {
             truncate(&pr.title, 60),
             truncate(&format!("{} -> {}", pr.source, pr.destination), 50),
             pr.author.clone().unwrap_or_else(|| "-".into()),
+        ]);
+    }
+    table.render()
+}
+
+fn render_comments(out: &PrCommentsOut) -> String {
+    if out.comments.is_empty() {
+        return format!("No comments on PR #{}.", out.pr_id);
+    }
+    let theme = Theme::current();
+    let mut s = format!("Comments on PR #{}\n", out.pr_id);
+    s.push_str(&format!("{}\n", theme.separator()));
+    for comment in &out.comments {
+        let author = comment.author.as_deref().unwrap_or("-");
+        let deleted = if comment.deleted { " deleted" } else { "" };
+        s.push_str(&format!(
+            "#{} by {}{}\n",
+            comment.id,
+            theme.bold(author),
+            deleted
+        ));
+        if let Some(parent_id) = comment.parent_id {
+            s.push_str(&format!("  reply to #{parent_id}\n"));
+        }
+        for line in comment.body.lines().take(12) {
+            s.push_str(&format!("  {line}\n"));
+        }
+        if comment.body.lines().count() > 12 {
+            s.push_str("  ...\n");
+        }
+        s.push('\n');
+    }
+    s
+}
+
+fn render_tasks(out: &PrTasksOut) -> String {
+    if out.tasks.is_empty() {
+        return format!("No tasks on PR #{}.", out.pr_id);
+    }
+    let theme = Theme::current();
+    let mut table = Table::new().headers(["ID", "State", "Task", "Assignee"]);
+    for task in &out.tasks {
+        let state = if task.state.eq_ignore_ascii_case("RESOLVED") {
+            theme.success(&task.state)
+        } else {
+            theme.warn(&task.state)
+        };
+        table = table.add_row([
+            task.id.to_string(),
+            state.into_owned(),
+            truncate(&task.body, 80),
+            task.assignee.clone().unwrap_or_else(|| "-".into()),
+        ]);
+    }
+    table.render()
+}
+
+fn render_commits(out: &PrCommitsOut) -> String {
+    if out.commits.is_empty() {
+        return format!("No commits on PR #{}.", out.pr_id);
+    }
+    let theme = Theme::current();
+    let mut s = String::new();
+    for commit in &out.commits {
+        s.push_str(&format!(
+            "  {}  {}  {}\n",
+            truncate(&commit.hash, 10),
+            theme.dim(commit.date.as_deref().unwrap_or("-")),
+            commit.message,
+        ));
+    }
+    s
+}
+
+fn render_statuses(out: &PrStatusesOut) -> String {
+    if out.statuses.is_empty() {
+        return format!("No commit statuses on PR #{}.", out.pr_id);
+    }
+    let theme = Theme::current();
+    let mut table = Table::new().headers(["State", "Key", "Name", "URL"]);
+    for status in &out.statuses {
+        table = table.add_row([
+            theme.status_glyph(&status.state),
+            status.key.clone(),
+            if status.name.is_empty() {
+                "-".into()
+            } else {
+                status.name.clone()
+            },
+            if status.url.is_empty() {
+                "-".into()
+            } else {
+                status.url.clone()
+            },
+        ]);
+    }
+    table.render()
+}
+
+fn render_conflicts(out: &PrConflictsOut) -> String {
+    if out.conflicts.is_empty() {
+        return format!("No conflicts on PR #{}.", out.pr_id);
+    }
+    let mut table = Table::new().headers(["Path", "Type", "Kind"]);
+    for conflict in &out.conflicts {
+        table = table.add_row([
+            conflict.path.clone(),
+            conflict.conflict_type.clone().unwrap_or_else(|| "-".into()),
+            conflict.kind.clone().unwrap_or_else(|| "-".into()),
         ]);
     }
     table.render()

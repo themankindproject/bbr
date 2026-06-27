@@ -179,6 +179,62 @@ pub struct Markdown {
     pub markup: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CommentParentRef {
+    #[serde(default)]
+    pub id: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PullRequestComment {
+    #[serde(default)]
+    pub id: u64,
+    #[serde(default)]
+    pub content: Option<Markdown>,
+    #[serde(default)]
+    pub user: Option<User>,
+    #[serde(default)]
+    pub parent: Option<CommentParentRef>,
+    #[serde(default)]
+    pub deleted: bool,
+    #[serde(default)]
+    pub created_on: Option<String>,
+    #[serde(default)]
+    pub updated_on: Option<String>,
+    #[serde(default)]
+    pub links: Links,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PullRequestTask {
+    #[serde(default)]
+    pub id: u64,
+    #[serde(default)]
+    pub content: Option<Markdown>,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub creator: Option<User>,
+    #[serde(default)]
+    pub assignee: Option<User>,
+    #[serde(default)]
+    pub created_on: Option<String>,
+    #[serde(default)]
+    pub updated_on: Option<String>,
+    #[serde(default)]
+    pub links: Links,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PullRequestConflict {
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub conflict_type: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+}
+
 /// Body for `POST /repositories/{ws}/{slug}/pullrequests`.
 #[derive(Debug, Serialize)]
 pub struct CreatePrRequest {
@@ -396,6 +452,123 @@ impl BitbucketClient {
         let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}/diff");
         self.send_raw(reqwest::Method::GET, &path, "text/plain")
             .await
+    }
+
+    /// `GET /repositories/{ws}/{slug}/pullrequests/{id}/comments`
+    pub async fn pr_comments(
+        &self,
+        workspace: &str,
+        slug: &str,
+        id: u64,
+        limit: u32,
+    ) -> Result<Vec<PullRequestComment>> {
+        let pagelen = limit.min(100);
+        let path = format!(
+            "/repositories/{workspace}/{slug}/pullrequests/{id}/comments?pagelen={pagelen}"
+        );
+        if limit > 100 {
+            self.fetch_all_pages(&path, limit as usize).await
+        } else {
+            let page: super::Paginated<PullRequestComment> =
+                self.send(reqwest::Method::GET, &path, None).await?;
+            Ok(page.values)
+        }
+    }
+
+    /// `GET /repositories/{ws}/{slug}/pullrequests/{id}/tasks`
+    pub async fn pr_tasks(
+        &self,
+        workspace: &str,
+        slug: &str,
+        id: u64,
+        limit: u32,
+    ) -> Result<Vec<PullRequestTask>> {
+        let pagelen = limit.min(100);
+        let path =
+            format!("/repositories/{workspace}/{slug}/pullrequests/{id}/tasks?pagelen={pagelen}");
+        if limit > 100 {
+            self.fetch_all_pages(&path, limit as usize).await
+        } else {
+            let page: super::Paginated<PullRequestTask> =
+                self.send(reqwest::Method::GET, &path, None).await?;
+            Ok(page.values)
+        }
+    }
+
+    /// `GET /repositories/{ws}/{slug}/pullrequests/{id}/commits`
+    pub async fn pr_commits(
+        &self,
+        workspace: &str,
+        slug: &str,
+        id: u64,
+        limit: u32,
+    ) -> Result<Vec<super::repo::Commit>> {
+        let pagelen = limit.min(100);
+        let path =
+            format!("/repositories/{workspace}/{slug}/pullrequests/{id}/commits?pagelen={pagelen}");
+        if limit > 100 {
+            self.fetch_all_pages(&path, limit as usize).await
+        } else {
+            let page: super::Paginated<super::repo::Commit> =
+                self.send(reqwest::Method::GET, &path, None).await?;
+            Ok(page.values)
+        }
+    }
+
+    /// `GET /repositories/{ws}/{slug}/pullrequests/{id}/statuses`
+    pub async fn pr_statuses(
+        &self,
+        workspace: &str,
+        slug: &str,
+        id: u64,
+        limit: u32,
+    ) -> Result<Vec<super::status::BuildStatus>> {
+        let pagelen = limit.min(100);
+        let path = format!(
+            "/repositories/{workspace}/{slug}/pullrequests/{id}/statuses?pagelen={pagelen}"
+        );
+        if limit > 100 {
+            self.fetch_all_pages(&path, limit as usize).await
+        } else {
+            let page: super::Paginated<super::status::BuildStatus> =
+                self.send(reqwest::Method::GET, &path, None).await?;
+            Ok(page.values)
+        }
+    }
+
+    /// `GET /repositories/{ws}/{slug}/pullrequests/{id}/conflicts`
+    pub async fn pr_conflicts(
+        &self,
+        workspace: &str,
+        slug: &str,
+        id: u64,
+        limit: u32,
+    ) -> Result<Vec<PullRequestConflict>> {
+        let pagelen = limit.min(100);
+        let path = format!(
+            "/repositories/{workspace}/{slug}/pullrequests/{id}/conflicts?pagelen={pagelen}"
+        );
+        if limit > 100 {
+            self.fetch_all_pages(&path, limit as usize).await
+        } else {
+            let page: super::Paginated<PullRequestConflict> =
+                self.send(reqwest::Method::GET, &path, None).await?;
+            Ok(page.values)
+        }
+    }
+
+    /// `POST /repositories/{ws}/{slug}/pullrequests/{id}/request-changes`
+    pub async fn request_pr_changes(&self, workspace: &str, slug: &str, id: u64) -> Result<()> {
+        let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}/request-changes");
+        let _: serde_json::Value = self.send(reqwest::Method::POST, &path, Some("{}")).await?;
+        Ok(())
+    }
+
+    /// `DELETE /repositories/{ws}/{slug}/pullrequests/{id}/request-changes`
+    pub async fn unrequest_pr_changes(&self, workspace: &str, slug: &str, id: u64) -> Result<()> {
+        let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}/request-changes");
+        let _: serde_json::Value = self.send(reqwest::Method::DELETE, &path, None).await?;
+        Ok(())
     }
 }
 

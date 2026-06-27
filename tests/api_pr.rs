@@ -91,3 +91,109 @@ async fn not_found_maps_correctly() {
         .expect_err("should be 404");
     assert_eq!(err.exit_code(), bbr::error::ExitCode::NotFound);
 }
+
+#[tokio::test]
+async fn lists_pr_review_resources() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/sdadev/bvrm/pullrequests/467/comments"))
+        .and(header("authorization", "Bearer tok"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "values": [{
+                "id": 10,
+                "content": { "raw": "Looks good" },
+                "user": { "display_name": "Ash" },
+                "created_on": "2026-01-01T00:00:00Z"
+            }]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/sdadev/bvrm/pullrequests/467/tasks"))
+        .and(header("authorization", "Bearer tok"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "values": [{
+                "id": 20,
+                "state": "UNRESOLVED",
+                "content": { "raw": "Update docs" },
+                "assignee": { "display_name": "Sam" }
+            }]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/sdadev/bvrm/pullrequests/467/commits"))
+        .and(header("authorization", "Bearer tok"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "values": [{
+                "hash": "abc123",
+                "message": "Fix bug\n\nBody",
+                "author": { "raw": "Dev <dev@example.com>" }
+            }]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/sdadev/bvrm/pullrequests/467/statuses"))
+        .and(header("authorization", "Bearer tok"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "values": [{
+                "state": "SUCCESSFUL",
+                "key": "lint",
+                "name": "Lint",
+                "url": "https://ci.example/lint"
+            }]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/sdadev/bvrm/pullrequests/467/conflicts"))
+        .and(header("authorization", "Bearer tok"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "values": [{
+                "path": "src/lib.rs",
+                "conflict_type": "content"
+            }]
+        })))
+        .mount(&server)
+        .await;
+
+    let c = client(&server.uri()).await;
+    let comments = c.pr_comments("sdadev", "bvrm", 467, 50).await.unwrap();
+    assert_eq!(comments[0].content.as_ref().unwrap().raw, "Looks good");
+    let tasks = c.pr_tasks("sdadev", "bvrm", 467, 50).await.unwrap();
+    assert_eq!(tasks[0].state, "UNRESOLVED");
+    let commits = c.pr_commits("sdadev", "bvrm", 467, 50).await.unwrap();
+    assert_eq!(commits[0].hash, "abc123");
+    let statuses = c.pr_statuses("sdadev", "bvrm", 467, 50).await.unwrap();
+    assert_eq!(statuses[0].key, "lint");
+    let conflicts = c.pr_conflicts("sdadev", "bvrm", 467, 50).await.unwrap();
+    assert_eq!(conflicts[0].path, "src/lib.rs");
+}
+
+#[tokio::test]
+async fn toggles_pr_change_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(
+            "/repositories/sdadev/bvrm/pullrequests/467/request-changes",
+        ))
+        .and(header("authorization", "Bearer tok"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path(
+            "/repositories/sdadev/bvrm/pullrequests/467/request-changes",
+        ))
+        .and(header("authorization", "Bearer tok"))
+        .respond_with(ResponseTemplate::new(204).set_body_string(""))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let c = client(&server.uri()).await;
+    c.request_pr_changes("sdadev", "bvrm", 467).await.unwrap();
+    c.unrequest_pr_changes("sdadev", "bvrm", 467).await.unwrap();
+}
