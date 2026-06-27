@@ -88,6 +88,15 @@ pub fn parse_remote_url(url: &str) -> Option<RepoIdentity> {
 /// Detect the Bitbucket repo identity from the `origin` remote (falling back
 /// to any remote whose URL points at `bitbucket.org`).
 pub fn detect_repo() -> Result<RepoIdentity> {
+    // Prefer `origin` explicitly before scanning all remotes.
+    if let Ok(url) = git(&["remote", "get-url", "origin"]) {
+        if url.contains("bitbucket.org") {
+            if let Some(id) = parse_remote_url(&url) {
+                return Ok(id);
+            }
+        }
+    }
+    // Fall back to the first remote that resolves to bitbucket.org.
     let remotes = git(&["remote", "-v"])?;
     for line in remotes.lines() {
         // lines look like: "origin\tgit@bitbucket.org:ws/slug.git (fetch)"
