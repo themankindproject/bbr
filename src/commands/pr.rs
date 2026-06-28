@@ -212,7 +212,7 @@ pub async fn view(g: &GlobalArgs, id: Option<u64>, show_diff: bool) -> Result<()
         None => {
             let head = current_head()?;
             client
-                .pr_for_branch(&repo.workspace, &repo.slug, &head.branch)
+                .pr_for_branch_light(&repo.workspace, &repo.slug, &head.branch)
                 .await?
                 .ok_or_else(|| {
                     BitbucketError::NotFound(format!("no open PR for branch '{}'", head.branch))
@@ -598,17 +598,26 @@ pub async fn update(
     let repo = current_repo()?;
     let client = client(g)?;
 
-    let spinner = make_spinner(g.json);
-    spinner.set_message("Fetching PR details...");
-    let pr = client.get_pr(&repo.workspace, &repo.slug, id).await?;
-    spinner.finish_and_clear();
+    let req = match (new_title, new_description) {
+        (Some(t), Some(d)) => UpdatePrRequest {
+            title: t.to_string(),
+            description: Some(d.to_string()),
+            close_source_branch: None,
+        },
+        (title, desc) => {
+            let spinner = make_spinner(g.json);
+            spinner.set_message("Fetching PR details...");
+            let pr = client.get_pr(&repo.workspace, &repo.slug, id).await?;
+            spinner.finish_and_clear();
 
-    let req = UpdatePrRequest {
-        title: new_title.unwrap_or(&pr.title).to_string(),
-        description: new_description
-            .map(|d| d.to_string())
-            .or_else(|| pr.description.clone()),
-        close_source_branch: None,
+            UpdatePrRequest {
+                title: title.unwrap_or(&pr.title).to_string(),
+                description: desc
+                    .map(|d| d.to_string())
+                    .or_else(|| pr.description.clone()),
+                close_source_branch: None,
+            }
+        }
     };
 
     let spinner = make_spinner(g.json);
@@ -664,7 +673,7 @@ async fn resolve_pr_id(
     }
     let head = current_head()?;
     client
-        .pr_for_branch(workspace, slug, &head.branch)
+        .pr_for_branch_light(workspace, slug, &head.branch)
         .await?
         .map(|pr| pr.id)
         .ok_or_else(|| BitbucketError::NotFound(format!("no open PR for branch '{}'", head.branch)))
@@ -847,16 +856,18 @@ fn render_commits(out: &PrCommitsOut) -> String {
         return format!("No commits on PR #{}.", out.pr_id);
     }
     let theme = Theme::current();
-    let mut s = String::new();
+    let mut table = Table::new().headers(["Hash", "Author", "Date", "Message"]);
     for commit in &out.commits {
-        s.push_str(&format!(
-            "  {}  {}  {}\n",
+        table = table.add_row([
             truncate(&commit.hash, 10),
-            theme.dim(commit.date.as_deref().unwrap_or("-")),
-            commit.message,
-        ));
+            commit.author.clone().unwrap_or_else(|| "-".into()),
+            theme
+                .dim(commit.date.as_deref().unwrap_or("-"))
+                .into_owned(),
+            truncate(&commit.message, 60),
+        ]);
     }
-    s
+    table.render()
 }
 
 fn render_statuses(out: &PrStatusesOut) -> String {

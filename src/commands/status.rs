@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 
-use crate::api::pipeline::{Pipeline, PipelineStep};
+use crate::api::pipeline::{Pipeline, PipelineStep, StepSummary};
 use crate::api::pr::{Participant, PrState, PullRequest};
 use crate::cli::GlobalArgs;
 use crate::commands::{client, current_head, current_repo, human_duration, truncate};
@@ -69,14 +69,6 @@ pub struct PipelineSummary {
     pub url: Option<String>,
     pub failing_steps: Vec<String>,
     pub steps: Vec<StepSummary>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct StepSummary {
-    pub uuid: String,
-    pub name: String,
-    pub state: String,
-    pub duration_seconds: u64,
 }
 
 #[derive(Debug, Serialize)]

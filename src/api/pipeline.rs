@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::BitbucketClient;
 use crate::error::Result;
@@ -155,6 +155,15 @@ pub struct Command {
 
 pub struct StepLog {
     pub text: String,
+}
+
+/// Shared step summary used by both `status` and `ci` commands.
+#[derive(Debug, Clone, Serialize)]
+pub struct StepSummary {
+    pub uuid: String,
+    pub name: String,
+    pub state: String,
+    pub duration_seconds: u64,
 }
 
 /// Strip braces for comparison (use in `select_step`).

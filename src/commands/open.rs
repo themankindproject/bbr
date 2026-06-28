@@ -67,7 +67,7 @@ async fn pr_url(g: &GlobalArgs, id: Option<u64>) -> Result<(String, String)> {
         None => {
             let head = current_head()?;
             client
-                .pr_for_branch(&repo.workspace, &repo.slug, &head.branch)
+                .pr_for_branch_light(&repo.workspace, &repo.slug, &head.branch)
                 .await?
                 .ok_or_else(|| {
                     BitbucketError::NotFound(format!("no open PR for branch '{}'", head.branch))

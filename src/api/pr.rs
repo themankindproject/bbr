@@ -354,6 +354,29 @@ impl BitbucketClient {
     }
 
     /// Look up the open PR whose source branch is `branch`, if any.
+    /// Like `pr_for_branch` but omits `participants`/`reviewers` fields —
+    /// lighter and faster when you only need the PR identity.
+    pub async fn pr_for_branch_light(
+        &self,
+        workspace: &str,
+        slug: &str,
+        branch: &str,
+    ) -> Result<Option<PullRequest>> {
+        let path = format!(
+            "/repositories/{workspace}/{slug}/pullrequests?\
+             fields=values.id,values.state,values.title,\
+             values.source.branch.name,values.destination.branch.name,\
+             values.author.display_name,values.links.html.href,\
+             values.comment_count,values.task_count,values.close_source_branch,\
+             values.updated_on&\
+             pagelen=1&sort=-updated_on&q=source.branch.name%3D%22{}%22+AND+state%3D%22OPEN%22",
+            url_encode(branch),
+        );
+        let page: super::Paginated<PullRequest> =
+            self.send(reqwest::Method::GET, &path, None).await?;
+        Ok(page.values.into_iter().next())
+    }
+
     pub async fn pr_for_branch(
         &self,
         workspace: &str,

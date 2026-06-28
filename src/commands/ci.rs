@@ -5,7 +5,7 @@ use std::time::Duration;
 use serde::Serialize;
 use tokio::time;
 
-use crate::api::pipeline::{ensure_uuid_braces, normalize_uuid, PipelineStep};
+use crate::api::pipeline::{ensure_uuid_braces, normalize_uuid, PipelineStep, StepSummary};
 use crate::api::BitbucketClient;
 use crate::cli::GlobalArgs;
 use crate::commands::{client, confirm, current_head, current_repo, human_duration, make_spinner};
@@ -33,15 +33,7 @@ pub struct PipelineOut {
     pub duration_seconds: u64,
     pub branch: Option<String>,
     pub commit: Option<String>,
-    pub steps: Vec<StepOut>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct StepOut {
-    pub uuid: String,
-    pub name: String,
-    pub state: String,
-    pub duration_seconds: u64,
+    pub steps: Vec<StepSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -51,7 +43,7 @@ pub struct CiWatchOut {
     pub duration_seconds: u64,
     pub success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub failing_step: Option<StepOut>,
+    pub failing_step: Option<StepSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure_log: Option<String>,
 }
@@ -142,7 +134,7 @@ pub async fn list(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> Result<()
         }
     }
     let out = CiListOut {
-        branch: branch.clone(),
+        branch,
         pipelines: pips,
     };
     fmt.print(&out, &human)
@@ -368,7 +360,7 @@ pub async fn steps(g: &GlobalArgs, uuid: Option<&str>) -> Result<()> {
     #[derive(Debug, Serialize)]
     pub struct CiStepsOut {
         pub uuid: String,
-        pub steps: Vec<StepOut>,
+        pub steps: Vec<StepSummary>,
     }
 
     let out = CiStepsOut {
@@ -536,8 +528,8 @@ fn select_step<'a>(
         .ok_or_else(|| BitbucketError::NotFound("no steps for pipeline".into()))
 }
 
-fn step_out(s: &PipelineStep) -> StepOut {
-    StepOut {
+fn step_out(s: &PipelineStep) -> StepSummary {
+    StepSummary {
         uuid: s.uuid.clone(),
         name: s.name.clone(),
         state: s.state_name().to_string(),
@@ -546,9 +538,9 @@ fn step_out(s: &PipelineStep) -> StepOut {
 }
 
 fn last_lines(s: &str, n: usize) -> String {
-    let lines = s.lines().collect::<Vec<_>>();
-    let start = lines.len().saturating_sub(n);
-    lines[start..].join("\n")
+    let mut result: Vec<&str> = s.lines().rev().take(n).collect();
+    result.reverse();
+    result.join("\n")
 }
 
 fn render_status(out: &CiStatusOut) -> String {
