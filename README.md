@@ -86,7 +86,7 @@ bbr completion bash|zsh|fish
 
 Sources checked in order: `BITBUCKET_USERNAME` + `BITBUCKET_TOKEN` env vars → `bbr auth setup` config file (`~/.config/bb/credentials.toml`, mode 0600).
 
-Requires an [Atlassian PAT](https://id.atlassian.com/manage-profile/security/api-tokens) with scopes: `account:read`, `repository:read`, `repository:write`, `pullrequest:read`, `pullrequest:write`, `pipeline:read`.
+Requires an [Atlassian API token](https://id.atlassian.com/manage-profile/security/api-tokens) with scopes: `account:read`, `repository:read`, `repository:write`, `pullrequest:read`, `pullrequest:write`, `pipeline:read`.
 
 ## Development
 

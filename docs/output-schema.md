@@ -232,14 +232,14 @@ On failure, `success` is `false` and the process exits with code `5`.
 {
   "authenticated": true,
   "username": "you@example.com",
-  "credential_kind": "pat",
+  "credential_kind": "atlassian_api_token",
   "display_name": "Your Name",
   "account_id": "{...}",
   "source": "environment"
 }
 ```
 
-`credential_kind` is `"pat"`, `"app_password"`, or `null` when not authenticated.
+`credential_kind` is `"atlassian_api_token"` or `null` when not authenticated.
 `source` is `"environment"`, `"config-file"`, or `"none"`.
 
 ## `bb repo info --json`

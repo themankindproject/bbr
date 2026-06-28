@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-06-28
-
 ### Added
 
 #### Pull Requests
@@ -39,12 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `bb repo commits [--branch] [--limit]` — recent commits.
 
 #### Auth
-- `bb auth setup` — interactive prompts (username, credential type, secret), writes `0600` credentials.toml.
+- `bb auth setup` — interactive prompts (username, API token), writes `0600` credentials.toml.
 - `bb auth test` — validates credentials via `GET /user`.
 - `bb auth status` — shows auth source (env/config/none), display name, account ID.
 - `bb auth logout` — removes stored credentials.
-- Credential resolution chain: env vars (`BITBUCKET_USERNAME` + `BITBUCKET_TOKEN`/`BITBUCKET_APP_PASSWORD`) → config file → (keyring reserved).
-- PAT (`CredentialKind::Pat`), AppPassword, and Atlassian API Token (`ATATT`-prefix auto-detection) support.
+- Credential resolution chain: env vars (`BITBUCKET_USERNAME` + `BITBUCKET_TOKEN`) → config file.
+- Only `ApiToken` with HTTP Basic auth — Bitbucket Cloud API does not accept PAT/Bearer or AppPassword.
 - Credential file written with Unix `0o600` mode, atomic write.
 
 #### Status / Overview
@@ -109,6 +107,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `stdout_is_tty()` (dead code) removed.
 - `PullRequest`, `BranchRef`, `Participant` now derive `Default` for test ergonomics.
 - `PullRequest.state` is now `#[serde(default)]` for resilience.
+- **Credential system simplified**: removed `Pat` (Bearer) and `AppPassword` credential kinds.
+  Only `ApiToken` with HTTP Basic auth remains — the only method Bitbucket Cloud accepts.
+- `CredentialProfile` only stores `username` + `token` + `workspace`; `app_password` field removed.
+- `bb auth setup` no longer asks for credential type — only username + API token.
+- `bb auth status`/`bb auth test` report `"atlassian_api_token"` as credential kind.
+- Documentation updated: PAT/Bearer/PAT-scopes → Atlassian API token, `BITBUCKET_APP_PASSWORD` removed.
 
 ### Fixed
 - `bb auth setup` silently discarded Atlassian API token secrets — stored in neither `token` nor `app_password` field.
@@ -119,10 +123,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `detect_repo` now explicitly queries `origin` first before scanning all remotes.
 - Pipeline/step UUID braces kept in API URLs — Bitbucket requires `%7B`/`%7D` encoding.
 - `bb ci logs` 400 error — `Accept: text/plain` → `Accept: */*`.
+- CLI smoke test no longer cleans up `BITBUCKET_APP_PASSWORD` env var.
 
 ### Security
 - Credentials file opened with mode `0o600` at creation time on Unix, closing TOCTOU window.
 - No system keyring dependency (avoids 671 MB texlive pull).
 
-[Unreleased]: https://github.com/themankindproject/bbr/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/themankindproject/bbr/releases/tag/v0.1.0
+[Unreleased]: https://github.com/themankindproject/bbr/compare/HEAD...HEAD
