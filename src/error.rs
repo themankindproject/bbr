@@ -27,7 +27,7 @@ impl ExitCode {
 /// All errors emitted by `bb` collapse into [`BitbucketError`].
 #[derive(Debug, Error)]
 pub enum BitbucketError {
-    #[error("no Bitbucket credentials found; run `bb auth setup` or set BITBUCKET_USERNAME + BITBUCKET_TOKEN")]
+    #[error("no Bitbucket credentials found; run `bbr auth setup` or set BITBUCKET_USERNAME + BITBUCKET_TOKEN")]
     NoCredentials,
 
     #[error("authentication failed: {0}")]
@@ -81,7 +81,7 @@ pub type Result<T, E = BitbucketError> = std::result::Result<T, E>;
 pub fn report(e: &BitbucketError) -> std::process::ExitCode {
     eprintln!("bb: {e}");
     if matches!(e, BitbucketError::NoCredentials) {
-        eprintln!("hint: run `bb auth setup`, or set BITBUCKET_USERNAME + BITBUCKET_TOKEN");
+        eprintln!("hint: run `bbr auth setup`, or set BITBUCKET_USERNAME + BITBUCKET_TOKEN");
     }
     e.exit_code().as_process()
 }

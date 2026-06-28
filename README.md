@@ -16,59 +16,59 @@ cargo install --locked --git https://github.com/themankindproject/bbr
 export BITBUCKET_USERNAME="you@example.com"
 export BITBUCKET_TOKEN="<pat-from-id.atlassian.com>"
 
-bb status              # PR + CI for current branch
-bb pr list             # open PRs
-bb pr create --title T --body B
-bb ci list             # pipelines for this branch
-bb open pr             # open current PR in browser
+bbr status              # PR + CI for current branch
+bbr pr list             # open PRs
+bbr pr create --title T --body B
+bbr ci list             # pipelines for this branch
+bbr open pr             # open current PR in browser
 ```
 
 ## Commands
 
 ### PR
 ```bash
-bb pr list [--state open|merged|declined|all]
-bb pr view [<id>] [--diff] [--comments]
-bb pr create --title T --body B [--src S --dst D]
-bb pr update <id> --title T --description D
-bb pr comment <id> --body B [--reply-to <id>]
-bb pr approve|unapprove|decline|merge <id>
-bb pr comments|tasks|commits|statuses|conflicts [<id>]
-bb pr request-changes|unrequest-changes <id>
+bbr pr list [--state open|merged|declined|all]
+bbr pr view [<id>] [--diff] [--comments]
+bbr pr create --title T --body B [--src S --dst D]
+bbr pr update <id> --title T --description D
+bbr pr comment <id> --body B [--reply-to <id>]
+bbr pr approve|unapprove|decline|merge <id>
+bbr pr comments|tasks|commits|statuses|conflicts [<id>]
+bbr pr request-changes|unrequest-changes <id>
 ```
 
 ### CI
 ```bash
-bb ci status [--branch B]
-bb ci list [--branch B]
-bb ci steps [<uuid>]
-bb ci watch [--branch B] [--logs]
-bb ci logs [<uuid>] [--failed] [--step <name>] [--output <file>]
+bbr ci status [--branch B]
+bbr ci list [--branch B]
+bbr ci steps [<uuid>]
+bbr ci watch [--branch B] [--logs]
+bbr ci logs [<uuid>] [--failed] [--step <name>] [--output <file>]
 ```
 
 ### Repo
 ```bash
-bb repo info
-bb repo branches
-bb repo tags
-bb repo commits [--branch B] [--limit N]
+bbr repo info
+bbr repo branches
+bbr repo tags
+bbr repo commits [--branch B] [--limit N]
 ```
 
 ### Auth
 ```bash
-bb auth setup
-bb auth test
-bb auth status
-bb auth logout
+bbr auth setup
+bbr auth test
+bbr auth status
+bbr auth logout
 ```
 
 ### Other
 ```bash
-bb open [repo|pr|ci|pipelines]
-bb status --watch [--interval N]   # live refresh
-bb status --short                  # compact single-line
-bb commit status set --key K --state successful --url U
-bb completion bash|zsh|fish
+bbr open [repo|pr|ci|pipelines]
+bbr status --watch [--interval N]   # live refresh
+bbr status --short                  # compact single-line
+bbr commit status set --key K --state successful --url U
+bbr completion bash|zsh|fish
 ```
 
 ## Exit Codes
@@ -84,7 +84,7 @@ bb completion bash|zsh|fish
 
 ## Authentication
 
-Sources checked in order: `BITBUCKET_USERNAME` + `BITBUCKET_TOKEN` env vars → `bb auth setup` config file (`~/.config/bb/credentials.toml`, mode 0600).
+Sources checked in order: `BITBUCKET_USERNAME` + `BITBUCKET_TOKEN` env vars → `bbr auth setup` config file (`~/.config/bb/credentials.toml`, mode 0600).
 
 Requires an [Atlassian PAT](https://id.atlassian.com/manage-profile/security/api-tokens) with scopes: `account:read`, `repository:read`, `repository:write`, `pullrequest:read`, `pullrequest:write`, `pipeline:read`.
 

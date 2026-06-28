@@ -20,7 +20,7 @@ exclude = [
 ]
 
 [[bin]]
-name = "bb"
+name = "bbr"
 path = "src/main.rs"
 
 [dependencies]

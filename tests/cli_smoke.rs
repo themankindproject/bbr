@@ -8,7 +8,7 @@ use predicates::prelude::*;
 
 #[test]
 fn help_lists_subcommands() {
-    Command::cargo_bin("bb")
+    Command::cargo_bin("bbr")
         .unwrap()
         .arg("--help")
         .assert()
@@ -20,27 +20,27 @@ fn help_lists_subcommands() {
 
 #[test]
 fn version_is_printed() {
-    Command::cargo_bin("bb")
+    Command::cargo_bin("bbr")
         .unwrap()
         .arg("--version")
         .assert()
         .success()
-        .stdout(predicate::str::contains("bb "));
+        .stdout(predicate::str::contains("bbr "));
 }
 
 #[test]
 fn emits_bash_completion() {
-    Command::cargo_bin("bb")
+    Command::cargo_bin("bbr")
         .unwrap()
         .args(["completion", "bash"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("_bb()").or(predicate::str::contains("bb")));
+        .stdout(predicate::str::contains("_bbr()").or(predicate::str::contains("bbr")));
 }
 
 #[test]
 fn pr_help_lists_review_commands() {
-    Command::cargo_bin("bb")
+    Command::cargo_bin("bbr")
         .unwrap()
         .args(["pr", "--help"])
         .assert()
@@ -53,7 +53,7 @@ fn pr_help_lists_review_commands() {
 
 #[test]
 fn commit_status_help_lists_set() {
-    Command::cargo_bin("bb")
+    Command::cargo_bin("bbr")
         .unwrap()
         .args(["commit", "status", "--help"])
         .assert()
@@ -63,7 +63,7 @@ fn commit_status_help_lists_set() {
 
 #[test]
 fn repo_help_lists_tags() {
-    Command::cargo_bin("bb")
+    Command::cargo_bin("bbr")
         .unwrap()
         .args(["repo", "--help"])
         .assert()
@@ -78,7 +78,7 @@ fn missing_creds_exits_with_auth_code() {
     std::env::remove_var("BITBUCKET_TOKEN");
     std::env::remove_var("BITBUCKET_APP_PASSWORD");
 
-    let cmd = Command::cargo_bin("bb")
+    let cmd = Command::cargo_bin("bbr")
         .unwrap()
         .env(
             "XDG_CONFIG_HOME",

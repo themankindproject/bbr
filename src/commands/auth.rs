@@ -65,7 +65,7 @@ pub fn setup() -> Result<()> {
     };
     let path = config::save_credentials(&creds)?;
     println!("  Stored credentials in: {}", path.display());
-    println!("  Run `bb auth status` to verify.");
+    println!("  Run `bbr auth status` to verify.");
     Ok(())
 }
 
@@ -127,7 +127,7 @@ pub async fn status(g: &GlobalArgs) -> Result<()> {
         } else {
             msg.push_str("Not authenticated.");
         }
-        msg.push_str("\nRun `bb auth setup`.");
+        msg.push_str("\nRun `bbr auth setup`.");
         msg
     };
     fmt.print(&out, &human)

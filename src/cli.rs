@@ -31,7 +31,7 @@ pub struct GlobalArgs {
 /// `bb` — a Bitbucket Cloud CLI.
 #[derive(Debug, Parser)]
 #[command(
-    name = "bb",
+    name = "bbr",
     version,
     about = "BitBucket Remote — a Bitbucket Cloud CLI for coding agents and humans",
     long_about = None,
@@ -694,7 +694,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
             AuthAction::Test { g } => commands::auth::test(&g).await,
         },
         Some(Command::Completion { shell }) => {
-            generate(shell, &mut Cli::command(), "bb", &mut io::stdout());
+            generate(shell, &mut Cli::command(), "bbr", &mut io::stdout());
             Ok(())
         }
     }

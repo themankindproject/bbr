@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{BitbucketError, Result};
 
 /// Application / config directory name.
-pub const APP_NAME: &str = "bb";
+pub const APP_NAME: &str = "bbr";
 
 /// Filename for stored credentials.
 pub const CREDENTIALS_FILE: &str = "credentials.toml";
