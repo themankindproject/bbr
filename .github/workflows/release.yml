@@ -40,7 +40,7 @@ jobs:
         if: matrix.archive == 'tar.gz'
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/bb dist/
+          cp target/${{ matrix.target }}/release/bbr dist/
           cp README.md LICENSE dist/
           tar -czf bbr-${{ matrix.target }}.tar.gz -C dist .
       - name: Package (windows)
@@ -48,7 +48,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target/${{ matrix.target }}/release/bb.exe dist/
+          Copy-Item target/${{ matrix.target }}/release/bbr.exe dist/
           Copy-Item README.md LICENSE dist/
           Compress-Archive dist/* bbr-${{ matrix.target }}.zip
 
