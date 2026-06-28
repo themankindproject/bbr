@@ -18,9 +18,11 @@ pub const CONFIG_FILE: &str = "config.toml";
 
 /// Returns the platform-appropriate config directory for `bb`.
 ///
-/// Order: `$XDG_CONFIG_HOME/bb` -> `$HOME/.config/bb` (Linux),
-/// `~/Library/Application Support/bb` (macOS), `%APPDATA%\bb` (Windows).
+/// - Linux: `$XDG_CONFIG_HOME/bbr` or `$HOME/.config/bbr`
+/// - macOS: `~/Library/Application Support/bbr`
+/// - Windows: `%APPDATA%\bbr`
 pub fn config_dir() -> Option<PathBuf> {
+    #[cfg(unix)]
     if let Ok(xdg) = xdg::BaseDirectories::with_prefix(APP_NAME) {
         return Some(xdg.get_config_home());
     }
