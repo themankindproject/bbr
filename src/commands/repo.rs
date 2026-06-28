@@ -6,7 +6,6 @@ use crate::cli::GlobalArgs;
 use crate::commands::{client, current_repo, make_spinner, truncate};
 use crate::error::Result;
 use crate::output::table::Table;
-use crate::output::theme::Theme;
 use crate::output::Formatter;
 
 #[derive(Debug, Serialize)]
@@ -158,16 +157,15 @@ pub async fn list_commits(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> R
         .collect();
 
     let fmt = Formatter::from_json_flag(g.json);
-    let theme = Theme::current();
-    let mut human = format!("{}\n", theme.separator());
+    let mut table = Table::new().headers(["Hash", "Date", "Message"]);
     for c in &commits {
-        human.push_str(&format!(
-            "  {}  {}  {}\n",
+        table = table.add_row([
             truncate(&c.hash, 10),
-            theme.dim(c.date.as_deref().unwrap_or("-")),
-            c.message,
-        ));
+            c.date.as_deref().unwrap_or("-").to_string(),
+            c.message.clone(),
+        ]);
     }
+    let human = table.render();
     fmt.print(&commits, &human)
 }
 

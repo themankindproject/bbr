@@ -483,16 +483,11 @@ fn render_human(out: &StatusOut) -> String {
 
     if !out.commit_statuses.is_empty() {
         s.push_str(&format!("\n{} Build Statuses\n", theme.bullet()));
-        s.push_str(&format!("{}\n", theme.separator()));
+        let mut table = Table::new().headers(["State", "Key"]);
         for cs in &out.commit_statuses {
-            let (glyph, colored) = match cs.state.to_ascii_uppercase().as_str() {
-                "SUCCESSFUL" => ("[ok]", theme.success(&cs.state)),
-                "FAILED" => ("[X]", theme.error(&cs.state)),
-                "INPROGRESS" => ("[~]", theme.warn(&cs.state)),
-                _ => ("[?]", theme.dim(&cs.state)),
-            };
-            s.push_str(&format!("  {} {}  {}\n", glyph, colored, cs.key));
+            table = table.add_row([theme.status_glyph(&cs.state), cs.key.clone()]);
         }
+        s.push_str(&table.render());
     }
 
     if !out.suggested_commands.is_empty() {
@@ -664,16 +659,11 @@ fn render_overview_human(out: &OverviewOut) -> String {
 
     if !out.commit_statuses.is_empty() {
         s.push_str(&format!("\n{} Build Statuses\n", theme.bullet()));
-        s.push_str(&format!("{}\n", theme.separator()));
+        let mut table = Table::new().headers(["State", "Key"]);
         for cs in &out.commit_statuses {
-            let (glyph, colored) = match cs.state.to_ascii_uppercase().as_str() {
-                "SUCCESSFUL" => ("[ok]", theme.success(&cs.state)),
-                "FAILED" => ("[X]", theme.error(&cs.state)),
-                "INPROGRESS" => ("[~]", theme.warn(&cs.state)),
-                _ => ("[?]", theme.dim(&cs.state)),
-            };
-            s.push_str(&format!("  {} {}  {}\n", glyph, colored, cs.key));
+            table = table.add_row([theme.status_glyph(&cs.state), cs.key.clone()]);
         }
+        s.push_str(&table.render());
     }
 
     if !out.suggested_commands.is_empty() {

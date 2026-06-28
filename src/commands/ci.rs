@@ -372,23 +372,15 @@ pub async fn steps(g: &GlobalArgs, uuid: Option<&str>) -> Result<()> {
 
     let fmt = Formatter::from_json_flag(g.json);
     let theme = Theme::current();
-    let mut human = String::new();
+    let mut table = Table::new().headers(["Step", "State", "Duration"]);
     for (i, s) in raw.values.iter().enumerate() {
-        let mark = if s.is_failed() {
-            theme.error("[X]")
-        } else {
-            theme.success("[ok]")
-        };
-        human.push_str(&format!(
-            "  {} {:<2}  {:<20}  {}  ({})\n",
-            mark,
-            i + 1,
-            s.name,
-            s.state_name(),
+        table = table.add_row([
+            format!("{}. {}", i + 1, s.name),
+            theme.status_glyph(s.state_name()),
             human_duration(s.duration_in_seconds),
-        ));
+        ]);
     }
-    fmt.print(&out, &human)
+    fmt.print(&out, &table.render())
 }
 
 pub async fn stop(g: &GlobalArgs, uuid: Option<&str>, branch: Option<&str>) -> Result<()> {
