@@ -42,10 +42,10 @@ pub struct BitbucketClient {
 
 impl BitbucketClient {
     /// Construct a new client. Uses rustls and a 30s timeout.
+    /// Auth is always HTTP Basic for Atlassian API tokens.
     pub fn new(base_url: &str, creds: Credentials) -> Result<Self> {
         let auth_header = match creds.kind {
-            CredentialKind::Pat => format!("Bearer {}", creds.secret),
-            CredentialKind::AppPassword | CredentialKind::ApiToken => {
+            CredentialKind::ApiToken => {
                 let raw = format!("{}:{}", creds.username, creds.secret);
                 let encoded = base64_encode(raw.as_bytes());
                 format!("Basic {encoded}")
@@ -399,9 +399,9 @@ mod tests {
             creds: crate::auth::Credentials {
                 username: "u".into(),
                 secret: "s".into(),
-                kind: crate::auth::CredentialKind::Pat,
+                kind: crate::auth::CredentialKind::ApiToken,
             },
-            auth_header: "Bearer s".into(),
+            auth_header: "Basic dTpz".into(),
         };
         assert_eq!(
             client.url("/repositories/ws/slug"),

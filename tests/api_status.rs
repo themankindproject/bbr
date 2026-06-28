@@ -10,10 +10,12 @@ async fn client(base: &str) -> BitbucketClient {
     let creds = Credentials {
         username: "u@example.com".into(),
         secret: "tok".into(),
-        kind: CredentialKind::Pat,
+        kind: CredentialKind::ApiToken,
     };
     BitbucketClient::new(base, creds).unwrap()
 }
+
+const AUTH_BASIC: &str = "Basic dUBleGFtcGxlLmNvbTp0b2s=";
 
 #[tokio::test]
 async fn creates_commit_build_status() {
@@ -22,7 +24,7 @@ async fn creates_commit_build_status() {
         .and(path(
             "/repositories/sdadev/bvrm/commit/abc123/statuses/build",
         ))
-        .and(header("authorization", "Bearer tok"))
+        .and(header("authorization", AUTH_BASIC))
         .and(body_json(json!({
             "key": "lint",
             "state": "SUCCESSFUL",

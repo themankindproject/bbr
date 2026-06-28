@@ -9,7 +9,7 @@ async fn client(base: &str) -> BitbucketClient {
     let creds = Credentials {
         username: "u@example.com".into(),
         secret: "tok".into(),
-        kind: CredentialKind::Pat,
+        kind: CredentialKind::ApiToken,
     };
     BitbucketClient::new(base, creds).unwrap()
 }

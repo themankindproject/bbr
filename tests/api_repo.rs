@@ -5,11 +5,13 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use bbr::api::BitbucketClient;
 use bbr::auth::{CredentialKind, Credentials};
 
+const AUTH_BASIC: &str = "Basic dUBleGFtcGxlLmNvbTp0b2s=";
+
 async fn client(base: &str) -> BitbucketClient {
     let creds = Credentials {
         username: "u@example.com".into(),
         secret: "tok".into(),
-        kind: CredentialKind::Pat,
+        kind: CredentialKind::ApiToken,
     };
     BitbucketClient::new(base, creds).unwrap()
 }
@@ -19,7 +21,7 @@ async fn lists_repository_tags() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/repositories/sdadev/bvrm/refs/tags"))
-        .and(header("authorization", "Bearer tok"))
+        .and(header("authorization", AUTH_BASIC))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "values": [{
                 "name": "v1.0.0",

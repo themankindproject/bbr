@@ -76,7 +76,6 @@ fn missing_creds_exits_with_auth_code() {
     // Ensure no env creds leak into the test.
     std::env::remove_var("BITBUCKET_USERNAME");
     std::env::remove_var("BITBUCKET_TOKEN");
-    std::env::remove_var("BITBUCKET_APP_PASSWORD");
 
     let cmd = Command::cargo_bin("bbr")
         .unwrap()

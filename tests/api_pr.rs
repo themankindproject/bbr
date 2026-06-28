@@ -12,17 +12,19 @@ async fn client(base: &str) -> BitbucketClient {
     let creds = Credentials {
         username: "u@example.com".into(),
         secret: "tok".into(),
-        kind: CredentialKind::Pat,
+        kind: CredentialKind::ApiToken,
     };
     BitbucketClient::new(base, creds).unwrap()
 }
+
+const AUTH_BASIC: &str = "Basic dUBleGFtcGxlLmNvbTp0b2s=";
 
 #[tokio::test]
 async fn lists_open_prs() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/repositories/sdadev/bvrm/pullrequests"))
-        .and(header("authorization", "Bearer tok"))
+        .and(header("authorization", AUTH_BASIC))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "size": 1, "page": 1, "pagelen": 25,
             "values": [{
@@ -97,7 +99,7 @@ async fn lists_pr_review_resources() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/repositories/sdadev/bvrm/pullrequests/467/comments"))
-        .and(header("authorization", "Bearer tok"))
+        .and(header("authorization", AUTH_BASIC))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "values": [{
                 "id": 10,
@@ -110,7 +112,7 @@ async fn lists_pr_review_resources() {
         .await;
     Mock::given(method("GET"))
         .and(path("/repositories/sdadev/bvrm/pullrequests/467/tasks"))
-        .and(header("authorization", "Bearer tok"))
+        .and(header("authorization", AUTH_BASIC))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "values": [{
                 "id": 20,
@@ -123,7 +125,7 @@ async fn lists_pr_review_resources() {
         .await;
     Mock::given(method("GET"))
         .and(path("/repositories/sdadev/bvrm/pullrequests/467/commits"))
-        .and(header("authorization", "Bearer tok"))
+        .and(header("authorization", AUTH_BASIC))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "values": [{
                 "hash": "abc123",
@@ -135,7 +137,7 @@ async fn lists_pr_review_resources() {
         .await;
     Mock::given(method("GET"))
         .and(path("/repositories/sdadev/bvrm/pullrequests/467/statuses"))
-        .and(header("authorization", "Bearer tok"))
+        .and(header("authorization", AUTH_BASIC))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "values": [{
                 "state": "SUCCESSFUL",
@@ -148,7 +150,7 @@ async fn lists_pr_review_resources() {
         .await;
     Mock::given(method("GET"))
         .and(path("/repositories/sdadev/bvrm/pullrequests/467/conflicts"))
-        .and(header("authorization", "Bearer tok"))
+        .and(header("authorization", AUTH_BASIC))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "values": [{
                 "path": "src/lib.rs",
@@ -178,7 +180,7 @@ async fn toggles_pr_change_request() {
         .and(path(
             "/repositories/sdadev/bvrm/pullrequests/467/request-changes",
         ))
-        .and(header("authorization", "Bearer tok"))
+        .and(header("authorization", AUTH_BASIC))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
         .expect(1)
         .mount(&server)
@@ -187,7 +189,7 @@ async fn toggles_pr_change_request() {
         .and(path(
             "/repositories/sdadev/bvrm/pullrequests/467/request-changes",
         ))
-        .and(header("authorization", "Bearer tok"))
+        .and(header("authorization", AUTH_BASIC))
         .respond_with(ResponseTemplate::new(204).set_body_string(""))
         .expect(1)
         .mount(&server)
