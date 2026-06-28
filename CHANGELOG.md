@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- CI now runs `cargo test` and `cargo nextest` on macOS and Windows in addition to Linux.
+
+### Fixed
+
+- PowerShell `bb completion --install` wrote to `.config/powershell/` instead of `Documents/PowerShell/` on Windows.
+
 ## [0.1.0] - 2026-06-29
 
 ### Added
