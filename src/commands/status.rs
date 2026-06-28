@@ -381,11 +381,7 @@ fn render_short(out: &StatusOut) -> String {
                 "MERGED" => theme.success(&p.state),
                 _ => theme.error(&p.state),
             };
-            format!(
-                "{} {}",
-                theme.bold(&format!("#{}", p.id)),
-                state,
-            )
+            format!("{} {}", theme.bold(&format!("#{}", p.id)), state,)
         }
         None => theme.dim("no PR").to_string(),
     };
