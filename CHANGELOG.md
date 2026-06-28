@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-06-29
+
 ### Added
 
 #### Pull Requests
@@ -129,4 +131,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credentials file opened with mode `0o600` at creation time on Unix, closing TOCTOU window.
 - No system keyring dependency (avoids 671 MB texlive pull).
 
-[Unreleased]: https://github.com/themankindproject/bbr/compare/HEAD...HEAD
+[Unreleased]: https://github.com/themankindproject/bbr/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/themankindproject/bbr/releases/tag/v0.1.0
