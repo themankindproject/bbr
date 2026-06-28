@@ -780,7 +780,7 @@ fn render_list(out: &PrListOut) -> String {
     }
     let theme = Theme::current();
     let mut table =
-        Table::new().headers(["ID", "State", "Title", "Source -> Destination", "Author"]);
+        Table::new().headers(["ID", "State", "Title", "Source", "Destination", "Author"]);
     for pr in &out.pull_requests {
         let state = match pr.state.to_ascii_uppercase().as_str() {
             "OPEN" => theme.bold(&pr.state),
@@ -791,8 +791,9 @@ fn render_list(out: &PrListOut) -> String {
         table = table.add_row([
             pr.id.to_string(),
             state.into_owned(),
-            truncate(&pr.title, 60),
-            truncate(&format!("{} -> {}", pr.source, pr.destination), 50),
+            truncate(&pr.title, 55),
+            truncate(&pr.source, 30),
+            truncate(&pr.destination, 30),
             pr.author.clone().unwrap_or_else(|| "-".into()),
         ]);
     }

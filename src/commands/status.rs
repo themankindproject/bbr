@@ -464,10 +464,9 @@ fn render_human(out: &StatusOut) -> String {
                     .max()
                     .unwrap_or(0)
                     .max(18);
-                s.push_str(&format!("  {}\n", theme.label("Steps:")));
                 for st in &p.steps {
                     s.push_str(&format!(
-                        "    {} {:<width$}  {}\n",
+                        "  {} {:<width$}  {}\n",
                         theme.status_glyph(&st.state),
                         st.name,
                         human_duration(st.duration_seconds),
@@ -604,10 +603,9 @@ fn render_overview_human(out: &OverviewOut) -> String {
                     .max()
                     .unwrap_or(0)
                     .max(18);
-                s.push_str(&format!("  {}\n", theme.label("Steps:")));
                 for st in &p.steps {
                     s.push_str(&format!(
-                        "    {} {:<width$}  {}\n",
+                        "  {} {:<width$}  {}\n",
                         theme.status_glyph(&st.state),
                         st.name,
                         human_duration(st.duration_seconds),
@@ -625,7 +623,7 @@ fn render_overview_human(out: &OverviewOut) -> String {
     if !out.recent_prs.is_empty() {
         s.push_str(&format!("\n{} Recent PRs\n", theme.bullet()));
         let mut table =
-            Table::new().headers(["ID", "State", "Title", "Source -> Destination", "Author"]);
+            Table::new().headers(["ID", "State", "Title", "Source", "Destination", "Author"]);
         for pr in &out.recent_prs {
             let state = match pr.state.to_ascii_uppercase().as_str() {
                 "OPEN" => theme.bold(&pr.state),
@@ -635,8 +633,9 @@ fn render_overview_human(out: &OverviewOut) -> String {
             table = table.add_row([
                 pr.id.to_string(),
                 state.into_owned(),
-                truncate(&pr.title, 55),
-                truncate(&format!("{} -> {}", pr.source, pr.destination), 45),
+                truncate(&pr.title, 50),
+                truncate(&pr.source, 25),
+                truncate(&pr.destination, 25),
                 pr.author.clone().unwrap_or_else(|| "-".into()),
             ]);
         }
