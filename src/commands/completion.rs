@@ -89,11 +89,19 @@ fn shell_paths(shell: &Shell) -> Result<(PathBuf, String, RcLine)> {
             Ok((dir, filename, Some(line)))
         }
         Shell::PowerShell => {
-            let dir = home.join(".config/powershell");
+            let (dir, rc_path) = if cfg!(windows) {
+                (
+                    home.join("Documents").join("PowerShell"),
+                    "Documents/PowerShell/Microsoft.PowerShell_profile.ps1",
+                )
+            } else {
+                (
+                    home.join(".config/powershell"),
+                    ".config/powershell/Microsoft.PowerShell_profile.ps1",
+                )
+            };
             let filename = "bbr.ps1".to_string();
-            let line = Some((".config/powershell/Microsoft.PowerShell_profile.ps1", {
-                format!(". \"{}/bbr.ps1\"", dir.display())
-            }));
+            let line = Some((rc_path, format!(". \"{}/bbr.ps1\"", dir.display())));
             Ok((dir, filename, line))
         }
         _ => Err(BitbucketError::Other(format!("unsupported shell: {shell}"))),
