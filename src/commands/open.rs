@@ -3,7 +3,7 @@
 use serde::Serialize;
 
 use crate::cli::{GlobalArgs, OpenAction};
-use crate::commands::{client, current_head, current_repo};
+use crate::commands::{client, current_head, resolve_repo};
 use crate::error::{BitbucketError, Result};
 use crate::output::Formatter;
 
@@ -16,7 +16,7 @@ pub struct OpenOut {
 
 pub async fn run(g: &GlobalArgs, action: Option<OpenAction>) -> Result<()> {
     let action = action.unwrap_or(OpenAction::Repo);
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let (target, url) = match action {
         OpenAction::Repo => repo_url(g).await?,
         OpenAction::PrList => (
@@ -48,7 +48,7 @@ pub async fn run(g: &GlobalArgs, action: Option<OpenAction>) -> Result<()> {
 }
 
 async fn repo_url(g: &GlobalArgs) -> Result<(String, String)> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
     let info = client.get_repo(&repo.workspace, &repo.slug).await?;
     let url = info
@@ -60,7 +60,7 @@ async fn repo_url(g: &GlobalArgs) -> Result<(String, String)> {
 }
 
 async fn pr_url(g: &GlobalArgs, id: Option<u64>) -> Result<(String, String)> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
     let pr = match id {
         Some(id) => client.get_pr(&repo.workspace, &repo.slug, id).await?,
@@ -81,7 +81,7 @@ async fn pr_url(g: &GlobalArgs, id: Option<u64>) -> Result<(String, String)> {
 }
 
 async fn ci_url(g: &GlobalArgs, branch: Option<&str>) -> Result<(String, String)> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let branch = match branch {
         Some(b) => b.to_string(),
         None => current_head()?.branch,

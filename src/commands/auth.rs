@@ -11,7 +11,7 @@ use crate::config::{self, CredentialProfile, CredentialsFile};
 use crate::error::{BitbucketError, Result};
 use crate::output::Formatter;
 
-const PAT_HELP_URL: &str = "https://id.atlassian.com/manage-profile/security/api-tokens";
+const API_TOKEN_URL: &str = "https://id.atlassian.com/manage-profile/security/api-tokens";
 
 #[derive(Debug, Serialize)]
 pub struct AuthStatusOut {
@@ -23,40 +23,42 @@ pub struct AuthStatusOut {
     pub source: &'static str,
 }
 
-/// Interactive credential setup.
-pub fn setup() -> Result<()> {
-    println!("bb auth setup");
-    println!("  Need an API token? {PAT_HELP_URL}");
-    println!("  Required scopes: account:read, repository:read, repository:write,");
-    println!("                   pullrequest:read, pullrequest:write, pipeline:read");
-    println!();
+/// Credential setup (interactive or non-interactive).
+pub fn setup(username: Option<String>, token: Option<String>) -> Result<()> {
+    let (username, secret) = match (username, token) {
+        (Some(u), Some(t)) => (u.trim().to_string(), t),
+        (None, None) => {
+            println!("bb auth setup");
+            println!("  Need an API token? {API_TOKEN_URL}");
+            println!("  Required scopes: account:read, repository:read, repository:write,");
+            println!("                   pullrequest:read, pullrequest:write, pipeline:read");
+            println!();
 
-    let username = prompt("Bitbucket username (email): ")?;
-    if username.trim().is_empty() {
-        return Err(BitbucketError::Other("username is required".into()));
-    }
-
-    println!("  Credential type:");
-    println!("    1) Atlassian API Token (recommended, from id.atlassian.com)");
-    println!("    2) Personal Access Token (from bitbucket.org)");
-    println!("    3) App password (legacy)");
-    let choice = prompt("Choose [1]: ")?;
-    let kind = match choice.trim() {
-        "2" => CredentialKind::Pat,
-        "3" => CredentialKind::AppPassword,
-        _ => CredentialKind::ApiToken,
+            let u = prompt("Bitbucket username (email): ")?;
+            if u.trim().is_empty() {
+                return Err(BitbucketError::Other("username is required".into()));
+            }
+            let s = prompt_secret("API token: ")?;
+            if s.is_empty() {
+                return Err(BitbucketError::Other("secret is required".into()));
+            }
+            (u.trim().to_string(), s)
+        }
+        (Some(_), None) => {
+            return Err(BitbucketError::Other(
+                "--token is required when --username is provided".into(),
+            ));
+        }
+        (None, Some(_)) => {
+            return Err(BitbucketError::Other(
+                "--username is required when --token is provided".into(),
+            ));
+        }
     };
 
-    let secret = prompt_secret("Secret: ")?;
-    if secret.is_empty() {
-        return Err(BitbucketError::Other("secret is required".into()));
-    }
-
     let profile = CredentialProfile {
-        username: username.trim().to_string(),
-        token: (kind == CredentialKind::Pat || kind == CredentialKind::ApiToken)
-            .then_some(secret.clone()),
-        app_password: (kind == CredentialKind::AppPassword).then_some(secret),
+        username,
+        token: Some(secret),
         workspace: None,
     };
 
@@ -65,7 +67,7 @@ pub fn setup() -> Result<()> {
     };
     let path = config::save_credentials(&creds)?;
     println!("  Stored credentials in: {}", path.display());
-    println!("  Run `bbr auth status` to verify.");
+    println!("  Run `bbr auth test` to verify.");
     Ok(())
 }
 
@@ -77,9 +79,7 @@ pub async fn status(g: &GlobalArgs) -> Result<()> {
         Err(_) => (String::new(), None),
     };
 
-    let source = if std::env::var(auth::ENV_TOKEN).is_ok()
-        || std::env::var(auth::ENV_APP_PASSWORD).is_ok()
-    {
+    let source = if std::env::var(auth::ENV_TOKEN).is_ok() {
         "environment"
     } else if config::credentials_path()
         .map(|p| p.exists())
@@ -103,8 +103,6 @@ pub async fn status(g: &GlobalArgs) -> Result<()> {
         authenticated,
         username,
         credential_kind: kind.map(|k| match k {
-            CredentialKind::Pat => "pat".into(),
-            CredentialKind::AppPassword => "app_password".into(),
             CredentialKind::ApiToken => "atlassian_api_token".into(),
         }),
         display_name,
@@ -143,7 +141,7 @@ pub async fn test(g: &GlobalArgs) -> Result<()> {
         "authenticated": true,
         "display_name": user.display_name,
         "uuid": user.uuid,
-        "credential_type": format!("{:?}", creds.kind),
+        "credential_type": "atlassian_api_token",
     });
     let human = format!(
         "✓ Authenticated as {} ({})",

@@ -1,27 +1,25 @@
 //! Credential resolution for `bb`.
 //!
 //! Order of precedence:
-//! 1. Environment variables (`BITBUCKET_USERNAME`, `BITBUCKET_TOKEN`,
-//!    `BITBUCKET_APP_PASSWORD`).
+//! 1. Environment variables (`BITBUCKET_USERNAME`, `BITBUCKET_TOKEN`).
 //! 2. Config file at [`crate::config::credentials_path`].
-//! 3. System keyring (v0.3; not yet implemented).
+//!
+//! All credentials use Atlassian API tokens (from id.atlassian.com) with
+//! HTTP Basic authentication — no legacy PAT or AppPassword support.
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{load_credentials, CredentialProfile};
+use crate::config::load_credentials;
 use crate::error::{BitbucketError, Result};
 
 /// Environment variable names.
 pub const ENV_USERNAME: &str = "BITBUCKET_USERNAME";
 pub const ENV_TOKEN: &str = "BITBUCKET_TOKEN";
-pub const ENV_APP_PASSWORD: &str = "BITBUCKET_APP_PASSWORD";
 
 /// Resolved credentials ready to attach to HTTP requests.
 #[derive(Debug, Clone)]
 pub struct Credentials {
     pub username: String,
-    /// The bearer-style secret (PAT or app password). PATs are sent as
-    /// `Bearer <token>`; app passwords use HTTP Basic.
     pub secret: String,
     pub kind: CredentialKind,
 }
@@ -29,11 +27,7 @@ pub struct Credentials {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialKind {
-    /// Bitbucket Personal Access Token (Bearer auth).
-    Pat,
-    /// Legacy app password (Basic auth).
-    AppPassword,
-    /// Atlassian API token from id.atlassian.com (Basic auth, same as app password).
+    /// Atlassian API token from id.atlassian.com (Basic auth).
     ApiToken,
 }
 
@@ -50,61 +44,37 @@ pub fn resolve() -> Result<Credentials> {
 
 fn from_env() -> Option<Credentials> {
     let username = std::env::var(ENV_USERNAME).ok()?;
-    if let Ok(token) = std::env::var(ENV_TOKEN) {
-        if !token.is_empty() {
-            let kind = if token.starts_with("ATATT") {
-                CredentialKind::ApiToken
-            } else {
-                CredentialKind::Pat
-            };
-            return Some(Credentials {
-                username,
-                secret: token,
-                kind,
-            });
-        }
+    let token = std::env::var(ENV_TOKEN).ok()?;
+    if token.is_empty() {
+        return None;
     }
-    if let Ok(pw) = std::env::var(ENV_APP_PASSWORD) {
-        if !pw.is_empty() {
-            return Some(Credentials {
-                username,
-                secret: pw,
-                kind: CredentialKind::AppPassword,
-            });
-        }
-    }
-    None
+    Some(Credentials {
+        username,
+        secret: token,
+        kind: CredentialKind::ApiToken,
+    })
 }
 
 fn from_config() -> Result<Option<Credentials>> {
     let Some(file) = load_credentials()? else {
         return Ok(None);
     };
-    let p: &CredentialProfile = &file.default;
+    let p = &file.default;
     let Some(secret) = p.secret() else {
         return Ok(None);
     };
     if p.username.is_empty() {
         return Ok(None);
     }
-    let kind = if p.is_pat() {
-        if p.is_atlassian_api_token() {
-            CredentialKind::ApiToken
-        } else {
-            CredentialKind::Pat
-        }
-    } else {
-        CredentialKind::AppPassword
-    };
     Ok(Some(Credentials {
         username: p.username.clone(),
         secret: secret.to_string(),
-        kind,
+        kind: CredentialKind::ApiToken,
     }))
 }
 
 impl Credentials {
-    /// Build a `reqwest` client pre-configured with the right auth header.
+    /// Build a `reqwest` client pre-configured with Basic auth.
     pub fn into_client(self, base_url: &str) -> Result<crate::api::BitbucketClient> {
         crate::api::BitbucketClient::new(base_url, self)
     }
@@ -118,38 +88,33 @@ mod tests {
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
-    fn env_pat_wins_over_empty() {
+    fn env_token_resolves_to_api_token() {
         let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var(ENV_USERNAME, "u");
-        std::env::set_var(ENV_TOKEN, "tok");
-        std::env::remove_var(ENV_APP_PASSWORD);
-        let c = from_env().unwrap();
-        assert_eq!(c.kind, CredentialKind::Pat);
-        std::env::remove_var(ENV_TOKEN);
-        std::env::remove_var(ENV_USERNAME);
-    }
-
-    #[test]
-    fn env_api_token_is_detected() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var(ENV_USERNAME, "u");
+        std::env::set_var(ENV_USERNAME, "u@example.com");
         std::env::set_var(ENV_TOKEN, "ATATT-example");
-        std::env::remove_var(ENV_APP_PASSWORD);
         let c = from_env().unwrap();
         assert_eq!(c.kind, CredentialKind::ApiToken);
+        assert_eq!(c.username, "u@example.com");
         std::env::remove_var(ENV_TOKEN);
         std::env::remove_var(ENV_USERNAME);
     }
 
     #[test]
-    fn env_app_password_fallback() {
+    fn env_returns_none_without_username() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var(ENV_USERNAME);
+        std::env::set_var(ENV_TOKEN, "tok");
+        assert!(from_env().is_none());
+        std::env::remove_var(ENV_TOKEN);
+    }
+
+    #[test]
+    fn env_returns_none_with_empty_token() {
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var(ENV_USERNAME, "u");
-        std::env::remove_var(ENV_TOKEN);
-        std::env::set_var(ENV_APP_PASSWORD, "pw");
-        let c = from_env().unwrap();
-        assert_eq!(c.kind, CredentialKind::AppPassword);
-        std::env::remove_var(ENV_APP_PASSWORD);
+        std::env::set_var(ENV_TOKEN, "");
+        assert!(from_env().is_none());
         std::env::remove_var(ENV_USERNAME);
+        std::env::remove_var(ENV_TOKEN);
     }
 }

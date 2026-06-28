@@ -1,9 +1,13 @@
 //! Bitbucket Cloud REST API client and typed endpoint modules.
 
+pub mod deploy;
+pub mod issue;
 pub mod pipeline;
 pub mod pr;
 pub mod repo;
+pub mod source;
 pub mod status;
+pub mod webhook;
 
 use reqwest::header::{ACCEPT, AUTHORIZATION};
 use reqwest::{Client, Method, StatusCode};
@@ -119,8 +123,6 @@ impl BitbucketClient {
 
     /// Issue a request expecting no body (returns `()` on success).
     pub async fn send_empty(&self, method: Method, path: &str, body: Option<&str>) -> Result<()> {
-        // Bitbucket returns 201/204 with empty or minimal bodies; decode as
-        // serde_json::Value and ignore.
         let _: serde_json::Value = self.send(method, path, body).await?;
         Ok(())
     }
@@ -269,7 +271,6 @@ pub fn map_error(status: StatusCode, body: &str) -> BitbucketError {
                                 all.push((s, "✓"));
                             }
                         }
-                        // mark granted scopes that were required
                         for s in grant.iter().filter_map(|v| v.as_str()) {
                             if let Some(entry) = all.iter_mut().find(|(n, _)| *n == s) {
                                 entry.1 = "✓";

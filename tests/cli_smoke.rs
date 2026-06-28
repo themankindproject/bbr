@@ -15,7 +15,11 @@ fn help_lists_subcommands() {
         .success()
         .stdout(predicate::str::contains("Pull request operations"))
         .stdout(predicate::str::contains("Credential management"))
-        .stdout(predicate::str::contains("completion"));
+        .stdout(predicate::str::contains("completion"))
+        .stdout(predicate::str::contains("Deployment and environment operations"))
+        .stdout(predicate::str::contains("Manage repository issues"))
+        .stdout(predicate::str::contains("Repository webhook management"))
+        .stdout(predicate::str::contains("Browse remote source files"));
 }
 
 #[test]
@@ -88,4 +92,27 @@ fn missing_creds_exits_with_auth_code() {
     // Either git fails first (no repo) or auth fails. Both are non-zero; we
     // only assert that it does NOT succeed with exit 0.
     cmd.code(predicate::ne(0_i32));
+}
+
+#[test]
+fn schema_lists_models() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .arg("schema")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Available JSON Schema Models"))
+        .stdout(predicate::str::contains("status"))
+        .stdout(predicate::str::contains("auth"));
+}
+
+#[test]
+fn schema_prints_specific_model() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["schema", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"title\": \"StatusOut\""))
+        .stdout(predicate::str::contains("\"required\":"));
 }

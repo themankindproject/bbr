@@ -138,6 +138,49 @@ pub fn context() -> Result<(RepoIdentity, Head)> {
     Ok((repo, head))
 }
 
+/// Run git status --porcelain to see if working tree is dirty.
+pub fn git_status_porcelain() -> Result<String> {
+    git(&["status", "--porcelain"])
+}
+
+/// Check if working tree has any modifications, untracked files, etc.
+pub fn is_working_tree_clean() -> Result<bool> {
+    let status = git_status_porcelain()?;
+    Ok(status.is_empty())
+}
+
+/// Git push a branch to origin.
+pub fn push_branch(branch: &str) -> Result<()> {
+    git(&["push", "origin", branch])?;
+    Ok(())
+}
+
+/// Git push --force-with-lease to origin.
+pub fn push_force_with_lease(branch: &str) -> Result<()> {
+    git(&["push", "--force-with-lease", "origin", branch])?;
+    Ok(())
+}
+
+/// Delete a branch locally.
+pub fn delete_branch_local(branch: &str) -> Result<()> {
+    git(&["branch", "-D", branch])?;
+    Ok(())
+}
+
+/// Delete a remote branch on origin.
+pub fn delete_branch_remote(branch: &str) -> Result<()> {
+    git(&["push", "origin", "--delete", branch])?;
+    Ok(())
+}
+
+/// Rebase branch onto another branch.
+pub fn rebase_branch(branch: &str, onto: &str) -> Result<()> {
+    // switch to the target branch first, then rebase onto the parent
+    git(&["switch", branch])?;
+    git(&["rebase", onto])?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use crate::api::status::{BuildStatus, BuildStatusRequest};
 use crate::cli::GlobalArgs;
-use crate::commands::{client, current_head, current_repo, make_spinner};
+use crate::commands::{client, current_head, make_spinner, resolve_repo};
 use crate::error::{BitbucketError, Result};
 use crate::output::Formatter;
 
@@ -30,7 +30,7 @@ pub async fn set_status(
     description: Option<&str>,
     refname: Option<&str>,
 ) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let commit = match commit {
         Some(commit) => commit.to_string(),
         None => current_head()?.commit,

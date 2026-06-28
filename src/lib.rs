@@ -12,5 +12,6 @@ pub mod config;
 pub mod error;
 pub mod git;
 pub mod output;
+pub mod stack;
 
 pub use error::{BitbucketError, ExitCode, Result};

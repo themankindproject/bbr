@@ -11,7 +11,7 @@ use crate::api::status::BuildStatus;
 use crate::api::BitbucketClient;
 use crate::cli::GlobalArgs;
 use crate::commands::{
-    client, confirm, current_head, current_repo, make_spinner, resolve_body, truncate,
+    client, confirm, current_head, make_spinner, resolve_body, resolve_repo, truncate,
 };
 use crate::error::{BitbucketError, Result};
 use crate::git;
@@ -175,7 +175,7 @@ pub async fn list(
     reviewer: Option<&str>,
 ) -> Result<()> {
     let state = PrState::parse(state)?;
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
     let spinner = make_spinner(g.json);
     spinner.set_message("Fetching pull requests...");
@@ -211,7 +211,7 @@ pub async fn view(
     show_diff: bool,
     show_comments: bool,
 ) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
 
     let pr = match id {
@@ -280,7 +280,7 @@ pub async fn create(
     close_source_branch: bool,
     reviewers: &[String],
 ) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
 
     let source_branch = match src {
@@ -361,7 +361,7 @@ pub async fn comment(
     body_stdin: bool,
     reply_to: Option<u64>,
 ) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
     let text = resolve_body(body, body_file, body_stdin)?;
     client
@@ -382,7 +382,7 @@ pub async fn comment(
 }
 
 pub async fn comments(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
     let id = resolve_pr_id(&client, &repo.workspace, &repo.slug, id).await?;
 
@@ -402,7 +402,7 @@ pub async fn comments(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()>
 }
 
 pub async fn tasks(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
     let id = resolve_pr_id(&client, &repo.workspace, &repo.slug, id).await?;
 
@@ -422,7 +422,7 @@ pub async fn tasks(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()> {
 }
 
 pub async fn commits(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
     let id = resolve_pr_id(&client, &repo.workspace, &repo.slug, id).await?;
 
@@ -442,7 +442,7 @@ pub async fn commits(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()> 
 }
 
 pub async fn statuses(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
     let id = resolve_pr_id(&client, &repo.workspace, &repo.slug, id).await?;
 
@@ -462,7 +462,7 @@ pub async fn statuses(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()>
 }
 
 pub async fn conflicts(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
     let id = resolve_pr_id(&client, &repo.workspace, &repo.slug, id).await?;
 
@@ -482,7 +482,7 @@ pub async fn conflicts(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()
 }
 
 pub async fn request_changes(g: &GlobalArgs, id: u64) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
     let spinner = make_spinner(g.json);
     spinner.set_message("Requesting changes...");
@@ -497,7 +497,7 @@ pub async fn request_changes(g: &GlobalArgs, id: u64) -> Result<()> {
 }
 
 pub async fn unrequest_changes(g: &GlobalArgs, id: u64) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
     let spinner = make_spinner(g.json);
     spinner.set_message("Clearing change request...");
@@ -512,7 +512,7 @@ pub async fn unrequest_changes(g: &GlobalArgs, id: u64) -> Result<()> {
 }
 
 pub async fn approve(g: &GlobalArgs, id: u64) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
     let spinner = make_spinner(g.json);
     spinner.set_message("Approving...");
@@ -526,7 +526,7 @@ pub async fn approve(g: &GlobalArgs, id: u64) -> Result<()> {
 }
 
 pub async fn unapprove(g: &GlobalArgs, id: u64) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
     let spinner = make_spinner(g.json);
     spinner.set_message("Removing approval...");
@@ -540,7 +540,7 @@ pub async fn unapprove(g: &GlobalArgs, id: u64) -> Result<()> {
 }
 
 pub async fn decline(g: &GlobalArgs, id: u64) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
     let spinner = make_spinner(g.json);
     spinner.set_message("Declining...");
@@ -558,7 +558,7 @@ pub async fn merge(
     strategy: Option<&str>,
     message: Option<&str>,
 ) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
 
     let merge_body = MergePrRequest {
@@ -615,7 +615,7 @@ pub async fn merge(
 }
 
 pub async fn checkout(g: &GlobalArgs, id: u64) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
 
     let spinner = make_spinner(g.json);
@@ -650,7 +650,7 @@ pub async fn update(
     new_title: Option<&str>,
     new_description: Option<&str>,
 ) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
 
     let req = match (new_title, new_description) {
@@ -690,7 +690,7 @@ pub async fn update(
 }
 
 pub async fn diff(g: &GlobalArgs, id: u64) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
 
     let spinner = make_spinner(g.json);

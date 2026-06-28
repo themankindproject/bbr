@@ -48,12 +48,9 @@ pub struct CredentialsFile {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CredentialProfile {
     pub username: String,
-    /// Personal Access Token (preferred).
+    /// Atlassian API token (from id.atlassian.com).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
-    /// Legacy app password (deprecated by Bitbucket; kept for transition).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub app_password: Option<String>,
     /// Optional workspace override; otherwise inferred from git remote.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
@@ -61,22 +58,7 @@ pub struct CredentialProfile {
 
 impl CredentialProfile {
     pub fn secret(&self) -> Option<&str> {
-        self.token
-            .as_deref()
-            .or(self.app_password.as_deref())
-            .filter(|s| !s.is_empty())
-    }
-
-    pub fn is_pat(&self) -> bool {
-        self.token.is_some()
-    }
-
-    /// Detect if this looks like an Atlassian API token (starts with "ATATT").
-    pub fn is_atlassian_api_token(&self) -> bool {
-        self.token
-            .as_deref()
-            .map(|t| t.starts_with("ATATT"))
-            .unwrap_or(false)
+        self.token.as_deref().filter(|s| !s.is_empty())
     }
 }
 
@@ -172,7 +154,6 @@ mod tests {
             default: CredentialProfile {
                 username: "u".into(),
                 token: Some("t".into()),
-                app_password: None,
                 workspace: None,
             },
         };
@@ -186,8 +167,6 @@ mod tests {
     fn parses_token_profile() {
         let _guard = ENV_LOCK.lock().unwrap();
         let tmp = tempdir().unwrap();
-        // xdg prepends the prefix ("bb") to XDG_CONFIG_HOME, so write inside
-        // a `bb` subdirectory.
         let bb_dir = tmp.path().join(APP_NAME);
         fs::create_dir_all(&bb_dir).unwrap();
         let f = bb_dir.join(CREDENTIALS_FILE);
@@ -199,7 +178,6 @@ mod tests {
         let creds = load_credentials().unwrap().unwrap();
         assert_eq!(creds.default.username, "u");
         assert_eq!(creds.default.secret(), Some("t"));
-        assert!(creds.default.is_pat());
         std::env::remove_var("XDG_CONFIG_HOME");
     }
 }

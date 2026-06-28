@@ -10,7 +10,7 @@ use crate::api::pipeline::{
 };
 use crate::api::BitbucketClient;
 use crate::cli::GlobalArgs;
-use crate::commands::{client, confirm, current_head, current_repo, human_duration, make_spinner};
+use crate::commands::{client, confirm, current_head, human_duration, make_spinner, resolve_repo};
 use crate::error::{BitbucketError, Result};
 use crate::output::table::Table;
 use crate::output::theme::Theme;
@@ -60,7 +60,7 @@ pub struct CiLogsOut {
 }
 
 pub async fn list(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let branch = match branch {
         Some(b) => b.to_string(),
         None => current_head()?.branch,
@@ -145,7 +145,7 @@ pub async fn list(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> Result<()
 }
 
 pub async fn status(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let branch = match branch {
         Some(b) => b.to_string(),
         None => current_head()?.branch,
@@ -189,7 +189,7 @@ pub async fn watch(
     interval_secs: u64,
     include_logs: bool,
 ) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let branch = match branch {
         Some(b) => b.to_string(),
         None => current_head()?.branch,
@@ -295,7 +295,7 @@ pub async fn logs(
     latest: bool,
     output: Option<&str>,
 ) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
     let (uuid, smart_default) = match uuid {
         Some(uuid) => (ensure_uuid_braces(uuid), false),
@@ -338,7 +338,7 @@ pub async fn logs(
 }
 
 pub async fn steps(g: &GlobalArgs, uuid: Option<&str>) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
     let uuid = match uuid {
         Some(u) => ensure_uuid_braces(u),
@@ -391,7 +391,7 @@ pub async fn tests(
     step: Option<&str>,
     limit: u32,
 ) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
     let pipeline_uuid = match uuid {
         Some(u) => ensure_uuid_braces(u),
@@ -503,7 +503,7 @@ pub async fn tests(
 }
 
 pub async fn stop(g: &GlobalArgs, uuid: Option<&str>, branch: Option<&str>) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
     let pipeline_uuid = match uuid {
         Some(u) => ensure_uuid_braces(u),
@@ -535,7 +535,7 @@ pub async fn stop(g: &GlobalArgs, uuid: Option<&str>, branch: Option<&str>) -> R
 }
 
 pub async fn rerun(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let branch = match branch {
         Some(b) => b.to_string(),
         None => current_head()?.branch,

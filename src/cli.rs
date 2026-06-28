@@ -26,6 +26,10 @@ pub struct GlobalArgs {
     /// Increase verbosity (-v info, -vv debug).
     #[arg(short, long, global = true, action = ArgAction::Count)]
     pub verbose: u8,
+
+    /// Override the workspace inferred from git remote.
+    #[arg(long, global = true, env = "BB_WORKSPACE")]
+    pub workspace: Option<String>,
 }
 
 /// `bb` — a Bitbucket Cloud CLI.
@@ -61,11 +65,19 @@ pub enum Command {
         /// Compact single-line output.
         #[arg(long)]
         short: bool,
+        /// Export format (slack|markdown).
+        #[arg(long, value_parser = ["slack", "markdown"])]
+        export: Option<String>,
     },
     /// Pull request operations.
     Pr {
         #[command(subcommand)]
         action: PrAction,
+    },
+    /// Batch operations on PRs and pipelines.
+    Batch {
+        #[command(subcommand)]
+        action: BatchAction,
     },
     /// Pipeline / CI operations.
     Ci {
@@ -94,10 +106,60 @@ pub enum Command {
         #[command(subcommand)]
         action: AuthAction,
     },
-    /// Emit shell completions to stdout.
+    /// Emit shell completions to stdout or install them.
     Completion {
-        /// Target shell.
-        shell: Shell,
+        /// Target shell (auto-detected from $SHELL if omitted with --install).
+        shell: Option<Shell>,
+        /// Install the completion script for the detected shell.
+        #[arg(long)]
+        install: bool,
+    },
+    /// View or set configuration.
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+    /// Make an authenticated API request to any Bitbucket endpoint.
+    Api {
+        /// HTTP method (GET, POST, PUT, DELETE).
+        method: String,
+        /// API path (e.g. /repositories/ws/slug).
+        path: String,
+        /// JSON body to send (for POST/PUT).
+        #[arg(long)]
+        data: Option<String>,
+        /// Follow pagination and emit merged values array.
+        #[arg(long)]
+        paginate: bool,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Repository webhook management.
+    Webhook {
+        #[command(subcommand)]
+        action: WebhookAction,
+    },
+    /// Browse remote source files.
+    Src {
+        #[command(subcommand)]
+        action: SrcAction,
+    },
+    /// Deployment and environment operations.
+    Deploy {
+        #[command(subcommand)]
+        action: DeployAction,
+    },
+    /// Manage repository issues.
+    Issue {
+        #[command(subcommand)]
+        action: IssueAction,
+    },
+    /// Print JSON schema for a command's --json output.
+    Schema {
+        /// Name of the model schema to print (e.g. status, pr, ci, repo, webhook, src, issue).
+        model: Option<String>,
+        #[command(flatten)]
+        g: GlobalArgs,
     },
 }
 
@@ -280,6 +342,65 @@ pub enum PrAction {
         #[command(flatten)]
         g: GlobalArgs,
     },
+    /// Cross-repo PR dashboard.
+    Dashboard {
+        /// Number of repos to scan (default: all).
+        #[arg(long)]
+        repos: Option<u32>,
+        /// Only repos matching this pattern.
+        #[arg(long)]
+        filter: Option<String>,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Manage stacked PR chains.
+    Stack {
+        #[command(subcommand)]
+        action: StackAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum StackAction {
+    /// Start a new stack.
+    Init {
+        /// Stack name.
+        name: String,
+        /// Base branch (default: current branch).
+        #[arg(long)]
+        base: Option<String>,
+    },
+    /// Add a branch to the stack.
+    Add {
+        /// Branch to add.
+        branch: String,
+        /// Parent branch in the stack (default: previous branch or base).
+        #[arg(long)]
+        parent: Option<String>,
+    },
+    /// List the current stack status.
+    List,
+    /// Rebase all stacked branches onto their parents.
+    Rebase {
+        /// Push branches to origin after rebase.
+        #[arg(long)]
+        push: bool,
+    },
+    /// Merge all PRs in the stack bottom-up.
+    Land {
+        /// Merge strategy (merge_commit|squash|fast_forward).
+        #[arg(long)]
+        strategy: Option<String>,
+        /// Skip confirmation prompt.
+        #[arg(long, short)]
+        yes: bool,
+    },
+    /// Close all stacked PRs and delete local/remote branches.
+    Abort {
+        /// Skip confirmation prompt.
+        #[arg(long, short)]
+        yes: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -363,6 +484,20 @@ pub enum CiAction {
         #[command(flatten)]
         g: GlobalArgs,
     },
+    /// Compare two pipeline runs.
+    Compare {
+        /// First pipeline reference (UUID, build number, or "last").
+        a: String,
+        /// Second pipeline reference (UUID, build number, or "last").
+        b: String,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Manage pipeline-level repository variables.
+    Vars {
+        #[command(subcommand)]
+        action: CiVarsAction,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -394,6 +529,78 @@ pub enum RepoAction {
         limit: u32,
         #[command(flatten)]
         g: GlobalArgs,
+    },
+    /// Create a new repository.
+    Create {
+        /// Repository slug (name).
+        slug: String,
+        /// Set the repository to private.
+        #[arg(long)]
+        private: bool,
+        /// Repository description.
+        #[arg(long)]
+        description: Option<String>,
+        /// Primary language.
+        #[arg(long)]
+        language: Option<String>,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Audit repository compliance settings.
+    Audit {
+        /// Specific repo slug to audit (default: all repos in workspace).
+        slug: Option<String>,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum BatchAction {
+    /// Merge all approved pull requests.
+    MergeApproved {
+        /// Limit to this repository slug.
+        #[arg(long)]
+        repo: Option<String>,
+        /// Only show what would be done, don't execute.
+        #[arg(long)]
+        dry_run: bool,
+        /// Merge strategy (merge_commit|squash|fast_forward).
+        #[arg(long)]
+        strategy: Option<String>,
+        /// Skip confirmation.
+        #[arg(long, short)]
+        yes: bool,
+    },
+    /// Rerun all failed pipelines.
+    RerunFailed {
+        /// Branch filter (default: all branches).
+        #[arg(long)]
+        branch: Option<String>,
+        /// Limit to this repository slug.
+        #[arg(long)]
+        repo: Option<String>,
+        /// Only show what would be done, don't execute.
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip confirmation.
+        #[arg(long, short)]
+        yes: bool,
+    },
+    /// Delete branches that have been merged to their target.
+    CleanupMergedBranches {
+        /// Limit to this repository slug.
+        #[arg(long)]
+        repo: Option<String>,
+        /// Delete remote branches too.
+        #[arg(long)]
+        remote: bool,
+        /// Only show what would be done, don't execute.
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip confirmation.
+        #[arg(long, short)]
+        yes: bool,
     },
 }
 
@@ -449,7 +656,14 @@ pub enum OpenAction {
 #[derive(Debug, Subcommand)]
 pub enum AuthAction {
     /// Interactive credential setup.
-    Setup,
+    Setup {
+        /// Username (email) for non-interactive setup.
+        #[arg(long)]
+        username: Option<String>,
+        /// API token for non-interactive setup.
+        #[arg(long)]
+        token: Option<String>,
+    },
     /// Show current credential status.
     Status {
         #[command(flatten)]
@@ -467,6 +681,299 @@ pub enum AuthAction {
     },
 }
 
+#[derive(Debug, Subcommand)]
+pub enum ConfigAction {
+    /// Print the config file path.
+    Path,
+    /// Print the current config as JSON.
+    Show,
+    /// Set a config value (key value).
+    Set {
+        /// Config key (e.g. workspace).
+        key: String,
+        /// Config value.
+        value: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum WebhookAction {
+    /// List webhooks for the current repository.
+    List {
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// View a specific webhook.
+    View {
+        /// Webhook UUID.
+        uid: String,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Create a new webhook.
+    Create {
+        /// Target URL for the webhook.
+        #[arg(long)]
+        url: String,
+        /// Comma-separated list of events (e.g. repo:push,pullrequest:created).
+        #[arg(long)]
+        events: String,
+        /// Human-readable description.
+        #[arg(long)]
+        description: Option<String>,
+        /// Activate the webhook immediately (default: true).
+        #[arg(long, default_value_t = true)]
+        active: bool,
+        /// Shared secret for payload signing.
+        #[arg(long)]
+        secret: Option<String>,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Update an existing webhook.
+    Update {
+        /// Webhook UUID.
+        uid: String,
+        /// New target URL.
+        #[arg(long)]
+        url: Option<String>,
+        /// New comma-separated event list.
+        #[arg(long)]
+        events: Option<String>,
+        /// New description.
+        #[arg(long)]
+        description: Option<String>,
+        /// Enable or disable the webhook.
+        #[arg(long)]
+        active: Option<bool>,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Delete a webhook.
+    Delete {
+        /// Webhook UUID.
+        uid: String,
+        /// Skip confirmation prompt.
+        #[arg(long, short)]
+        yes: bool,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SrcAction {
+    /// Print raw file content from the remote repository.
+    Cat {
+        /// File path within the repository.
+        path: String,
+        /// Git ref (branch, tag, or commit hash; defaults to current branch).
+        #[arg(long, short = 'r')]
+        git_ref: Option<String>,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// List directory contents in the remote repository.
+    Ls {
+        /// Directory path (default: repo root).
+        path: Option<String>,
+        /// Git ref (branch, tag, or commit hash; defaults to current branch).
+        #[arg(long, short = 'r')]
+        git_ref: Option<String>,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DeployAction {
+    /// List deployments in the current repository.
+    List {
+        /// Limit the number of results.
+        #[arg(long, default_value_t = 25)]
+        limit: u32,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Manage environments.
+    Env {
+        #[command(subcommand)]
+        action: DeployEnvAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DeployEnvAction {
+    /// List environments.
+    List {
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Manage environment variables.
+    Vars {
+        #[command(subcommand)]
+        action: DeployEnvVarsAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DeployEnvVarsAction {
+    /// List variables for an environment.
+    List {
+        /// The environment UUID.
+        env_uuid: String,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Set an environment variable (creates or updates).
+    Set {
+        /// The environment UUID.
+        env_uuid: String,
+        key: String,
+        value: String,
+        /// Mark variable as secured/encrypted.
+        #[arg(long)]
+        secured: bool,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Delete an environment variable.
+    Delete {
+        /// The environment UUID.
+        env_uuid: String,
+        key: String,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CiVarsAction {
+    /// List pipeline variables.
+    List {
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Set a pipeline variable (creates or updates).
+    Set {
+        key: String,
+        value: String,
+        /// Mark variable as secured/encrypted.
+        #[arg(long)]
+        secured: bool,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Delete a pipeline variable.
+    Delete {
+        key: String,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum IssueAction {
+    /// List issues in the repository.
+    List {
+        /// Limit the number of results.
+        #[arg(long, default_value_t = 25)]
+        limit: u32,
+        /// Filter by state (new|open|resolved|on hold|invalid|duplicate|wontfix|closed).
+        #[arg(long)]
+        status: Option<String>,
+        /// Filter by kind (bug|enhancement|proposal|task).
+        #[arg(long)]
+        kind: Option<String>,
+        /// Filter by priority (trivial|minor|major|critical|blocker).
+        #[arg(long)]
+        priority: Option<String>,
+        /// Filter by assignee nickname.
+        #[arg(long)]
+        assignee: Option<String>,
+        /// Custom BBQL query.
+        #[arg(long)]
+        query: Option<String>,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// View a specific issue.
+    View {
+        /// Issue ID.
+        id: u64,
+        /// Show comments inline.
+        #[arg(long)]
+        comments: bool,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Create a new issue.
+    Create {
+        /// Issue title.
+        #[arg(long)]
+        title: String,
+        /// Issue description body.
+        #[arg(long)]
+        body: String,
+        /// Issue kind (bug|enhancement|proposal|task).
+        #[arg(long, default_value = "bug")]
+        kind: String,
+        /// Issue priority (trivial|minor|major|critical|blocker).
+        #[arg(long, default_value = "major")]
+        priority: String,
+        /// Assignee nickname.
+        #[arg(long)]
+        assignee: Option<String>,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Update an existing issue.
+    Update {
+        /// Issue ID.
+        id: u64,
+        /// New title.
+        #[arg(long)]
+        title: Option<String>,
+        /// New description body.
+        #[arg(long)]
+        body: Option<String>,
+        /// New state.
+        #[arg(long)]
+        status: Option<String>,
+        /// New kind.
+        #[arg(long)]
+        kind: Option<String>,
+        /// New priority.
+        #[arg(long)]
+        priority: Option<String>,
+        /// New assignee nickname.
+        #[arg(long)]
+        assignee: Option<String>,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Post a comment on an issue.
+    Comment {
+        /// Issue ID.
+        id: u64,
+        /// Comment body.
+        #[arg(long)]
+        body: String,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// List comments on an issue.
+    Comments {
+        /// Issue ID.
+        id: u64,
+        /// Limit the number of results.
+        #[arg(long, default_value_t = 25)]
+        limit: u32,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+}
+
 /// Resolve the API base URL (flag > env > default).
 pub fn resolve_api_base(g: &GlobalArgs) -> &str {
     g.api_base.as_deref().unwrap_or(DEFAULT_API_BASE)
@@ -477,7 +984,6 @@ pub async fn run() -> ExitCode {
     let cli = match Cli::try_parse() {
         Ok(c) => c,
         Err(e) => {
-            // clap prints its own message; honor its exit code (0 for --help).
             e.exit();
         }
     };
@@ -493,15 +999,26 @@ pub async fn run() -> ExitCode {
 }
 
 async fn dispatch(cli: Cli) -> Result<()> {
+    let g = &cli.global;
     match cli.command {
-        None => commands::status::run_overview(&cli.global).await,
+        None => commands::status::run_overview(g).await,
         Some(Command::Status {
             g,
             watch,
             interval,
             short,
+            export,
         }) => {
-            if watch {
+            if let Some(fmt) = export {
+                let status_res = commands::status::run_inner(&g).await?;
+                let text = match fmt.as_str() {
+                    "slack" => commands::export::format_slack(&status_res),
+                    "markdown" => commands::export::format_markdown(&status_res),
+                    _ => unreachable!(),
+                };
+                println!("{}", text);
+                Ok(())
+            } else if watch {
                 commands::status::run_watch(&g, interval).await
             } else if short {
                 commands::status::run_short(&g).await
@@ -610,6 +1127,29 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 description,
                 g,
             } => commands::pr::update(&g, id, title.as_deref(), description.as_deref()).await,
+            PrAction::Dashboard { repos, filter, g } => {
+                commands::dashboard::run_dashboard(&g, repos, filter.as_deref()).await
+            }
+            PrAction::Stack { action } => match action {
+                StackAction::Init { name, base } => {
+                    commands::stack::init(&cli.global, &name, base.as_deref()).await
+                }
+                StackAction::Add { branch, parent } => {
+                    commands::stack::add(&cli.global, &branch, parent.as_deref()).await
+                }
+                StackAction::List => {
+                    commands::stack::list(&cli.global).await
+                }
+                StackAction::Rebase { push } => {
+                    commands::stack::rebase(&cli.global, push).await
+                }
+                StackAction::Land { strategy, yes } => {
+                    commands::stack::land(&cli.global, strategy.as_deref(), yes).await
+                }
+                StackAction::Abort { yes } => {
+                    commands::stack::abort(&cli.global, yes).await
+                }
+            }
         },
         Some(Command::Ci { action }) => match action {
             CiAction::Status { branch, g } => commands::ci::status(&g, branch.as_deref()).await,
@@ -651,6 +1191,18 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 limit,
                 g,
             } => commands::ci::tests(&g, uuid.as_deref(), step.as_deref(), limit).await,
+            CiAction::Compare { a, b, g } => {
+                commands::ci_compare::compare(&g, &a, &b).await
+            }
+            CiAction::Vars { action } => match action {
+                CiVarsAction::List { g } => commands::ci_vars::list(&g).await,
+                CiVarsAction::Set { key, value, secured, g } => {
+                    commands::ci_vars::set(&g, &key, &value, secured).await
+                }
+                CiVarsAction::Delete { key, g } => {
+                    commands::ci_vars::delete(&g, &key).await
+                }
+            }
         },
         Some(Command::Repo { action }) => match action {
             RepoAction::Info { g } => commands::repo::info(&g).await,
@@ -658,6 +1210,25 @@ async fn dispatch(cli: Cli) -> Result<()> {
             RepoAction::Tags { limit, g } => commands::repo::list_tags(&g, limit).await,
             RepoAction::Commits { branch, limit, g } => {
                 commands::repo::list_commits(&g, branch.as_deref(), limit).await
+            }
+            RepoAction::Create {
+                slug,
+                private,
+                description,
+                language,
+                g,
+            } => {
+                commands::repo::create(
+                    &g,
+                    &slug,
+                    private,
+                    description.as_deref(),
+                    language.as_deref(),
+                )
+                .await
+            }
+            RepoAction::Audit { slug, g } => {
+                commands::audit::run_audit(&g, slug.as_deref()).await
             }
         },
         Some(Command::Commit { action }) => match action {
@@ -686,16 +1257,162 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 }
             },
         },
+        Some(Command::Batch { action }) => match action {
+            BatchAction::MergeApproved { repo, dry_run, strategy, yes } => {
+                commands::batch::merge_approved(&cli.global, repo.as_deref(), dry_run, strategy.as_deref(), yes).await
+            }
+            BatchAction::RerunFailed { branch, repo, dry_run, yes } => {
+                commands::batch::rerun_failed(&cli.global, branch.as_deref(), repo.as_deref(), dry_run, yes).await
+            }
+            BatchAction::CleanupMergedBranches { repo, remote, dry_run, yes } => {
+                commands::batch::cleanup_merged_branches(&cli.global, repo.as_deref(), remote, dry_run, yes).await
+            }
+        },
         Some(Command::Open { action, g }) => commands::open::run(&g, action).await,
         Some(Command::Auth { action }) => match action {
-            AuthAction::Setup => commands::auth::setup(),
+            AuthAction::Setup { username, token } => commands::auth::setup(username, token),
             AuthAction::Status { g } => commands::auth::status(&g).await,
             AuthAction::Logout { g } => commands::auth::logout(&g),
             AuthAction::Test { g } => commands::auth::test(&g).await,
         },
-        Some(Command::Completion { shell }) => {
-            generate(shell, &mut Cli::command(), "bbr", &mut io::stdout());
+        Some(Command::Completion { shell, install }) => {
+            if install {
+                commands::completion::install(shell)?;
+            } else {
+                let shell = shell.unwrap_or(Shell::Bash);
+                generate(shell, &mut Cli::command(), "bbr", &mut io::stdout());
+            }
             Ok(())
+        }
+        Some(Command::Config { action }) => commands::config::run(action),
+        Some(Command::Api {
+            method,
+            path,
+            data,
+            paginate,
+            g,
+        }) => commands::api::run(&g, &method, &path, data.as_deref(), paginate).await,
+        Some(Command::Webhook { action }) => match action {
+            WebhookAction::List { g } => commands::webhook::list(&g).await,
+            WebhookAction::View { uid, g } => commands::webhook::view(&g, &uid).await,
+            WebhookAction::Create {
+                url,
+                events,
+                description,
+                active,
+                secret,
+                g,
+            } => {
+                commands::webhook::create(
+                    &g,
+                    &url,
+                    &events,
+                    description.as_deref(),
+                    active,
+                    secret.as_deref(),
+                )
+                .await
+            }
+            WebhookAction::Update {
+                uid,
+                url,
+                events,
+                description,
+                active,
+                g,
+            } => {
+                commands::webhook::update(
+                    &g,
+                    &uid,
+                    url.as_deref(),
+                    events.as_deref(),
+                    description.as_deref(),
+                    active,
+                )
+                .await
+            }
+            WebhookAction::Delete { uid, yes, g } => {
+                commands::webhook::delete(&g, &uid, yes).await
+            }
+        },
+        Some(Command::Src { action }) => match action {
+            SrcAction::Cat { path, git_ref, g } => {
+                commands::src_cmd::cat(&g, &path, git_ref.as_deref()).await
+            }
+            SrcAction::Ls { path, git_ref, g } => {
+                commands::src_cmd::ls(&g, path.as_deref(), git_ref.as_deref()).await
+            }
+        },
+        Some(Command::Deploy { action }) => match action {
+            DeployAction::List { limit, g } => {
+                commands::deploy::list_deployments(&g, limit).await
+            }
+            DeployAction::Env { action } => match action {
+                DeployEnvAction::List { g } => {
+                    commands::deploy::list_environments(&g).await
+                }
+                DeployEnvAction::Vars { action } => match action {
+                    DeployEnvVarsAction::List { env_uuid, g } => {
+                        commands::deploy::list_env_vars(&g, &env_uuid).await
+                    }
+                    DeployEnvVarsAction::Set { env_uuid, key, value, secured, g } => {
+                        commands::deploy::set_env_var(&g, &env_uuid, &key, &value, secured).await
+                    }
+                    DeployEnvVarsAction::Delete { env_uuid, key, g } => {
+                        commands::deploy::delete_env_var(&g, &env_uuid, &key).await
+                    }
+                }
+            }
+        },
+        Some(Command::Issue { action }) => match action {
+            IssueAction::List { limit, status, kind, priority, assignee, query, g } => {
+                commands::issue::list(
+                    &g,
+                    limit,
+                    status.as_deref(),
+                    kind.as_deref(),
+                    priority.as_deref(),
+                    assignee.as_deref(),
+                    query.as_deref(),
+                )
+                .await
+            }
+            IssueAction::View { id, comments, g } => {
+                commands::issue::view(&g, id, comments).await
+            }
+            IssueAction::Create { title, body, kind, priority, assignee, g } => {
+                commands::issue::create(
+                    &g,
+                    &title,
+                    &body,
+                    &kind,
+                    &priority,
+                    assignee.as_deref(),
+                )
+                .await
+            }
+            IssueAction::Update { id, title, body, status, kind, priority, assignee, g } => {
+                commands::issue::update(
+                    &g,
+                    id,
+                    title.as_deref(),
+                    body.as_deref(),
+                    status.as_deref(),
+                    kind.as_deref(),
+                    priority.as_deref(),
+                    assignee.as_deref(),
+                )
+                .await
+            }
+            IssueAction::Comment { id, body, g } => {
+                commands::issue::comment(&g, id, &body).await
+            }
+            IssueAction::Comments { id, limit, g } => {
+                commands::issue::list_comments(&g, id, limit).await
+            }
+        },
+        Some(Command::Schema { model, g }) => {
+            commands::schema::run(&g, model.as_deref()).await
         }
     }
 }
@@ -707,7 +1424,6 @@ fn init_tracing(verbose: u8) {
         _ => "debug",
     };
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
-    // Only emit logs to stderr; stdout is reserved for data.
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
@@ -715,5 +1431,4 @@ fn init_tracing(verbose: u8) {
         .init();
 }
 
-// Re-export so command modules can construct a `--json` formatter easily.
 pub use crate::output::Formatter;

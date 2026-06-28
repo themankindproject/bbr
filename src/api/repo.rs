@@ -1,6 +1,7 @@
 //! Repository metadata endpoints.
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use super::BitbucketClient;
 use crate::error::Result;
@@ -153,7 +154,99 @@ impl BitbucketClient {
     pub async fn current_user(&self) -> Result<super::pr::User> {
         self.send(reqwest::Method::GET, "/user", None).await
     }
+
+    /// `POST /repositories/{workspace}/{slug}` — create a new repository.
+    pub async fn create_repo(
+        &self,
+        workspace: &str,
+        slug: &str,
+        is_private: bool,
+        description: Option<&str>,
+        language: Option<&str>,
+    ) -> Result<Repository> {
+        let path = format!("/repositories/{workspace}/{slug}");
+        let mut body = json!({
+            "scm": "git",
+            "is_private": is_private,
+        });
+        if let Some(d) = description {
+            body["description"] = json!(d);
+        }
+        if let Some(l) = language {
+            body["language"] = json!(l);
+        }
+        let raw = serde_json::to_string(&body)?;
+        self.send(reqwest::Method::POST, &path, Some(&raw)).await
+    }
+
+    /// `DELETE /repositories/{ws}/{slug}/refs/branches/{name}` — delete a remote branch.
+    pub async fn delete_branch(&self, workspace: &str, slug: &str, name: &str) -> Result<()> {
+        let encoded = super::pr::url_encode(name);
+        let path = format!("/repositories/{workspace}/{slug}/refs/branches/{encoded}");
+        let _: serde_json::Value = self.send(reqwest::Method::DELETE, &path, None).await?;
+        Ok(())
+    }
+
+    /// `GET /repositories/{workspace}` — list repositories in a workspace.
+    pub async fn list_repos(&self, workspace: &str, limit: u32) -> Result<Vec<Repository>> {
+        let pagelen = limit.min(100);
+        let path = format!("/repositories/{workspace}?pagelen={pagelen}&sort=-updated_on");
+        if limit > 100 {
+            self.fetch_all_pages(&path, limit as usize).await
+        } else {
+            let page: super::Paginated<Repository> =
+                self.send(reqwest::Method::GET, &path, None).await?;
+            Ok(page.values)
+        }
+    }
+
+    /// `GET /repositories/{ws}/{slug}/branch-restrictions` — list branch restrictions.
+    pub async fn list_branch_restrictions(
+        &self,
+        workspace: &str,
+        slug: &str,
+    ) -> Result<Vec<BranchRestriction>> {
+        let path = format!("/repositories/{workspace}/{slug}/branch-restrictions?pagelen=100");
+        let page: super::Paginated<BranchRestriction> =
+            self.send(reqwest::Method::GET, &path, None).await?;
+        Ok(page.values)
+    }
+
+    /// `GET /repositories/{ws}/{slug}/default-reviewers` — list default reviewers.
+    pub async fn list_default_reviewers(
+        &self,
+        workspace: &str,
+        slug: &str,
+    ) -> Result<Vec<DefaultReviewer>> {
+        let path = format!("/repositories/{workspace}/{slug}/default-reviewers");
+        let page: super::Paginated<DefaultReviewer> =
+            self.send(reqwest::Method::GET, &path, None).await?;
+        Ok(page.values)
+    }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BranchRestriction {
+    #[serde(default)]
+    pub id: u64,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub value: Option<serde_json::Value>,
+    #[serde(default)]
+    pub branch_match_kind: String,
+    #[serde(default)]
+    pub pattern: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DefaultReviewer {
+    #[serde(default)]
+    pub id: u64,
+    #[serde(default)]
+    pub user: Option<super::pr::User>,
+}
+
 
 #[cfg(test)]
 mod tests {

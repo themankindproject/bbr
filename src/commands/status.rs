@@ -5,7 +5,7 @@ use serde::Serialize;
 use crate::api::pipeline::{Pipeline, PipelineStep, StepSummary};
 use crate::api::pr::{Participant, PrState, PullRequest};
 use crate::cli::GlobalArgs;
-use crate::commands::{client, current_head, current_repo, human_duration, truncate};
+use crate::commands::{client, current_head, human_duration, resolve_repo, truncate};
 use crate::error::Result;
 use crate::output::table::Table;
 use crate::output::theme::Theme;
@@ -156,7 +156,7 @@ pub async fn run_short(g: &GlobalArgs) -> Result<()> {
 }
 
 pub async fn run_overview(g: &GlobalArgs) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let head = current_head()?;
     let client = client(g)?;
 
@@ -239,8 +239,8 @@ pub async fn run_overview(g: &GlobalArgs) -> Result<()> {
     fmt.print(&out, &human)
 }
 
-async fn run_inner(g: &GlobalArgs) -> Result<StatusOut> {
-    let repo = current_repo()?;
+pub async fn run_inner(g: &GlobalArgs) -> Result<StatusOut> {
+    let repo = resolve_repo(g)?;
     let head = current_head()?;
     let client = client(g)?;
 

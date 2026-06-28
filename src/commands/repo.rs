@@ -3,7 +3,7 @@
 use serde::Serialize;
 
 use crate::cli::GlobalArgs;
-use crate::commands::{client, current_repo, make_spinner, truncate};
+use crate::commands::{client, make_spinner, resolve_repo, truncate};
 use crate::error::Result;
 use crate::output::table::Table;
 use crate::output::Formatter;
@@ -41,7 +41,7 @@ pub struct CommitOut {
 }
 
 pub async fn info(g: &GlobalArgs) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
     let info = client.get_repo(&repo.workspace, &repo.slug).await?;
 
@@ -74,7 +74,7 @@ pub async fn info(g: &GlobalArgs) -> Result<()> {
 }
 
 pub async fn list_branches(g: &GlobalArgs, limit: u32) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
 
     let spinner = make_spinner(g.json);
@@ -101,7 +101,7 @@ pub async fn list_branches(g: &GlobalArgs, limit: u32) -> Result<()> {
 }
 
 pub async fn list_tags(g: &GlobalArgs, limit: u32) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
 
     let spinner = make_spinner(g.json);
@@ -135,7 +135,7 @@ pub async fn list_tags(g: &GlobalArgs, limit: u32) -> Result<()> {
 }
 
 pub async fn list_commits(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> Result<()> {
-    let repo = current_repo()?;
+    let repo = resolve_repo(g)?;
     let client = client(g)?;
 
     let spinner = make_spinner(g.json);
@@ -164,6 +164,47 @@ pub async fn list_commits(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> R
     }
     let human = table.render();
     fmt.print(&commits, &human)
+}
+
+pub async fn create(
+    g: &GlobalArgs,
+    slug: &str,
+    is_private: bool,
+    description: Option<&str>,
+    language: Option<&str>,
+) -> Result<()> {
+    let ws = resolve_repo(g)?.workspace;
+    let client = client(g)?;
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Creating repository...");
+    let repo = client
+        .create_repo(&ws, slug, is_private, description, language)
+        .await?;
+    spinner.finish_and_clear();
+
+    let out = RepoInfoOut {
+        workspace: ws,
+        slug: slug.to_string(),
+        full_name: repo.full_name,
+        scm: repo.scm,
+        private: repo.is_private,
+        language: repo.language,
+        description: repo.description,
+        web_url: repo.links.html.href,
+    };
+
+    let fmt = Formatter::from_json_flag(g.json);
+    let human = format!(
+        "Created repository {}/{} ({})\nprivate: {}\nlanguage: {}\nurl:       {}",
+        out.workspace,
+        out.slug,
+        out.scm,
+        out.private,
+        out.language,
+        out.web_url.as_deref().unwrap_or("-"),
+    );
+    fmt.print(&out, &human)
 }
 
 fn first_line(s: &str) -> String {

@@ -1,12 +1,27 @@
 //! Subcommand implementations.
 
+pub mod api;
+pub mod audit;
 pub mod auth;
+pub mod batch;
 pub mod ci;
+pub mod ci_compare;
+pub mod ci_vars;
 pub mod commit;
+pub mod completion;
+pub mod config;
+pub mod dashboard;
+pub mod deploy;
+pub mod export;
+pub mod issue;
 pub mod open;
 pub mod pr;
 pub mod repo;
+pub mod schema;
+pub mod src_cmd;
+pub mod stack;
 pub mod status;
+pub mod webhook;
 
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -27,6 +42,18 @@ pub fn client(g: &GlobalArgs) -> Result<BitbucketClient> {
 
 static CACHED_REPO: OnceLock<RepoIdentity> = OnceLock::new();
 static CACHED_HEAD: OnceLock<Head> = OnceLock::new();
+
+/// Detect the current repo identity respecting `--workspace` override.
+pub fn resolve_repo(g: &GlobalArgs) -> Result<RepoIdentity> {
+    if let Some(ws) = &g.workspace {
+        let slug = current_repo()?.slug;
+        return Ok(RepoIdentity {
+            workspace: ws.clone(),
+            slug,
+        });
+    }
+    current_repo()
+}
 
 /// Detect the current repo identity from git (cached per process).
 pub fn current_repo() -> Result<RepoIdentity> {
