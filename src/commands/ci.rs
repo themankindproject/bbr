@@ -10,6 +10,7 @@ use crate::api::BitbucketClient;
 use crate::cli::GlobalArgs;
 use crate::commands::{client, confirm, current_head, current_repo, human_duration, make_spinner};
 use crate::error::{BitbucketError, Result};
+use crate::output::table::Table;
 use crate::output::theme::Theme;
 use crate::output::Formatter;
 
@@ -108,31 +109,32 @@ pub async fn list(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> Result<()
     let theme = Theme::current();
     let mut human = format!("Branch: {}\n", theme.bold(&branch));
     human.push_str(&format!("{}\n", theme.separator()));
+    let mut table = Table::new().headers(["#", "State", "Step", "Duration"]);
     for p in &pips {
-        let max_width = p
-            .steps
-            .iter()
-            .map(|s| s.name.chars().count())
-            .max()
-            .unwrap_or(0)
-            .max(18);
-        human.push_str(&format!(
-            "  {}  #{}  {}  ({})\n",
-            theme.status_glyph(&p.state),
-            p.build_number,
-            p.state,
-            human_duration(p.duration_seconds),
-        ));
+        let state_label = match p.state.to_ascii_uppercase().as_str() {
+            "SUCCESSFUL" => theme.success(&p.state),
+            "FAILED" => theme.error(&p.state),
+            "IN_PROGRESS" | "PENDING" => theme.warn(&p.state),
+            _ => theme.dim(&p.state),
+        };
+        if p.steps.is_empty() {
+            table = table.add_row([
+                format!("#{}", p.build_number),
+                state_label.to_string(),
+                theme.dim("-").into_owned(),
+                human_duration(p.duration_seconds),
+            ]);
+        }
         for s in &p.steps {
-            human.push_str(&format!(
-                "    {} {:<width$}  {}\n",
-                theme.status_glyph(&s.state),
-                s.name,
+            table = table.add_row([
+                format!("#{}", p.build_number),
+                state_label.to_string(),
+                format!("{} {}", theme.status_glyph(&s.state), theme.bold(&s.name),),
                 human_duration(s.duration_seconds),
-                width = max_width
-            ));
+            ]);
         }
     }
+    human.push_str(&table.render());
     let out = CiListOut {
         branch,
         pipelines: pips,
