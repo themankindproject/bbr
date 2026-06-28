@@ -1,12 +1,13 @@
-//! `bb status` — PR + CI for the current branch (the killer feature).
+//! `bb status` / `bb` — PR + CI for the current branch, or repo overview.
 
 use serde::Serialize;
 
 use crate::api::pipeline::{Pipeline, PipelineStep};
-use crate::api::pr::{Participant, PullRequest};
+use crate::api::pr::{Participant, PrState, PullRequest};
 use crate::cli::GlobalArgs;
-use crate::commands::{client, current_head, current_repo, human_duration};
+use crate::commands::{client, current_head, current_repo, human_duration, truncate};
 use crate::error::Result;
+use crate::output::table::Table;
 use crate::output::theme::Theme;
 use crate::output::Formatter;
 
@@ -31,14 +32,14 @@ pub struct StatusOut {
     pub suggested_commands: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RepoSummary {
     pub workspace: String,
     pub slug: String,
     pub full_name: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PrSummary {
     pub id: u64,
     pub state: String,
@@ -52,13 +53,13 @@ pub struct PrSummary {
     pub reviewers: Vec<ReviewerSummary>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ReviewerSummary {
     pub display_name: String,
     pub approved: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PipelineSummary {
     pub uuid: String,
     pub state: String,
@@ -78,6 +79,43 @@ pub struct StepSummary {
     pub duration_seconds: u64,
 }
 
+#[derive(Debug, Serialize)]
+pub struct PrListEntry {
+    pub id: u64,
+    pub state: String,
+    pub title: String,
+    pub source: String,
+    pub destination: String,
+    pub author: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CiListEntry {
+    pub build_number: u64,
+    pub state: String,
+    pub branch: Option<String>,
+    pub duration_seconds: u64,
+    pub commit: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OverviewOut {
+    pub repo: RepoSummary,
+    pub branch: String,
+    pub commit: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr: Option<PrSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pipeline: Option<PipelineSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_prs: Vec<PrListEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_ci: Vec<CiListEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commit_statuses: Vec<BuildStatusSummary>,
+    pub suggested_commands: Vec<String>,
+}
+
 pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
     let theme = Theme::current();
     loop {
@@ -86,8 +124,8 @@ pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
         match result {
             Ok(out) => {
                 let human = render_human(&out);
-                // Clear previous output (ANSI escape: cursor up + clear)
-                eprint!("\x1B[2J\x1B[H");
+                // Clear previous output — preserve scrollback buffer
+                eprint!("\x1B[H\x1B[J");
                 eprint!(
                     "{} (refreshing every {interval_secs}s — Ctrl+C to stop)\n\n",
                     theme.bold("bb status --watch")
@@ -115,6 +153,82 @@ pub async fn run(g: &GlobalArgs) -> Result<()> {
     let out = run_inner(g).await?;
     let fmt = Formatter::from_json_flag(g.json);
     let human = render_human(&out);
+    fmt.print(&out, &human)
+}
+
+pub async fn run_overview(g: &GlobalArgs) -> Result<()> {
+    let repo = current_repo()?;
+    let head = current_head()?;
+    let client = client(g)?;
+
+    let (pr, pipeline, commit_statuses_page, recent_prs, recent_ci) = tokio::try_join!(
+        client.pr_for_branch(&repo.workspace, &repo.slug, &head.branch),
+        client.latest_pipeline(&repo.workspace, &repo.slug, Some(&head.branch)),
+        client.commit_statuses(&repo.workspace, &repo.slug, &head.commit),
+        client.list_prs(&repo.workspace, &repo.slug, PrState::Open, 5, None, None),
+        client.list_pipelines(&repo.workspace, &repo.slug, None, 5),
+    )?;
+
+    let raw_steps = match &pipeline {
+        Some(p) => client
+            .list_steps(&repo.workspace, &repo.slug, &p.uuid)
+            .await
+            .map(|page| page.values)
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
+
+    let pr_summary = pr.as_ref().map(pr_summary);
+    let pipeline_summary = pipeline.as_ref().map(|p| pipeline_summary(p, &raw_steps));
+
+    let commit_statuses: Vec<BuildStatusSummary> = commit_statuses_page
+        .values
+        .iter()
+        .map(|s| BuildStatusSummary {
+            state: s.state.clone(),
+            key: s.key.clone(),
+            url: s.url.clone(),
+        })
+        .collect();
+    let suggested = suggested_commands(&pr_summary, &pipeline_summary);
+
+    let out = OverviewOut {
+        repo: RepoSummary {
+            workspace: repo.workspace.clone(),
+            slug: repo.slug.clone(),
+            full_name: format!("{}/{}", repo.workspace, repo.slug),
+        },
+        branch: head.branch.clone(),
+        commit: head.commit.clone(),
+        pr: pr_summary,
+        pipeline: pipeline_summary,
+        commit_statuses,
+        recent_prs: recent_prs
+            .into_iter()
+            .map(|p| PrListEntry {
+                id: p.id,
+                state: p.state.clone(),
+                title: p.title.clone(),
+                source: p.source_branch().to_string(),
+                destination: p.destination_branch().to_string(),
+                author: p.author.map(|a| a.display_name),
+            })
+            .collect(),
+        recent_ci: recent_ci
+            .into_iter()
+            .map(|c| CiListEntry {
+                build_number: c.build_number,
+                state: c.state_name().to_string(),
+                branch: c.target.ref_name,
+                duration_seconds: c.duration_in_seconds,
+                commit: c.target.commit.as_ref().map(|cc| cc.hash.clone()),
+            })
+            .collect(),
+        suggested_commands: suggested,
+    };
+
+    let fmt = Formatter::from_json_flag(g.json);
+    let human = render_overview_human(&out);
     fmt.print(&out, &human)
 }
 
@@ -374,6 +488,187 @@ fn render_human(out: &StatusOut) -> String {
             "\n  {} CI: none\n",
             theme.dim("(no pipeline for this branch)")
         )),
+    }
+
+    if !out.commit_statuses.is_empty() {
+        s.push_str(&format!("\n{} Build Statuses\n", theme.bullet()));
+        s.push_str(&format!("{}\n", theme.separator()));
+        for cs in &out.commit_statuses {
+            let (glyph, colored) = match cs.state.to_ascii_uppercase().as_str() {
+                "SUCCESSFUL" => ("[ok]", theme.success(&cs.state)),
+                "FAILED" => ("[X]", theme.error(&cs.state)),
+                "INPROGRESS" => ("[~]", theme.warn(&cs.state)),
+                _ => ("[?]", theme.dim(&cs.state)),
+            };
+            s.push_str(&format!("  {} {}  {}\n", glyph, colored, cs.key));
+        }
+    }
+
+    if !out.suggested_commands.is_empty() {
+        s.push_str(&format!("\n{}\n", theme.label("Next:")));
+        for cmd in &out.suggested_commands {
+            s.push_str(&format!("  {cmd}\n"));
+        }
+    }
+
+    s
+}
+
+fn render_overview_human(out: &OverviewOut) -> String {
+    let theme = Theme::current();
+    let mut s = String::new();
+    s.push_str(&format!("{}\n", theme.bold(&out.repo.full_name)));
+    s.push_str(&format!(
+        "Branch: {}  Commit: {}\n",
+        theme.bold(&out.branch),
+        out.commit
+    ));
+    s.push_str(&format!("{}\n", theme.separator()));
+
+    match &out.pr {
+        Some(pr) => {
+            s.push_str(&format!(
+                "\n{} PR #{} — {}\n",
+                theme.bullet(),
+                pr.id,
+                pr.state.to_lowercase()
+            ));
+            s.push_str(&format!("{}\n", theme.separator()));
+            s.push_str(&format!(
+                "  {} {} → {}\n",
+                theme.label("Branches:"),
+                pr.source,
+                pr.destination
+            ));
+            s.push_str(&format!("  {}{}\n", theme.label("Title:"), pr.title));
+            if let Some(a) = &pr.author {
+                s.push_str(&format!("  {}{a}\n", theme.label("Author:")));
+            }
+            if !pr.reviewers.is_empty() {
+                let reviewers = pr
+                    .reviewers
+                    .iter()
+                    .map(|r| {
+                        format!(
+                            "{}{}",
+                            r.display_name,
+                            if r.approved { " (approved)" } else { "" }
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                s.push_str(&format!("  {}{reviewers}\n", theme.label("Reviewers:")));
+            }
+            s.push_str(&format!(
+                "  {} {}  |  {} {}\n",
+                theme.label("Comments:"),
+                pr.comment_count,
+                theme.label("Tasks:"),
+                pr.task_count
+            ));
+            if let Some(u) = &pr.url {
+                s.push_str(&format!("  {}{u}\n", theme.label("URL:")));
+            }
+        }
+        None => s.push_str(&format!(
+            "\n  {} PR: none\n",
+            theme.dim("(no open PR for this branch)")
+        )),
+    }
+
+    match &out.pipeline {
+        Some(p) => {
+            let dur_str = human_duration(p.duration_seconds);
+            s.push_str(&format!("\n{} Pipeline\n", theme.bullet(),));
+            s.push_str(&format!("{}\n", theme.separator()));
+            s.push_str(&format!(
+                "  {}  {}  ({dur_str})\n",
+                theme.status_glyph(&p.state),
+                p.state,
+            ));
+            if let Some(b) = &p.branch {
+                s.push_str(&format!("  {}{b}\n", theme.label("Branch:")));
+            }
+            s.push_str(&format!(
+                "  {}{}\n",
+                theme.label("Commit:"),
+                p.commit.as_deref().unwrap_or("-")
+            ));
+            if !p.failing_steps.is_empty() {
+                s.push_str(&format!(
+                    "  {}{}\n",
+                    theme.label("Failing:"),
+                    p.failing_steps.join(", ")
+                ));
+            }
+            if let Some(u) = &p.url {
+                s.push_str(&format!("  {}{u}\n", theme.label("URL:")));
+            }
+            if !p.steps.is_empty() {
+                let max_width = p
+                    .steps
+                    .iter()
+                    .map(|s| s.name.chars().count())
+                    .max()
+                    .unwrap_or(0)
+                    .max(18);
+                s.push_str(&format!("  {}\n", theme.label("Steps:")));
+                for st in &p.steps {
+                    s.push_str(&format!(
+                        "    {} {:<width$}  {}\n",
+                        theme.status_glyph(&st.state),
+                        st.name,
+                        human_duration(st.duration_seconds),
+                        width = max_width
+                    ));
+                }
+            }
+        }
+        None => s.push_str(&format!(
+            "\n  {} CI: none\n",
+            theme.dim("(no pipeline for this branch)")
+        )),
+    }
+
+    if !out.recent_prs.is_empty() {
+        s.push_str(&format!("\n{} Recent PRs\n", theme.bullet()));
+        let mut table =
+            Table::new().headers(["ID", "State", "Title", "Source -> Destination", "Author"]);
+        for pr in &out.recent_prs {
+            let state = match pr.state.to_ascii_uppercase().as_str() {
+                "OPEN" => theme.bold(&pr.state),
+                "MERGED" => theme.success(&pr.state),
+                _ => theme.dim(&pr.state),
+            };
+            table = table.add_row([
+                pr.id.to_string(),
+                state.into_owned(),
+                truncate(&pr.title, 55),
+                truncate(&format!("{} -> {}", pr.source, pr.destination), 45),
+                pr.author.clone().unwrap_or_else(|| "-".into()),
+            ]);
+        }
+        s.push_str(&table.render());
+    }
+
+    if !out.recent_ci.is_empty() {
+        s.push_str(&format!("\n{} Recent CI\n", theme.bullet()));
+        let mut table = Table::new().headers(["#", "State", "Branch", "Duration"]);
+        for ci in &out.recent_ci {
+            let state = match ci.state.to_ascii_uppercase().as_str() {
+                "SUCCESSFUL" => theme.success(&ci.state),
+                "FAILED" => theme.error(&ci.state),
+                "INPROGRESS" => theme.warn(&ci.state),
+                _ => theme.dim(&ci.state),
+            };
+            table = table.add_row([
+                format!("#{}", ci.build_number),
+                state.into_owned(),
+                ci.branch.as_deref().unwrap_or("-").to_string(),
+                human_duration(ci.duration_seconds),
+            ]);
+        }
+        s.push_str(&table.render());
     }
 
     if !out.commit_statuses.is_empty() {

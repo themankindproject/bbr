@@ -5,7 +5,7 @@ use std::time::Duration;
 use serde::Serialize;
 use tokio::time;
 
-use crate::api::pipeline::{normalize_uuid, PipelineStep};
+use crate::api::pipeline::{ensure_uuid_braces, normalize_uuid, PipelineStep};
 use crate::api::BitbucketClient;
 use crate::cli::GlobalArgs;
 use crate::commands::{client, confirm, current_head, current_repo, human_duration, make_spinner};
@@ -302,7 +302,7 @@ pub async fn logs(
     let repo = current_repo()?;
     let client = client(g)?;
     let (uuid, smart_default) = match uuid {
-        Some(uuid) => (normalize_uuid(uuid), false),
+        Some(uuid) => (ensure_uuid_braces(uuid), false),
         None => {
             let branch = current_head()?.branch;
             let pipeline = client
@@ -345,7 +345,7 @@ pub async fn steps(g: &GlobalArgs, uuid: Option<&str>) -> Result<()> {
     let repo = current_repo()?;
     let client = client(g)?;
     let uuid = match uuid {
-        Some(u) => normalize_uuid(u),
+        Some(u) => ensure_uuid_braces(u),
         None => {
             let branch = current_head()?.branch;
             client
@@ -401,7 +401,7 @@ pub async fn stop(g: &GlobalArgs, uuid: Option<&str>, branch: Option<&str>) -> R
     let repo = current_repo()?;
     let client = client(g)?;
     let pipeline_uuid = match uuid {
-        Some(u) => normalize_uuid(u),
+        Some(u) => ensure_uuid_braces(u),
         None => {
             let branch = match branch {
                 Some(b) => b.to_string(),

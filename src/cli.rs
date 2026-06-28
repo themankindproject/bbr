@@ -466,7 +466,7 @@ pub async fn run() -> ExitCode {
 
 async fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
-        None => commands::status::run(&cli.global).await,
+        None => commands::status::run_overview(&cli.global).await,
         Some(Command::Status { g, watch, interval }) => {
             if watch {
                 commands::status::run_watch(&g, interval).await

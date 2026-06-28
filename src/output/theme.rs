@@ -84,8 +84,8 @@ impl Theme {
 
     /// Separator line matching the terminal width.
     pub fn separator(&self) -> String {
-        let width = terminal_width().unwrap_or(72);
-        let line = "─".repeat(width.min(72));
+        let width = terminal_width().unwrap_or(80);
+        let line = "─".repeat(width.min(120));
         if self.colors {
             line.dimmed().to_string()
         } else {
@@ -124,21 +124,29 @@ fn matches_ignore_ascii_case(s: &str, values: &[&str]) -> bool {
     values.iter().any(|v| s.eq_ignore_ascii_case(v))
 }
 
-/// Best-effort terminal width via `stty size`.
+/// Best-effort terminal width via `stty size` or `$COLUMNS`.
 fn terminal_width() -> Option<usize> {
     static WIDTH: OnceLock<Option<usize>> = OnceLock::new();
     *WIDTH.get_or_init(|| {
-        use std::process::Command;
-        let output = Command::new("stty").arg("size").output().ok()?;
+        if let Ok(cols) = std::env::var("COLUMNS") {
+            if let Ok(n) = cols.parse::<usize>() {
+                if n > 0 {
+                    return Some(n);
+                }
+            }
+        }
+        let output = std::process::Command::new("stty")
+            .arg("size")
+            .output()
+            .ok()?;
         if !output.status.success() {
             return None;
         }
-        let stdout = String::from_utf8(output.stdout).ok()?;
-        let fields: Vec<&str> = stdout.split_whitespace().collect();
-        if fields.len() < 2 {
-            return None;
-        }
-        fields[1].parse::<usize>().ok()
+        let fields: Vec<&str> = std::str::from_utf8(&output.stdout)
+            .ok()?
+            .split_whitespace()
+            .collect();
+        fields.get(1)?.parse::<usize>().ok()
     })
 }
 

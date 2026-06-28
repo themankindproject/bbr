@@ -101,16 +101,14 @@ async fn ci_url(g: &GlobalArgs, branch: Option<&str>) -> Result<(String, String)
 }
 
 fn open_url(url: &str) -> Result<bool> {
-    let status = opener_command(url)
-        .status()
-        .map_err(|e| BitbucketError::Other(format!("opening browser: {e}")))?;
-    if status.success() {
-        Ok(true)
-    } else {
-        Err(BitbucketError::Other(format!(
-            "browser opener exited with {status}"
-        )))
-    }
+    let status = match opener_command(url).status() {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::debug!("failed to launch browser opener: {e}");
+            return Ok(false);
+        }
+    };
+    Ok(status.success())
 }
 
 #[cfg(target_os = "macos")]

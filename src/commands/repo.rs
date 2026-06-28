@@ -80,13 +80,12 @@ pub async fn list_branches(g: &GlobalArgs, limit: u32) -> Result<()> {
 
     let spinner = make_spinner(g.json);
     spinner.set_message("Fetching branches...");
-    let page = client
+    let values = client
         .list_branches(&repo.workspace, &repo.slug, limit)
         .await?;
     spinner.finish_and_clear();
 
-    let branches: Vec<BranchOut> = page
-        .values
+    let branches: Vec<BranchOut> = values
         .iter()
         .map(|b| BranchOut {
             name: b.name.clone(),
@@ -108,11 +107,10 @@ pub async fn list_tags(g: &GlobalArgs, limit: u32) -> Result<()> {
 
     let spinner = make_spinner(g.json);
     spinner.set_message("Fetching tags...");
-    let page = client.list_tags(&repo.workspace, &repo.slug, limit).await?;
+    let values = client.list_tags(&repo.workspace, &repo.slug, limit).await?;
     spinner.finish_and_clear();
 
-    let tags: Vec<TagOut> = page
-        .values
+    let tags: Vec<TagOut> = values
         .iter()
         .map(|t| TagOut {
             name: t.name.clone(),

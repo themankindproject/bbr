@@ -32,10 +32,10 @@ async fn lists_repository_tags() {
 
     let c = client(&server.uri()).await;
     let tags = c.list_tags("sdadev", "bvrm", 20).await.unwrap();
-    assert_eq!(tags.values.len(), 1);
-    assert_eq!(tags.values[0].name, "v1.0.0");
+    assert_eq!(tags.len(), 1);
+    assert_eq!(tags[0].name, "v1.0.0");
     assert_eq!(
-        tags.values[0].target.as_ref().map(|t| t.hash.as_str()),
+        tags[0].target.as_ref().map(|t| t.hash.as_str()),
         Some("abc123")
     );
 }

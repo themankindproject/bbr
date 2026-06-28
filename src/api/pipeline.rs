@@ -157,11 +157,22 @@ pub struct StepLog {
     pub text: String,
 }
 
+/// Strip braces for comparison (use in `select_step`).
 pub fn normalize_uuid(s: &str) -> String {
     s.trim()
         .trim_start_matches('{')
         .trim_end_matches('}')
         .to_string()
+}
+
+/// Ensure braces are present for API URLs (Bitbucket requires `%7B`/`%7D`).
+pub fn ensure_uuid_braces(s: &str) -> String {
+    let trimmed = s.trim();
+    if !trimmed.starts_with('{') && !trimmed.ends_with('}') {
+        format!("{{{trimmed}}}")
+    } else {
+        trimmed.to_string()
+    }
 }
 
 impl BitbucketClient {

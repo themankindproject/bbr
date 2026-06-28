@@ -26,7 +26,7 @@ pub struct AuthStatusOut {
 /// Interactive credential setup.
 pub fn setup() -> Result<()> {
     println!("bb auth setup");
-    println!("  Need a Personal Access Token? {PAT_HELP_URL}");
+    println!("  Need an API token? {PAT_HELP_URL}");
     println!("  Required scopes: account:read, repository:read, repository:write,");
     println!("                   pullrequest:read, pullrequest:write, pipeline:read");
     println!();
@@ -121,11 +121,13 @@ pub async fn status(g: &GlobalArgs) -> Result<()> {
             out.source
         )
     } else {
-        let mut msg = "Not authenticated.".to_string();
+        let mut msg = String::new();
         if let Some(err) = &error_msg {
-            msg.push_str(&format!(" {err}"));
+            msg.push_str(err);
+        } else {
+            msg.push_str("Not authenticated.");
         }
-        msg.push_str(" Run `bb auth setup`.");
+        msg.push_str("\nRun `bb auth setup`.");
         msg
     };
     fmt.print(&out, &human)
@@ -165,7 +167,7 @@ pub fn logout(g: &GlobalArgs) -> Result<()> {
 // ---- prompt helpers -------------------------------------------------------
 
 fn prompt(msg: &str) -> Result<String> {
-    let mut out = io::stdout().lock();
+    let mut out = io::stderr().lock();
     out.write_all(msg.as_bytes()).map_err(BitbucketError::Io)?;
     out.flush().map_err(BitbucketError::Io)?;
     let mut line = String::new();

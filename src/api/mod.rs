@@ -224,7 +224,8 @@ struct ApiErrorEnvelope {
 #[derive(Debug, Deserialize)]
 struct ApiErrorDetail {
     message: Option<String>,
-    detail: Option<String>,
+    #[serde(default)]
+    detail: Option<serde_json::Value>,
     #[serde(default)]
     fields: Option<serde_json::Value>,
 }
@@ -237,10 +238,7 @@ pub fn map_error(status: StatusCode, body: &str) -> BitbucketError {
         .and_then(|e| e.error.message.as_deref())
         .unwrap_or("")
         .to_string();
-    let detail = parsed
-        .as_ref()
-        .and_then(|e| e.error.detail.as_deref())
-        .filter(|d| !d.is_empty());
+    let detail = parsed.as_ref().and_then(|e| e.error.detail.as_ref());
     let fields = parsed
         .as_ref()
         .and_then(|e| e.error.fields.as_ref())
@@ -248,10 +246,61 @@ pub fn map_error(status: StatusCode, body: &str) -> BitbucketError {
 
     let mut full = msg;
     if let Some(d) = detail {
-        if !full.is_empty() {
-            full.push_str(". ");
+        match d {
+            serde_json::Value::String(s) if !s.is_empty() => {
+                if !full.is_empty() {
+                    full.push_str(". ");
+                }
+                full.push_str(s);
+            }
+            serde_json::Value::Object(map) => {
+                let required = map.get("required").and_then(|v| v.as_array());
+                let granted = map.get("granted").and_then(|v| v.as_array());
+                if required.is_some() || granted.is_some() {
+                    let mut all: Vec<(&str, &str)> = Vec::new();
+                    if let Some(req) = required {
+                        for s in req.iter().filter_map(|v| v.as_str()) {
+                            all.push((s, "MISSING"));
+                        }
+                    }
+                    if let Some(grant) = granted {
+                        for s in grant.iter().filter_map(|v| v.as_str()) {
+                            if !all.iter().any(|(n, _)| *n == s) {
+                                all.push((s, "✓"));
+                            }
+                        }
+                        // mark granted scopes that were required
+                        for s in grant.iter().filter_map(|v| v.as_str()) {
+                            if let Some(entry) = all.iter_mut().find(|(n, _)| *n == s) {
+                                entry.1 = "✓";
+                            }
+                        }
+                    }
+                    if !all.is_empty() {
+                        if !full.is_empty() {
+                            full.push('\n');
+                        }
+                        let max_w = all.iter().map(|(n, _)| n.len()).max().unwrap_or(0).max(5);
+                        full.push_str(&format!("\n  {:<width$}  Status", "Scope", width = max_w));
+                        full.push_str(&format!("\n  {}", "─".repeat(max_w + 8)));
+                        for (name, status) in &all {
+                            full.push_str(&format!(
+                                "\n  {:<width$}  {}",
+                                name,
+                                status,
+                                width = max_w
+                            ));
+                        }
+                    }
+                } else if !map.is_empty() {
+                    if !full.is_empty() {
+                        full.push_str(". ");
+                    }
+                    full.push_str(&serde_json::to_string(map).unwrap_or_default());
+                }
+            }
+            _ => {}
         }
-        full.push_str(d);
     }
     if let Some(f) = fields {
         if !full.is_empty() {

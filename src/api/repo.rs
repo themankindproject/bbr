@@ -93,29 +93,38 @@ impl BitbucketClient {
         self.send(reqwest::Method::GET, &path, None).await
     }
 
-    /// `GET /repositories/{ws}/{slug}/refs/branches?pagelen=N&sort=target.date`
+    /// `GET /repositories/{ws}/{slug}/refs/branches`
     pub async fn list_branches(
         &self,
         workspace: &str,
         slug: &str,
         limit: u32,
-    ) -> Result<super::Paginated<Branch>> {
+    ) -> Result<Vec<Branch>> {
+        let pagelen = limit.min(100);
         let path = format!(
-            "/repositories/{workspace}/{slug}/refs/branches?pagelen={limit}&sort=target.date"
+            "/repositories/{workspace}/{slug}/refs/branches?pagelen={pagelen}&sort=target.date"
         );
-        self.send(reqwest::Method::GET, &path, None).await
+        if limit > 100 {
+            self.fetch_all_pages(&path, limit as usize).await
+        } else {
+            let page: super::Paginated<Branch> =
+                self.send(reqwest::Method::GET, &path, None).await?;
+            Ok(page.values)
+        }
     }
 
-    /// `GET /repositories/{ws}/{slug}/refs/tags?pagelen=N&sort=-target.date`
-    pub async fn list_tags(
-        &self,
-        workspace: &str,
-        slug: &str,
-        limit: u32,
-    ) -> Result<super::Paginated<Tag>> {
-        let path =
-            format!("/repositories/{workspace}/{slug}/refs/tags?pagelen={limit}&sort=-target.date");
-        self.send(reqwest::Method::GET, &path, None).await
+    /// `GET /repositories/{ws}/{slug}/refs/tags`
+    pub async fn list_tags(&self, workspace: &str, slug: &str, limit: u32) -> Result<Vec<Tag>> {
+        let pagelen = limit.min(100);
+        let path = format!(
+            "/repositories/{workspace}/{slug}/refs/tags?pagelen={pagelen}&sort=-target.date"
+        );
+        if limit > 100 {
+            self.fetch_all_pages(&path, limit as usize).await
+        } else {
+            let page: super::Paginated<Tag> = self.send(reqwest::Method::GET, &path, None).await?;
+            Ok(page.values)
+        }
     }
 
     /// `GET /repositories/{ws}/{slug}/commits?pagelen=N&include=branch`

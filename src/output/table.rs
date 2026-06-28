@@ -14,8 +14,7 @@ impl Table {
     pub fn new() -> Self {
         let mut inner = ComfyTable::new();
         inner
-            .load_preset(comfy_table::presets::NOTHING)
-            .set_style(comfy_table::TableComponent::HeaderLines, '─')
+            .load_preset(comfy_table::presets::UTF8_FULL)
             .set_content_arrangement(ContentArrangement::Disabled);
         if !std::io::stdout().is_terminal() {
             inner.force_no_tty();
