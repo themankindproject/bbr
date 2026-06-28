@@ -26,6 +26,13 @@ pub fn config_dir() -> Option<PathBuf> {
     if let Ok(xdg) = xdg::BaseDirectories::with_prefix(APP_NAME) {
         return Some(xdg.get_config_home());
     }
+    #[cfg(not(unix))]
+    if let Ok(val) = std::env::var("XDG_CONFIG_HOME") {
+        let p = PathBuf::from(val);
+        if p.is_absolute() {
+            return Some(p.join(APP_NAME));
+        }
+    }
     dirs::config_dir().map(|d| d.join(APP_NAME))
 }
 
