@@ -134,13 +134,19 @@ impl BitbucketClient {
         slug: &str,
         branch: Option<&str>,
         limit: u32,
-    ) -> Result<super::Paginated<Commit>> {
+    ) -> Result<Vec<Commit>> {
         let pagelen = limit.min(100);
         let mut path = format!("/repositories/{workspace}/{slug}/commits?pagelen={pagelen}");
         if let Some(b) = branch {
             path.push_str(&format!("&include={}", super::pr::url_encode(b)));
         }
-        self.send(reqwest::Method::GET, &path, None).await
+        if limit > 100 {
+            self.fetch_all_pages(&path, limit as usize).await
+        } else {
+            let page: super::Paginated<Commit> =
+                self.send(reqwest::Method::GET, &path, None).await?;
+            Ok(page.values)
+        }
     }
 
     /// `GET /user` — verifies auth and returns the current user.

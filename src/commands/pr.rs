@@ -203,7 +203,12 @@ pub async fn list(
     fmt.print(&out, &human)
 }
 
-pub async fn view(g: &GlobalArgs, id: Option<u64>, show_diff: bool) -> Result<()> {
+pub async fn view(
+    g: &GlobalArgs,
+    id: Option<u64>,
+    show_diff: bool,
+    show_comments: bool,
+) -> Result<()> {
     let repo = current_repo()?;
     let client = client(g)?;
 
@@ -231,6 +236,31 @@ pub async fn view(g: &GlobalArgs, id: Option<u64>, show_diff: bool) -> Result<()
         let diff = client.pr_diff(&repo.workspace, &repo.slug, pr.id).await?;
         spinner.finish_and_clear();
         human.push_str(&format!("\n\n{}", diff));
+    }
+
+    if show_comments {
+        let spinner = make_spinner(g.json);
+        spinner.set_message("Fetching comments...");
+        let comments = client
+            .pr_comments(&repo.workspace, &repo.slug, pr.id, 100)
+            .await?;
+        spinner.finish_and_clear();
+        let comments_out = PrCommentsOut {
+            pr_id: pr.id,
+            comments: comments
+                .into_iter()
+                .map(|c| PrCommentSummary {
+                    id: c.id,
+                    body: c.content.map(|m| m.raw).unwrap_or_default(),
+                    author: c.user.map(|u| u.display_name),
+                    parent_id: c.parent.as_ref().map(|p| p.id),
+                    deleted: c.deleted,
+                    created_on: c.created_on,
+                    updated_on: c.updated_on,
+                })
+                .collect(),
+        };
+        human.push_str(&format!("\n\n{}", render_comments(&comments_out)));
     }
 
     fmt.print_paginated(&out, &human)

@@ -140,21 +140,18 @@ pub async fn list_commits(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> R
 
     let spinner = make_spinner(g.json);
     spinner.set_message("Fetching commits...");
-    let page = client
+    let commits: Vec<CommitOut> = client
         .list_commits(&repo.workspace, &repo.slug, branch, limit)
-        .await?;
-    spinner.finish_and_clear();
-
-    let commits: Vec<CommitOut> = page
-        .values
-        .iter()
+        .await?
+        .into_iter()
         .map(|c| CommitOut {
-            hash: c.hash.clone(),
+            hash: c.hash,
             message: first_line(&c.message),
-            author: c.author.as_ref().map(|a| a.raw.clone()),
-            date: c.date.clone(),
+            author: c.author.map(|a| a.raw),
+            date: c.date,
         })
         .collect();
+    spinner.finish_and_clear();
 
     let fmt = Formatter::from_json_flag(g.json);
     let mut table = Table::new().headers(["Hash", "Date", "Message"]);

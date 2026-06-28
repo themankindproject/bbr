@@ -148,6 +148,13 @@ pub async fn run(g: &GlobalArgs) -> Result<()> {
     fmt.print(&out, &human)
 }
 
+pub async fn run_short(g: &GlobalArgs) -> Result<()> {
+    let out = run_inner(g).await?;
+    let fmt = Formatter::from_json_flag(g.json);
+    let human = render_short(&out);
+    fmt.print(&out, &human)
+}
+
 pub async fn run_overview(g: &GlobalArgs) -> Result<()> {
     let repo = current_repo()?;
     let head = current_head()?;
@@ -363,6 +370,44 @@ fn suggested_commands(pr: &Option<PrSummary>, pipeline: &Option<PipelineSummary>
         None => commands.push("bb ci status".into()),
     }
     commands
+}
+
+fn render_short(out: &StatusOut) -> String {
+    let theme = Theme::current();
+    let pr = match &out.pr {
+        Some(p) => {
+            let state = match p.state.to_ascii_uppercase().as_str() {
+                "OPEN" => theme.bold(&p.state),
+                "MERGED" => theme.success(&p.state),
+                _ => theme.error(&p.state),
+            };
+            format!(
+                "{} {}",
+                theme.bold(&format!("#{}", p.id)),
+                state,
+            )
+        }
+        None => theme.dim("no PR").to_string(),
+    };
+    let ci = match &out.pipeline {
+        Some(p) => {
+            let state = match p.state.to_ascii_uppercase().as_str() {
+                "SUCCESSFUL" => theme.success(&p.state),
+                "FAILED" => theme.error(&p.state),
+                _ => theme.warn(&p.state),
+            };
+            format!("{}  {}", state, human_duration(p.duration_seconds))
+        }
+        None => theme.dim("no CI").to_string(),
+    };
+    format!(
+        "{}  {}  {}  {} | {}",
+        theme.bold(&out.repo.full_name),
+        theme.bold(&out.branch),
+        truncate(&out.commit, 10),
+        pr,
+        ci,
+    )
 }
 
 fn render_human(out: &StatusOut) -> String {

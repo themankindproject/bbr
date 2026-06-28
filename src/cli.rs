@@ -58,6 +58,9 @@ pub enum Command {
         /// Poll interval in seconds (used with --watch).
         #[arg(long, default_value_t = 5)]
         interval: u64,
+        /// Compact single-line output.
+        #[arg(long)]
+        short: bool,
     },
     /// Pull request operations.
     Pr {
@@ -124,6 +127,9 @@ pub enum PrAction {
         /// Show the diff inline.
         #[arg(long)]
         diff: bool,
+        /// Show comments inline.
+        #[arg(long)]
+        comments: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -467,9 +473,16 @@ pub async fn run() -> ExitCode {
 async fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
         None => commands::status::run_overview(&cli.global).await,
-        Some(Command::Status { g, watch, interval }) => {
+        Some(Command::Status {
+            g,
+            watch,
+            interval,
+            short,
+        }) => {
             if watch {
                 commands::status::run_watch(&g, interval).await
+            } else if short {
+                commands::status::run_short(&g).await
             } else {
                 commands::status::run(&g).await
             }
@@ -491,7 +504,12 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 )
                 .await
             }
-            PrAction::View { id, diff, g } => commands::pr::view(&g, id, diff).await,
+            PrAction::View {
+                id,
+                diff,
+                comments,
+                g,
+            } => commands::pr::view(&g, id, diff, comments).await,
             PrAction::Create {
                 title,
                 body,
