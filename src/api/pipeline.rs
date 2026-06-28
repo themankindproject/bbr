@@ -358,3 +358,193 @@ impl BitbucketClient {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pipeline_with_result(result_name: &str) -> Pipeline {
+        Pipeline {
+            uuid: "{uuid}".into(),
+            state: PipelineState {
+                name: "IN_PROGRESS".into(),
+                result: None,
+                stage: None,
+            },
+            result: Some(PipelineResult {
+                name: result_name.into(),
+                type_: None,
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn pipeline_with_state_result(state_result: &str) -> Pipeline {
+        Pipeline {
+            uuid: "{uuid}".into(),
+            state: PipelineState {
+                name: "COMPLETED".into(),
+                result: Some(PipelineResult {
+                    name: state_result.into(),
+                    type_: None,
+                }),
+                stage: Some(Named {
+                    name: "pipeline".into(),
+                }),
+            },
+            result: None,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn pipeline_is_terminal_when_result_is_terminal() {
+        assert!(pipeline_with_result("SUCCESSFUL").is_terminal());
+        assert!(pipeline_with_result("FAILED").is_terminal());
+        assert!(pipeline_with_result("STOPPED").is_terminal());
+        assert!(pipeline_with_result("ERROR").is_terminal());
+    }
+
+    #[test]
+    fn pipeline_is_not_terminal_when_in_progress() {
+        assert!(!pipeline_with_result("IN_PROGRESS").is_terminal());
+    }
+
+    #[test]
+    fn pipeline_state_name_returns_result_name_when_present() {
+        let p = pipeline_with_result("SUCCESSFUL");
+        assert_eq!(p.state_name(), "SUCCESSFUL");
+    }
+
+    #[test]
+    fn pipeline_state_name_falls_back_to_state_name() {
+        let p = Pipeline {
+            uuid: "{u}".into(),
+            state: PipelineState {
+                name: "PENDING".into(),
+                result: None,
+                stage: None,
+            },
+            result: None,
+            ..Default::default()
+        };
+        assert_eq!(p.state_name(), "PENDING");
+    }
+
+    #[test]
+    fn pipeline_state_name_uses_nested_result() {
+        let p = pipeline_with_state_result("FAILED");
+        assert_eq!(p.state_name(), "FAILED");
+    }
+
+    #[test]
+    fn pipeline_step_is_failed_for_failure_states() {
+        for state in &["FAILED", "ERROR", "STOPPED", "failed", "Error", "Stopped"] {
+            let step = PipelineStep {
+                uuid: "{s}".into(),
+                name: "test".into(),
+                state: PipelineState {
+                    name: state.to_string(),
+                    result: None,
+                    stage: None,
+                },
+                ..Default::default()
+            };
+            assert!(step.is_failed(), "expected {state} to be failed");
+        }
+    }
+
+    #[test]
+    fn pipeline_step_is_not_failed_for_success() {
+        let step = PipelineStep {
+            uuid: "{s}".into(),
+            name: "test".into(),
+            state: PipelineState {
+                name: "SUCCESSFUL".into(),
+                result: None,
+                stage: None,
+            },
+            ..Default::default()
+        };
+        assert!(!step.is_failed());
+    }
+
+    #[test]
+    fn step_state_name_uses_result_when_present() {
+        let step = PipelineStep {
+            uuid: "{s}".into(),
+            name: "test".into(),
+            state: PipelineState {
+                name: "COMPLETED".into(),
+                result: Some(PipelineResult {
+                    name: "FAILED".into(),
+                    type_: None,
+                }),
+                stage: None,
+            },
+            ..Default::default()
+        };
+        assert_eq!(step.state_name(), "FAILED");
+    }
+
+    #[test]
+    fn step_state_name_falls_back_to_state() {
+        let step = PipelineStep {
+            uuid: "{s}".into(),
+            name: "test".into(),
+            state: PipelineState {
+                name: "RUNNING".into(),
+                result: None,
+                stage: None,
+            },
+            ..Default::default()
+        };
+        assert_eq!(step.state_name(), "RUNNING");
+    }
+
+    #[test]
+    fn normalize_uuid_strips_braces() {
+        assert_eq!(normalize_uuid("{abc-123}"), "abc-123");
+    }
+
+    #[test]
+    fn normalize_uuid_handles_no_braces() {
+        assert_eq!(normalize_uuid("abc-123"), "abc-123");
+    }
+
+    #[test]
+    fn normalize_uuid_trims_whitespace() {
+        assert_eq!(normalize_uuid("  {abc-123}  "), "abc-123");
+    }
+
+    #[test]
+    fn ensure_uuid_braces_adds_when_missing() {
+        assert_eq!(ensure_uuid_braces("abc-123"), "{abc-123}");
+    }
+
+    #[test]
+    fn ensure_uuid_braces_preserves_existing() {
+        assert_eq!(ensure_uuid_braces("{abc-123}"), "{abc-123}");
+    }
+
+    #[test]
+    fn ensure_uuid_braces_trims_whitespace() {
+        assert_eq!(ensure_uuid_braces("  {abc-123}  "), "{abc-123}");
+    }
+
+    #[test]
+    fn test_report_deserializes() {
+        let json = r#"{"total":10,"successful":8,"failed":1,"skipped":1,"errors":0}"#;
+        let report: TestReport = serde_json::from_str(json).unwrap();
+        assert_eq!(report.total, 10);
+        assert_eq!(report.failed, 1);
+    }
+
+    #[test]
+    fn test_case_deserializes() {
+        let json = r#"{"status":"SUCCESS","test_name":"should work","duration_in_seconds":1.5}"#;
+        let case: TestCase = serde_json::from_str(json).unwrap();
+        assert_eq!(case.status, "SUCCESS");
+        assert_eq!(case.test_name.as_deref(), Some("should work"));
+    }
+}

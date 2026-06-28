@@ -382,11 +382,129 @@ pub(crate) fn base64_encode(input: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reqwest::StatusCode;
 
     #[test]
     fn base64_roundtrip_basic() {
         assert_eq!(base64_encode(b"foo"), "Zm9v");
         assert_eq!(base64_encode(b"bar"), "YmFy");
         assert_eq!(base64_encode(b"a"), "YQ==");
+    }
+
+    #[test]
+    fn url_appends_path_to_base() {
+        let client = BitbucketClient {
+            base_url: "https://api.bitbucket.org/2.0".into(),
+            inner: Client::builder().build().unwrap(),
+            creds: crate::auth::Credentials {
+                username: "u".into(),
+                secret: "s".into(),
+                kind: crate::auth::CredentialKind::Pat,
+            },
+            auth_header: "Bearer s".into(),
+        };
+        assert_eq!(
+            client.url("/repositories/ws/slug"),
+            "https://api.bitbucket.org/2.0/repositories/ws/slug"
+        );
+        assert_eq!(
+            client.url("repositories/ws/slug"),
+            "https://api.bitbucket.org/2.0/repositories/ws/slug"
+        );
+    }
+
+    #[test]
+    fn map_error_auth_failed() {
+        let body = r#"{"error":{"message":"access denied","detail":"invalid credentials"}}"#;
+        let err = map_error(StatusCode::UNAUTHORIZED, body);
+        assert!(matches!(err, BitbucketError::AuthFailed(_)));
+
+        let err = map_error(StatusCode::FORBIDDEN, body);
+        assert!(matches!(err, BitbucketError::AuthFailed(_)));
+    }
+
+    #[test]
+    fn map_error_not_found() {
+        let body = r#"{"error":{"message":"repository not found"}}"#;
+        let err = map_error(StatusCode::NOT_FOUND, body);
+        assert!(matches!(err, BitbucketError::NotFound(_)));
+    }
+
+    #[test]
+    fn map_error_rate_limit() {
+        let body = "rate limit exceeded";
+        let err = map_error(StatusCode::TOO_MANY_REQUESTS, body);
+        assert!(matches!(err, BitbucketError::RateLimit(_)));
+    }
+
+    #[test]
+    fn map_error_other_status() {
+        let body = "internal error";
+        let err = map_error(StatusCode::INTERNAL_SERVER_ERROR, body);
+        assert!(matches!(err, BitbucketError::Other(_)));
+    }
+
+    #[test]
+    fn map_error_includes_scope_table() {
+        let body = r#"{"error":{"message":"insufficient permissions","detail":{"required":["repo:write"],"granted":["repo:read"]}}}"#;
+        let err = map_error(StatusCode::FORBIDDEN, body);
+        let msg = format!("{err}");
+        assert!(msg.contains("repo:write"));
+        assert!(msg.contains("MISSING"));
+        assert!(msg.contains("repo:read"));
+    }
+
+    #[test]
+    fn map_error_falls_back_to_raw_body_when_not_json() {
+        let err = map_error(StatusCode::BAD_REQUEST, "not valid json");
+        let msg = format!("{err}");
+        assert!(msg.contains("not valid json"));
+    }
+
+    #[test]
+    fn strip_base_works() {
+        let result = strip_base(
+            "https://api.bitbucket.org/2.0/repositories/ws/r?page=2",
+            "https://api.bitbucket.org/2.0",
+        )
+        .unwrap();
+        assert_eq!(result, "/repositories/ws/r?page=2");
+    }
+
+    #[test]
+    fn strip_base_errors_on_mismatch() {
+        let err =
+            strip_base("https://other.com/repos", "https://api.bitbucket.org/2.0").unwrap_err();
+        assert!(matches!(err, BitbucketError::Other(_)));
+    }
+
+    #[test]
+    fn one_line_truncates_to_300_chars() {
+        let long = "a".repeat(400);
+        let result = one_line(&long);
+        assert_eq!(result.len(), 300);
+    }
+
+    #[test]
+    fn one_line_replaces_newlines() {
+        assert_eq!(one_line("hello\nworld"), "hello world");
+    }
+
+    #[test]
+    fn paginated_deserializes_basic() {
+        let json = r#"{"values":[{"id":1,"state":"OPEN","title":"Fix","source":{"branch":{"name":"f"}},"destination":{"branch":{"name":"main"}}}],"pagelen":25}"#;
+        let page: Paginated<super::pr::PullRequest> = serde_json::from_str(json).unwrap();
+        assert_eq!(page.values.len(), 1);
+        assert_eq!(page.pagelen, 25);
+        assert!(page.next.is_none());
+    }
+
+    #[test]
+    fn paginated_handles_missing_fields() {
+        let json = r#"{"values":[{"id":1,"state":"OPEN","source":{"branch":{"name":"f"}},"destination":{"branch":{"name":"m"}}}]}"#;
+        let page: Paginated<super::pr::PullRequest> = serde_json::from_str(json).unwrap();
+        assert_eq!(page.values.len(), 1);
+        assert_eq!(page.size, 0);
+        assert_eq!(page.page, 0);
     }
 }

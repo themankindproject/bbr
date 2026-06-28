@@ -728,6 +728,7 @@ fn render_overview_human(out: &OverviewOut) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::pr::Participant;
 
     #[test]
     fn renders_sections_and_separators() {
@@ -813,5 +814,356 @@ mod tests {
         });
         let commands = suggested_commands(&None, &pipeline);
         assert!(commands.contains(&"bb ci logs --failed".into()));
+    }
+
+    #[test]
+    fn suggested_commands_with_pr_uses_open_pr() {
+        let pr = Some(PrSummary {
+            id: 1,
+            state: "OPEN".into(),
+            title: "fix".into(),
+            source: "f".into(),
+            destination: "m".into(),
+            url: None,
+            author: None,
+            comment_count: 0,
+            task_count: 0,
+            reviewers: vec![],
+        });
+        let commands = suggested_commands(&pr, &None);
+        assert!(commands.contains(&"bb open pr".into()));
+        assert!(!commands.contains(&"bb pr create".into()));
+    }
+
+    #[test]
+    fn suggested_commands_without_pr_suggests_create() {
+        let commands = suggested_commands(&None, &None);
+        assert!(commands.contains(&"bb pr create --title \"...\"".into()));
+    }
+
+    #[test]
+    fn suggested_commands_inprogress_pipeline_suggests_watch() {
+        let pipeline = Some(PipelineSummary {
+            uuid: "p".into(),
+            state: "INPROGRESS".into(),
+            duration_seconds: 10,
+            branch: Some("main".into()),
+            commit: None,
+            url: None,
+            failing_steps: vec![],
+            steps: vec![],
+        });
+        let commands = suggested_commands(&None, &pipeline);
+        assert!(commands.contains(&"bb ci watch --logs".into()));
+        assert!(commands.contains(&"bb open ci".into()));
+    }
+
+    #[test]
+    fn suggested_commands_successful_pipeline_suggests_open_ci() {
+        let pipeline = Some(PipelineSummary {
+            uuid: "p".into(),
+            state: "SUCCESSFUL".into(),
+            duration_seconds: 10,
+            branch: Some("main".into()),
+            commit: None,
+            url: None,
+            failing_steps: vec![],
+            steps: vec![],
+        });
+        let commands = suggested_commands(&None, &pipeline);
+        assert!(commands.contains(&"bb open ci".into()));
+    }
+
+    #[test]
+    fn suggested_commands_no_pipeline_suggests_ci_status() {
+        let commands = suggested_commands(&None, &None);
+        assert!(commands.contains(&"bb ci status".into()));
+    }
+
+    #[test]
+    fn reviewer_summary_uses_display_name() {
+        let p = Participant {
+            display_name: "Bob".into(),
+            approved: true,
+            ..Default::default()
+        };
+        let summary = reviewer_summary(&p);
+        assert_eq!(summary.display_name, "Bob");
+        assert!(summary.approved);
+    }
+
+    #[test]
+    fn reviewer_summary_falls_back_to_user_display_name() {
+        let p = Participant {
+            display_name: String::new(),
+            approved: false,
+            user: Some(crate::api::pr::User {
+                display_name: "Alice".into(),
+                uuid: None,
+                nickname: None,
+                links: None,
+            }),
+            ..Default::default()
+        };
+        let summary = reviewer_summary(&p);
+        assert_eq!(summary.display_name, "Alice");
+    }
+
+    #[test]
+    fn reviewers_uses_reviewers_field_when_non_empty() {
+        let pr = PullRequest {
+            id: 1,
+            title: "PR".into(),
+            state: "OPEN".into(),
+            source: crate::api::pr::BranchRef::default(),
+            destination: crate::api::pr::BranchRef::default(),
+            reviewers: vec![Participant {
+                display_name: "Bob".into(),
+                approved: false,
+                ..Default::default()
+            }],
+            participants: vec![Participant {
+                display_name: "Charlie".into(),
+                approved: true,
+                role: "REVIEWER".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let revs = reviewers(&pr);
+        assert_eq!(revs.len(), 1);
+        assert_eq!(revs[0].display_name, "Bob");
+    }
+
+    #[test]
+    fn reviewers_falls_back_to_participants() {
+        let pr = PullRequest {
+            id: 1,
+            title: "PR".into(),
+            state: "OPEN".into(),
+            source: crate::api::pr::BranchRef::default(),
+            destination: crate::api::pr::BranchRef::default(),
+            reviewers: vec![],
+            participants: vec![Participant {
+                display_name: "Dave".into(),
+                approved: true,
+                role: "REVIEWER".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let revs = reviewers(&pr);
+        assert_eq!(revs.len(), 1);
+        assert_eq!(revs[0].display_name, "Dave");
+    }
+
+    #[test]
+    fn pipeline_summary_builds_from_pipeline() {
+        let p = crate::api::pipeline::Pipeline {
+            uuid: "{uuid}".into(),
+            build_number: 42,
+            state: crate::api::pipeline::PipelineState {
+                name: "COMPLETED".into(),
+                result: Some(crate::api::pipeline::PipelineResult {
+                    name: "SUCCESSFUL".into(),
+                    type_: None,
+                }),
+                stage: None,
+            },
+            duration_in_seconds: 120,
+            target: crate::api::pipeline::PipelineTarget {
+                ref_name: Some("main".into()),
+                commit: Some(crate::api::pipeline::CommitRef { hash: "abc".into() }),
+                ..Default::default()
+            },
+            links: crate::api::pr::Links {
+                html: crate::api::pr::Link {
+                    href: Some("https://url".into()),
+                },
+                self_: None,
+            },
+            ..Default::default()
+        };
+        let step = crate::api::pipeline::PipelineStep {
+            uuid: "{s}".into(),
+            name: "Build".into(),
+            state: crate::api::pipeline::PipelineState {
+                name: "SUCCESSFUL".into(),
+                result: None,
+                stage: None,
+            },
+            duration_in_seconds: 60,
+            ..Default::default()
+        };
+        let summary = pipeline_summary(&p, &[step]);
+        assert_eq!(summary.state, "SUCCESSFUL");
+        assert_eq!(summary.duration_seconds, 120);
+        assert_eq!(summary.steps.len(), 1);
+        assert!(summary.failing_steps.is_empty());
+    }
+
+    #[test]
+    fn pipeline_summary_collects_failing_steps() {
+        let p = crate::api::pipeline::Pipeline {
+            uuid: "{uuid}".into(),
+            build_number: 42,
+            state: crate::api::pipeline::PipelineState {
+                name: "COMPLETED".into(),
+                result: Some(crate::api::pipeline::PipelineResult {
+                    name: "FAILED".into(),
+                    type_: None,
+                }),
+                stage: None,
+            },
+            duration_in_seconds: 60,
+            ..Default::default()
+        };
+        let step1 = crate::api::pipeline::PipelineStep {
+            uuid: "{s1}".into(),
+            name: "Build".into(),
+            state: crate::api::pipeline::PipelineState {
+                name: "SUCCESSFUL".into(),
+                result: None,
+                stage: None,
+            },
+            ..Default::default()
+        };
+        let step2 = crate::api::pipeline::PipelineStep {
+            uuid: "{s2}".into(),
+            name: "Test".into(),
+            state: crate::api::pipeline::PipelineState {
+                name: "FAILED".into(),
+                result: None,
+                stage: None,
+            },
+            ..Default::default()
+        };
+        let summary = pipeline_summary(&p, &[step1, step2]);
+        assert_eq!(summary.failing_steps, vec!["Test"]);
+    }
+
+    #[test]
+    fn pr_summary_builds_from_pr() {
+        let pr = PullRequest {
+            id: 7,
+            title: "My PR".into(),
+            state: "OPEN".into(),
+            comment_count: 3,
+            task_count: 1,
+            source: crate::api::pr::BranchRef {
+                branch: Some(crate::api::pr::Named {
+                    name: "feature".into(),
+                }),
+                ..Default::default()
+            },
+            destination: crate::api::pr::BranchRef {
+                branch: Some(crate::api::pr::Named {
+                    name: "main".into(),
+                }),
+                ..Default::default()
+            },
+            author: Some(crate::api::pr::Participant {
+                display_name: "Alice".into(),
+                ..Default::default()
+            }),
+            links: crate::api::pr::Links {
+                html: crate::api::pr::Link {
+                    href: Some("https://url".into()),
+                },
+                self_: None,
+            },
+            ..Default::default()
+        };
+        let summary = pr_summary(&pr);
+        assert_eq!(summary.id, 7);
+        assert_eq!(summary.title, "My PR");
+        assert_eq!(summary.author, Some("Alice".into()));
+        assert_eq!(summary.comment_count, 3);
+        assert_eq!(summary.task_count, 1);
+    }
+
+    #[test]
+    fn render_short_shows_pr_and_ci() {
+        let out = StatusOut {
+            repo: RepoSummary {
+                workspace: "w".into(),
+                slug: "r".into(),
+                full_name: "w/r".into(),
+            },
+            branch: "main".into(),
+            commit: "abc123def456".into(),
+            pr: Some(PrSummary {
+                id: 1,
+                state: "OPEN".into(),
+                title: "fix".into(),
+                source: "f".into(),
+                destination: "m".into(),
+                url: None,
+                author: None,
+                comment_count: 0,
+                task_count: 0,
+                reviewers: vec![],
+            }),
+            pipeline: Some(PipelineSummary {
+                uuid: "p".into(),
+                state: "SUCCESSFUL".into(),
+                duration_seconds: 42,
+                branch: None,
+                commit: None,
+                url: None,
+                failing_steps: vec![],
+                steps: vec![],
+            }),
+            commit_statuses: vec![],
+            suggested_commands: vec![],
+        };
+        let short = render_short(&out);
+        assert!(short.contains("#1"));
+        assert!(short.contains("SUCCESSFUL"));
+    }
+
+    #[test]
+    fn render_short_shows_dim_when_no_pr_or_ci() {
+        let out = StatusOut {
+            repo: RepoSummary {
+                workspace: "w".into(),
+                slug: "r".into(),
+                full_name: "w/r".into(),
+            },
+            branch: "main".into(),
+            commit: "abc".into(),
+            pr: None,
+            pipeline: None,
+            commit_statuses: vec![],
+            suggested_commands: vec![],
+        };
+        let short = render_short(&out);
+        assert!(short.contains("no PR"));
+        assert!(short.contains("no CI"));
+    }
+
+    #[test]
+    fn status_out_serializes_to_json() {
+        let out = StatusOut {
+            repo: RepoSummary {
+                workspace: "w".into(),
+                slug: "r".into(),
+                full_name: "w/r".into(),
+            },
+            branch: "b".into(),
+            commit: "c".into(),
+            pr: None,
+            pipeline: None,
+            commit_statuses: vec![BuildStatusSummary {
+                state: "SUCCESSFUL".into(),
+                key: "buildkite/test".into(),
+                url: "https://url".into(),
+            }],
+            suggested_commands: vec!["bb ci status".into()],
+        };
+        let json = serde_json::to_value(&out).unwrap();
+        assert_eq!(json["repo"]["full_name"], "w/r");
+        assert_eq!(json["commit_statuses"][0]["key"], "buildkite/test");
+        assert!(!json["suggested_commands"].as_array().unwrap().is_empty());
     }
 }

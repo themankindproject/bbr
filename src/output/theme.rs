@@ -161,4 +161,82 @@ mod tests {
         assert!(!t.colors_enabled());
         std::env::remove_var("NO_COLOR");
     }
+
+    #[test]
+    fn status_glyph_maps_successful_states() {
+        let t = Theme { colors: false };
+        assert_eq!(t.status_glyph("SUCCESSFUL"), "[ok]");
+        assert_eq!(t.status_glyph("SUCCESS"), "[ok]");
+        assert_eq!(t.status_glyph("PASSED"), "[ok]");
+        assert_eq!(t.status_glyph("successful"), "[ok]");
+    }
+
+    #[test]
+    fn status_glyph_maps_failed_states() {
+        let t = Theme { colors: false };
+        assert_eq!(t.status_glyph("FAILED"), "[X]");
+        assert_eq!(t.status_glyph("ERROR"), "[X]");
+    }
+
+    #[test]
+    fn status_glyph_maps_stopped_states() {
+        let t = Theme { colors: false };
+        assert_eq!(t.status_glyph("STOPPED"), "[!]");
+        assert_eq!(t.status_glyph("CANCELLED"), "[!]");
+        assert_eq!(t.status_glyph("CANCELED"), "[!]");
+    }
+
+    #[test]
+    fn status_glyph_maps_inprogress_states() {
+        let t = Theme { colors: false };
+        assert_eq!(t.status_glyph("INPROGRESS"), "[~]");
+        assert_eq!(t.status_glyph("IN_PROGRESS"), "[~]");
+        assert_eq!(t.status_glyph("RUNNING"), "[~]");
+    }
+
+    #[test]
+    fn status_glyph_maps_pending_states() {
+        let t = Theme { colors: false };
+        assert_eq!(t.status_glyph("PENDING"), "[.]");
+        assert_eq!(t.status_glyph("QUEUED"), "[.]");
+    }
+
+    #[test]
+    fn status_glyph_fallback_for_unknown() {
+        let t = Theme { colors: false };
+        assert_eq!(t.status_glyph("UNKNOWN"), "[?]");
+    }
+
+    #[test]
+    fn separator_uses_reasonable_width() {
+        let t = Theme { colors: false };
+        let sep = t.separator();
+        assert!(!sep.is_empty());
+        let width = terminal_width().unwrap_or(80).min(120);
+        assert_eq!(sep.chars().count(), width);
+    }
+
+    #[test]
+    fn bullet_is_asterisk_when_no_color() {
+        let t = Theme { colors: false };
+        assert_eq!(t.bullet(), "*");
+    }
+
+    #[test]
+    fn label_appends_space() {
+        let t = Theme { colors: false };
+        assert_eq!(t.label("Branch:"), "Branch: ");
+    }
+
+    #[test]
+    fn matches_ignore_ascii_case_works() {
+        assert!(matches_ignore_ascii_case(
+            "SUCCESS",
+            &["success", "SUCCESSFUL"]
+        ));
+        assert!(!matches_ignore_ascii_case(
+            "FAILED",
+            &["success", "SUCCESSFUL"]
+        ));
+    }
 }

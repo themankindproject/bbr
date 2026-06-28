@@ -130,3 +130,76 @@ pub fn confirm(msg: &str) -> Result<bool> {
     let trimmed = line.trim();
     Ok(trimmed.eq_ignore_ascii_case("y") || trimmed.eq_ignore_ascii_case("yes"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn human_duration_seconds_only() {
+        assert_eq!(human_duration(30), "30s");
+        assert_eq!(human_duration(0), "0s");
+        assert_eq!(human_duration(59), "59s");
+    }
+
+    #[test]
+    fn human_duration_minutes_and_seconds() {
+        assert_eq!(human_duration(60), "1m 0s");
+        assert_eq!(human_duration(90), "1m 30s");
+        assert_eq!(human_duration(3599), "59m 59s");
+    }
+
+    #[test]
+    fn human_duration_hours() {
+        assert_eq!(human_duration(3600), "1h 0m 0s");
+        assert_eq!(human_duration(3661), "1h 1m 1s");
+        assert_eq!(human_duration(7202), "2h 0m 2s");
+    }
+
+    #[test]
+    fn truncate_returns_string_when_shorter_than_limit() {
+        assert_eq!(truncate("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_returns_string_when_equal() {
+        assert_eq!(truncate("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_appends_ellipsis_when_longer() {
+        let result = truncate("hello world", 5);
+        assert_eq!(result, "hello…");
+        assert_eq!(result.chars().count(), 6);
+    }
+
+    #[test]
+    fn truncate_handles_empty() {
+        assert_eq!(truncate("", 5), "");
+    }
+
+    #[test]
+    fn truncate_handles_unicode() {
+        let result = truncate("héllo wörld", 6);
+        assert!(result.starts_with("héllo "));
+        assert!(result.ends_with('…'));
+    }
+
+    #[test]
+    fn make_spinner_hidden_in_json_mode() {
+        let pb = make_spinner(true);
+        assert!(pb.is_hidden());
+    }
+
+    #[test]
+    fn resolve_body_direct() {
+        let result = resolve_body(Some("hello"), None, false).unwrap();
+        assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn resolve_body_errors_without_source() {
+        let err = resolve_body(None, None, false).unwrap_err();
+        assert!(format!("{err}").contains("no body provided"));
+    }
+}

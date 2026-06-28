@@ -40,13 +40,14 @@ impl PrState {
 }
 
 /// A single pull request as returned by the Bitbucket API.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PullRequest {
     pub id: u64,
     #[serde(default)]
     pub title: String,
     #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
     pub state: String,
     #[serde(default)]
     pub comment_count: u64,
@@ -95,7 +96,7 @@ impl PullRequest {
 }
 
 /// `{branch_name} -> {branch_name}` plus repo metadata.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BranchRef {
     #[serde(default)]
     pub branch: Option<Named>,
@@ -144,7 +145,7 @@ pub struct Link {
     pub href: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Participant {
     #[serde(default)]
     pub display_name: String,
@@ -630,4 +631,211 @@ pub(crate) fn url_encode(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pr_state_parse_valid() {
+        assert_eq!(PrState::parse("open").unwrap(), PrState::Open);
+        assert_eq!(PrState::parse("").unwrap(), PrState::Open);
+        assert_eq!(PrState::parse("merged").unwrap(), PrState::Merged);
+        assert_eq!(PrState::parse("declined").unwrap(), PrState::Declined);
+        assert_eq!(PrState::parse("all").unwrap(), PrState::All);
+    }
+
+    #[test]
+    fn pr_state_parse_case_insensitive() {
+        assert_eq!(PrState::parse("OPEN").unwrap(), PrState::Open);
+        assert_eq!(PrState::parse("Merged").unwrap(), PrState::Merged);
+        assert_eq!(PrState::parse("DECLINED").unwrap(), PrState::Declined);
+    }
+
+    #[test]
+    fn pr_state_parse_invalid() {
+        let err = PrState::parse("invalid").unwrap_err();
+        assert!(format!("{err}").contains("invalid --state"));
+    }
+
+    #[test]
+    fn pr_state_as_query() {
+        assert_eq!(PrState::Open.as_query(), Some("OPEN"));
+        assert_eq!(PrState::Merged.as_query(), Some("MERGED"));
+        assert_eq!(PrState::Declined.as_query(), Some("DECLINED"));
+        assert_eq!(PrState::All.as_query(), None);
+    }
+
+    #[test]
+    fn url_encode_does_not_change_alphanumeric() {
+        assert_eq!(url_encode("hello123"), "hello123");
+    }
+
+    #[test]
+    fn url_encode_encodes_special_chars() {
+        assert_eq!(url_encode("a b"), "a%20b");
+        assert_eq!(url_encode("feature/test"), "feature%2Ftest");
+        assert_eq!(url_encode("a.b"), "a.b");
+        assert_eq!(url_encode("a~b"), "a~b");
+    }
+
+    #[test]
+    fn url_encode_encodes_quotes() {
+        assert_eq!(url_encode("a\"b"), "a%22b");
+    }
+
+    #[test]
+    fn pull_request_source_branch() {
+        let pr = PullRequest {
+            id: 1,
+            title: "Test".into(),
+            state: "OPEN".into(),
+            source: BranchRef {
+                branch: Some(Named {
+                    name: "feature".into(),
+                }),
+                ..Default::default()
+            },
+            destination: BranchRef::default(),
+            ..Default::default()
+        };
+        assert_eq!(pr.source_branch(), "feature");
+    }
+
+    #[test]
+    fn pull_request_destination_branch() {
+        let pr = PullRequest {
+            id: 1,
+            title: "Test".into(),
+            state: "OPEN".into(),
+            source: BranchRef::default(),
+            destination: BranchRef {
+                branch: Some(Named {
+                    name: "main".into(),
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(pr.destination_branch(), "main");
+    }
+
+    #[test]
+    fn pull_request_branch_fallback_empty() {
+        let pr = PullRequest {
+            id: 1,
+            title: "Test".into(),
+            state: "OPEN".into(),
+            source: BranchRef::default(),
+            destination: BranchRef::default(),
+            ..Default::default()
+        };
+        assert_eq!(pr.source_branch(), "");
+        assert_eq!(pr.destination_branch(), "");
+    }
+
+    #[test]
+    fn web_url_returns_none_when_no_html_link() {
+        let pr = PullRequest::default();
+        assert!(pr.web_url().is_none());
+    }
+
+    #[test]
+    fn create_pr_request_serializes_correctly() {
+        let req = CreatePrRequest {
+            title: "My PR".into(),
+            description: Some("desc".into()),
+            source: CreateBranchRef {
+                branch: CreateNamed {
+                    name: "feature".into(),
+                },
+            },
+            destination: CreateBranchRef {
+                branch: CreateNamed {
+                    name: "main".into(),
+                },
+            },
+            close_source_branch: Some(true),
+            reviewers: vec![ReviewerRef { uuid: "r1".into() }],
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["title"], "My PR");
+        assert_eq!(json["description"], "desc");
+        assert!(json
+            .get("close_source_branch")
+            .and_then(|v| v.as_bool())
+            .unwrap());
+        assert_eq!(json["reviewers"][0]["uuid"], "r1");
+    }
+
+    #[test]
+    fn create_pr_request_skips_optional_fields() {
+        let req = CreatePrRequest {
+            title: "Minimal".into(),
+            description: None,
+            source: CreateBranchRef {
+                branch: CreateNamed { name: "f".into() },
+            },
+            destination: CreateBranchRef {
+                branch: CreateNamed { name: "m".into() },
+            },
+            close_source_branch: None,
+            reviewers: vec![],
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert!(json.get("description").is_none());
+        assert!(json.get("close_source_branch").is_none());
+        assert!(json.get("reviewers").is_none());
+    }
+
+    #[test]
+    fn update_pr_request_serializes() {
+        let req = UpdatePrRequest {
+            title: "New Title".into(),
+            description: Some("New desc".into()),
+            close_source_branch: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["title"], "New Title");
+        assert_eq!(json["description"], "New desc");
+        assert!(json.get("close_source_branch").is_none());
+    }
+
+    #[test]
+    fn merge_pr_request_serializes() {
+        let req = MergePrRequest {
+            close_source_branch: Some(true),
+            merge_strategy: Some("squash".into()),
+            message: Some("merge msg".into()),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["merge_strategy"], "squash");
+        assert_eq!(json["message"], "merge msg");
+    }
+
+    #[test]
+    fn pull_request_comment_deserializes() {
+        let json =
+            r#"{"id":1,"content":{"raw":"nice"},"user":{"display_name":"Alice"},"deleted":false}"#;
+        let comment: PullRequestComment = serde_json::from_str(json).unwrap();
+        assert_eq!(comment.id, 1);
+        assert_eq!(comment.content.as_ref().unwrap().raw, "nice");
+        assert_eq!(comment.user.as_ref().unwrap().display_name, "Alice");
+    }
+
+    #[test]
+    fn pull_request_task_deserializes() {
+        let json = r#"{"id":1,"content":{"raw":"todo"},"state":"UNRESOLVED"}"#;
+        let task: PullRequestTask = serde_json::from_str(json).unwrap();
+        assert_eq!(task.id, 1);
+        assert_eq!(task.state, "UNRESOLVED");
+    }
+
+    #[test]
+    fn pull_request_conflict_deserializes() {
+        let json = r#"{"path":"src/main.rs","conflict_type":"merge"}"#;
+        let conflict: PullRequestConflict = serde_json::from_str(json).unwrap();
+        assert_eq!(conflict.path, "src/main.rs");
+    }
 }

@@ -754,4 +754,77 @@ mod tests {
             "{1}"
         );
     }
+
+    #[test]
+    fn select_step_returns_first_when_no_flags() {
+        let steps = vec![
+            step("{1}", "Build", "SUCCESSFUL"),
+            step("{2}", "Test", "SUCCESSFUL"),
+        ];
+        let selected = select_step(&steps, None, false, false, false).unwrap();
+        assert_eq!(selected.name, "Build");
+    }
+
+    #[test]
+    fn select_step_returns_last_when_latest() {
+        let steps = vec![
+            step("{1}", "Build", "SUCCESSFUL"),
+            step("{2}", "Test", "SUCCESSFUL"),
+        ];
+        let selected = select_step(&steps, None, false, true, false).unwrap();
+        assert_eq!(selected.name, "Test");
+    }
+
+    #[test]
+    fn select_step_failed_flag_errors_when_no_failed() {
+        let steps = vec![step("{1}", "Build", "SUCCESSFUL")];
+        let err = select_step(&steps, None, true, false, false).unwrap_err();
+        assert!(format!("{err}").contains("no failed step"));
+    }
+
+    #[test]
+    fn select_step_errors_on_empty() {
+        let steps: Vec<PipelineStep> = vec![];
+        let err = select_step(&steps, None, false, false, false).unwrap_err();
+        assert!(format!("{err}").contains("no steps"));
+    }
+
+    #[test]
+    fn select_step_errors_on_unknown_selector() {
+        let steps = vec![step("{1}", "Build", "SUCCESSFUL")];
+        let err = select_step(&steps, Some("nonexistent"), false, false, false).unwrap_err();
+        assert!(format!("{err}").contains("no step matching"));
+    }
+
+    #[test]
+    fn last_lines_returns_last_n_lines() {
+        let s = "a\nb\nc\nd\ne";
+        assert_eq!(last_lines(s, 3), "c\nd\ne");
+    }
+
+    #[test]
+    fn last_lines_returns_all_when_fewer_lines_than_n() {
+        let s = "a\nb";
+        assert_eq!(last_lines(s, 5), "a\nb");
+    }
+
+    #[test]
+    fn last_lines_handles_empty_string() {
+        assert_eq!(last_lines("", 5), "");
+    }
+
+    #[test]
+    fn last_lines_single_line() {
+        assert_eq!(last_lines("hello", 1), "hello");
+    }
+
+    #[test]
+    fn step_out_transforms_step() {
+        let s = step("{uuid}", "Build", "SUCCESSFUL");
+        let out = step_out(&s);
+        assert_eq!(out.uuid, "{uuid}");
+        assert_eq!(out.name, "Build");
+        assert_eq!(out.state, "SUCCESSFUL");
+        assert_eq!(out.duration_seconds, 1);
+    }
 }

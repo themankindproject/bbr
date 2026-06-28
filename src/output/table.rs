@@ -64,3 +64,40 @@ impl Default for Table {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renders_basic_table() {
+        let table = Table::new()
+            .headers(["Name", "Value"])
+            .add_row(["foo", "1"])
+            .add_row(["bar", "2"]);
+        let out = table.render();
+        assert!(out.contains("foo"));
+        assert!(out.contains("bar"));
+        assert!(out.contains("Name"));
+        assert!(out.contains("Value"));
+    }
+
+    #[test]
+    fn headers_classify_columns() {
+        let table = Table::new()
+            .headers(["ID", "State", "Name"])
+            .add_row(["1", "OPEN", "test"]);
+        let out = table.render();
+        assert!(out.contains("ID"));
+        assert!(out.contains("State"));
+        assert!(out.contains("Name"));
+    }
+
+    #[test]
+    fn empty_table_renders() {
+        let table = Table::new().headers(["A", "B"]);
+        let out = table.render();
+        assert!(out.contains("A"));
+        assert!(out.contains("B"));
+    }
+}

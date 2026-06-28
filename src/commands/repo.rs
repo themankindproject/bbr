@@ -190,4 +190,65 @@ mod tests {
         assert_eq!(json.get("scm").and_then(|v| v.as_str()), Some("git"));
         assert!(json.get("scim").is_none());
     }
+
+    #[test]
+    fn branch_out_serializes() {
+        let out = BranchOut {
+            name: "feature".into(),
+        };
+        let json = serde_json::to_value(out).unwrap();
+        assert_eq!(json["name"], "feature");
+    }
+
+    #[test]
+    fn tag_out_serializes() {
+        let out = TagOut {
+            name: "v1.0".into(),
+            target: Some("abc123".into()),
+            date: Some("2024-01-01".into()),
+        };
+        let json = serde_json::to_value(out).unwrap();
+        assert_eq!(json["name"], "v1.0");
+        assert_eq!(json["target"], "abc123");
+    }
+
+    #[test]
+    fn tag_out_serializes_with_null_optionals() {
+        let out = TagOut {
+            name: "v1.0".into(),
+            target: None,
+            date: None,
+        };
+        let json = serde_json::to_value(out).unwrap();
+        assert!(json.get("target").unwrap().is_null());
+        assert!(json.get("date").unwrap().is_null());
+    }
+
+    #[test]
+    fn commit_out_serializes() {
+        let out = CommitOut {
+            hash: "abc123".into(),
+            message: "fix bug".into(),
+            author: Some("Alice".into()),
+            date: Some("2024-01-01".into()),
+        };
+        let json = serde_json::to_value(out).unwrap();
+        assert_eq!(json["hash"], "abc123");
+        assert_eq!(json["message"], "fix bug");
+    }
+
+    #[test]
+    fn first_line_extracts_first_line() {
+        assert_eq!(first_line("hello\nworld"), "hello");
+    }
+
+    #[test]
+    fn first_line_handles_empty() {
+        assert_eq!(first_line(""), "");
+    }
+
+    #[test]
+    fn first_line_returns_full_if_single_line() {
+        assert_eq!(first_line("hello world"), "hello world");
+    }
 }

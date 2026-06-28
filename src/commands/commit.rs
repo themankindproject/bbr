@@ -102,4 +102,75 @@ mod tests {
         assert_eq!(normalize_state("cancelled").unwrap(), "STOPPED");
         assert!(normalize_state("unknown").is_err());
     }
+
+    #[test]
+    fn normalizes_status_state_aliases() {
+        assert_eq!(normalize_state("success").unwrap(), "SUCCESSFUL");
+        assert_eq!(normalize_state("passed").unwrap(), "SUCCESSFUL");
+        assert_eq!(normalize_state("failure").unwrap(), "FAILED");
+        assert_eq!(normalize_state("error").unwrap(), "FAILED");
+        assert_eq!(normalize_state("running").unwrap(), "INPROGRESS");
+        assert_eq!(normalize_state("pending").unwrap(), "INPROGRESS");
+        assert_eq!(normalize_state("canceled").unwrap(), "STOPPED");
+    }
+
+    #[test]
+    fn normalize_state_handles_whitespace_and_dashes() {
+        assert_eq!(normalize_state(" in-progress ").unwrap(), "INPROGRESS");
+        assert_eq!(normalize_state("in_progress").unwrap(), "INPROGRESS");
+    }
+
+    #[test]
+    fn short_commit_truncates_to_twelve_chars() {
+        assert_eq!(short_commit("abc123def456ghi"), "abc123def456");
+    }
+
+    #[test]
+    fn short_commit_returns_unchanged_when_shorter() {
+        assert_eq!(short_commit("abc"), "abc");
+    }
+
+    #[test]
+    fn short_commit_handles_empty() {
+        assert_eq!(short_commit(""), "");
+    }
+
+    #[test]
+    fn status_out_serializes_correctly() {
+        let status = BuildStatus {
+            state: "SUCCESSFUL".into(),
+            key: "ci/test".into(),
+            name: "Test Suite".into(),
+            url: "https://ci.example.com".into(),
+            description: Some("All tests passed".into()),
+            refname: Some("refs/heads/main".into()),
+            created_on: None,
+            updated_on: None,
+        };
+        let out = status_out("abc123", &status);
+        let json = serde_json::to_value(&out).unwrap();
+        assert_eq!(json["commit"], "abc123");
+        assert_eq!(json["key"], "ci/test");
+        assert_eq!(json["state"], "SUCCESSFUL");
+        assert_eq!(json["name"], "Test Suite");
+        assert_eq!(json["description"], "All tests passed");
+        assert_eq!(json["refname"], "refs/heads/main");
+    }
+
+    #[test]
+    fn commit_status_out_serializes_json() {
+        let out = CommitStatusOut {
+            commit: "abc".into(),
+            key: "k".into(),
+            state: "SUCCESSFUL".into(),
+            name: "n".into(),
+            url: "u".into(),
+            description: None,
+            refname: None,
+        };
+        let json = serde_json::to_value(&out).unwrap();
+        assert_eq!(json["commit"], "abc");
+        assert_eq!(json["key"], "k");
+        assert!(json.get("description").unwrap().is_null());
+    }
 }
