@@ -5,7 +5,9 @@ use std::time::Duration;
 use serde::Serialize;
 use tokio::time;
 
-use crate::api::pipeline::{ensure_uuid_braces, normalize_uuid, PipelineStep, StepSummary};
+use crate::api::pipeline::{
+    ensure_uuid_braces, normalize_uuid, PipelineStep, StepSummary, TestCase, TestReport,
+};
 use crate::api::BitbucketClient;
 use crate::cli::GlobalArgs;
 use crate::commands::{client, confirm, current_head, current_repo, human_duration, make_spinner};
@@ -381,6 +383,123 @@ pub async fn steps(g: &GlobalArgs, uuid: Option<&str>) -> Result<()> {
         ]);
     }
     fmt.print(&out, &table.render())
+}
+
+pub async fn tests(
+    g: &GlobalArgs,
+    uuid: Option<&str>,
+    step: Option<&str>,
+    limit: u32,
+) -> Result<()> {
+    let repo = current_repo()?;
+    let client = client(g)?;
+    let pipeline_uuid = match uuid {
+        Some(u) => ensure_uuid_braces(u),
+        None => {
+            let branch = current_head()?.branch;
+            client
+                .latest_pipeline(&repo.workspace, &repo.slug, Some(&branch))
+                .await?
+                .ok_or_else(|| {
+                    BitbucketError::NotFound(format!("no pipeline for branch '{branch}'"))
+                })?
+                .uuid
+        }
+    };
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Fetching steps...");
+    let steps = client
+        .list_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
+        .await?;
+    spinner.finish_and_clear();
+
+    let selected = select_step(&steps.values, step, false, false, step.is_none())?;
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Fetching test report...");
+    let report = client
+        .test_report(&repo.workspace, &repo.slug, &pipeline_uuid, &selected.uuid)
+        .await?;
+    spinner.set_message("Fetching test cases...");
+    let cases = client
+        .test_cases(
+            &repo.workspace,
+            &repo.slug,
+            &pipeline_uuid,
+            &selected.uuid,
+            limit,
+        )
+        .await?;
+    spinner.finish_and_clear();
+
+    #[derive(Debug, Serialize)]
+    pub struct CiTestsOut {
+        pub pipeline_uuid: String,
+        pub step_uuid: String,
+        pub step_name: String,
+        pub report: TestReport,
+        pub test_cases: Vec<TestCase>,
+    }
+
+    let out = CiTestsOut {
+        pipeline_uuid: pipeline_uuid.clone(),
+        step_uuid: selected.uuid.clone(),
+        step_name: selected.name.clone(),
+        report,
+        test_cases: cases,
+    };
+
+    let fmt = Formatter::from_json_flag(g.json);
+    let theme = Theme::current();
+    let mut human = format!(
+        "Test report for {} / {}\n",
+        theme.bold(&selected.name),
+        theme.dim(&pipeline_uuid)
+    );
+    human.push_str(&format!("{}\n", theme.separator()));
+    human.push_str(&format!(
+        "  {}  {}  {}  {}  {}\n",
+        theme.status_glyph("SUCCESSFUL"),
+        theme.status_glyph("FAILED"),
+        theme.status_glyph("SKIPPED"),
+        theme.status_glyph("ERROR"),
+        theme.dim("Total"),
+    ));
+    human.push_str(&format!(
+        "  {:>4}      {:>4}      {:>4}      {:>4}    {:>4}\n",
+        out.report.successful,
+        out.report.failed,
+        out.report.skipped,
+        out.report.errors,
+        out.report.total,
+    ));
+
+    if !out.test_cases.is_empty() {
+        human.push_str(&format!("\n{}{}\n", theme.label("Test cases:"), ""));
+        let mut table = Table::new().headers(["Status", "Name", "Duration"]);
+        for case in &out.test_cases {
+            let state = match case.status.to_uppercase().as_str() {
+                "SUCCESS" | "SUCCESSFUL" | "PASSED" => theme.success(&case.status),
+                "FAILED" | "ERROR" => theme.error(&case.status),
+                "SKIPPED" => theme.dim(&case.status),
+                _ => theme.warn(&case.status),
+            };
+            table = table.add_row([
+                state.into_owned(),
+                case.test_name
+                    .as_deref()
+                    .or(case.test_key.as_deref())
+                    .unwrap_or("-")
+                    .to_string(),
+                case.duration_in_seconds
+                    .map(|d| format!("{d:.2}s"))
+                    .unwrap_or_else(|| "-".into()),
+            ]);
+        }
+        human.push_str(&table.render());
+    }
+    fmt.print(&out, &human)
 }
 
 pub async fn stop(g: &GlobalArgs, uuid: Option<&str>, branch: Option<&str>) -> Result<()> {

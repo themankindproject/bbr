@@ -86,10 +86,13 @@ Pull request operations.
 #### `bb pr list`
 
 ```bash
-bb pr list                          # open PRs (default)
-bb pr list --state merged           # merged PRs
-bb pr list --state all --limit 50   # all states, more results
-bb pr list --json                   # JSON array
+bb pr list                                  # open PRs (default)
+bb pr list --state merged                   # merged PRs
+bb pr list --state all --limit 50           # all states, more results
+bb pr list --author "John"                  # filter by author display name
+bb pr list --reviewer "Jane"                # filter by reviewer display name
+bb pr list --source-branch "feat/x"         # filter by source branch
+bb pr list --json                           # JSON array
 ```
 
 Output uses a table with columns: ID, State, Title, Source, Destination, Author.
@@ -139,10 +142,13 @@ bb pr comment 467 --reply-to 123 --body "Agreed"   # reply to a comment
 #### `bb pr approve / decline / merge`
 
 ```bash
-bb pr approve 467           # approve
-bb pr unapprove 467         # remove approval
-bb pr decline 467           # decline (close without merging)
-bb pr merge 467             # merge with confirmation prompt
+bb pr approve 467                              # approve
+bb pr unapprove 467                            # remove approval
+bb pr decline 467                              # decline (close without merging)
+bb pr merge 467                                # merge with confirmation prompt
+bb pr merge 467 --close-source-branch          # close source branch after merge
+bb pr merge 467 --strategy squash              # merge strategy (merge_commit|squash|fast_forward)
+bb pr merge 467 --message "closes #123"        # custom merge commit message
 ```
 
 #### Review data subcommands
@@ -207,6 +213,33 @@ bb ci watch                         # current branch
 bb ci watch --branch main
 bb ci watch --logs                  # print failing log on failure
 bb ci watch --interval-secs 10      # poll interval (default 5)
+```
+
+#### `bb ci tests`
+
+Pipeline test reports from Bitbucket's test reporting API. Shows pass/fail/skip/error totals and individual test cases.
+
+```bash
+bb ci tests                         # latest pipeline (current branch), first failed/latest step
+bb ci tests <uuid>                  # specific pipeline
+bb ci tests --step <step-uuid>      # specific step UUID or name
+bb ci tests --limit 100             # max test cases (default 50)
+bb ci tests --json
+```
+
+Output:
+```
+Test report for Run Tests / {abc-123}
+─────────────────────────────────────
+  [ok]  [failed]  [skip]  [err]  Total
+     38        2       1       0     41
+
+Test cases:
+  Status  │ Name                  │ Duration
+  ────────┼───────────────────────┼─────────
+  [ok]    │ test_foo              │ 1.23s
+  [fail]  │ test_bar              │ 0.45s
+  [skip]  │ test_baz              │ -
 ```
 
 #### `bb ci logs`

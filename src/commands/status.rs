@@ -164,7 +164,15 @@ pub async fn run_overview(g: &GlobalArgs) -> Result<()> {
         client.pr_for_branch(&repo.workspace, &repo.slug, &head.branch),
         client.latest_pipeline(&repo.workspace, &repo.slug, Some(&head.branch)),
         client.commit_statuses(&repo.workspace, &repo.slug, &head.commit),
-        client.list_prs(&repo.workspace, &repo.slug, PrState::Open, 5, None, None),
+        client.list_prs(
+            &repo.workspace,
+            &repo.slug,
+            PrState::Open,
+            5,
+            None,
+            None,
+            None
+        ),
         client.list_pipelines(&repo.workspace, &repo.slug, None, 5),
     )?;
 

@@ -166,6 +166,38 @@ pub struct StepSummary {
     pub duration_seconds: u64,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TestReport {
+    #[serde(default)]
+    pub total: u64,
+    #[serde(default)]
+    pub successful: u64,
+    #[serde(default)]
+    pub failed: u64,
+    #[serde(default)]
+    pub skipped: u64,
+    #[serde(default)]
+    pub errors: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TestCase {
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub test_key: Option<String>,
+    #[serde(default)]
+    pub test_name: Option<String>,
+    #[serde(default)]
+    pub test_type: Option<String>,
+    #[serde(default)]
+    pub duration_in_seconds: Option<f64>,
+    #[serde(default)]
+    pub error_details: Option<String>,
+    #[serde(default)]
+    pub error_message: Option<String>,
+}
+
 /// Strip braces for comparison (use in `select_step`).
 pub fn normalize_uuid(s: &str) -> String {
     s.trim()
@@ -288,5 +320,41 @@ impl BitbucketClient {
             .send(reqwest::Method::POST, &path, Some("null"))
             .await?;
         Ok(())
+    }
+
+    /// `GET /repositories/{ws}/{slug}/pipelines/{uuid}/steps/{step}/test_reports`
+    pub async fn test_report(
+        &self,
+        workspace: &str,
+        slug: &str,
+        uuid: &str,
+        step: &str,
+    ) -> Result<TestReport> {
+        let path =
+            format!("/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/{step}/test_reports");
+        self.send(reqwest::Method::GET, &path, None).await
+    }
+
+    /// `GET /repositories/{ws}/{slug}/pipelines/{uuid}/steps/{step}/test_cases`
+    pub async fn test_cases(
+        &self,
+        workspace: &str,
+        slug: &str,
+        uuid: &str,
+        step: &str,
+        limit: u32,
+    ) -> Result<Vec<TestCase>> {
+        let pagelen = limit.min(100);
+        let path = format!(
+            "/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/{step}/test_cases?\
+             pagelen={pagelen}"
+        );
+        if limit > 100 {
+            self.fetch_all_pages(&path, limit as usize).await
+        } else {
+            let page: super::Paginated<TestCase> =
+                self.send(reqwest::Method::GET, &path, None).await?;
+            Ok(page.values)
+        }
     }
 }

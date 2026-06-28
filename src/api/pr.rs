@@ -292,6 +292,17 @@ pub struct UpdatePrRequest {
     pub close_source_branch: Option<bool>,
 }
 
+/// Body for `POST /repositories/{ws}/{slug}/pullrequests/{id}/merge`.
+#[derive(Debug, Serialize)]
+pub struct MergePrRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub close_source_branch: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge_strategy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
 impl BitbucketClient {
     /// `GET /repositories/{ws}/{slug}/pullrequests`
     ///
@@ -305,6 +316,7 @@ impl BitbucketClient {
         limit: u32,
         author: Option<&str>,
         source_branch: Option<&str>,
+        reviewer: Option<&str>,
     ) -> Result<Vec<PullRequest>> {
         let pagelen = limit.min(100);
         let mut path = format!(
@@ -325,6 +337,9 @@ impl BitbucketClient {
         }
         if let Some(b) = source_branch {
             q_parts.push(format!("source.branch.name%3D%22{}%22", url_encode(b)));
+        }
+        if let Some(r) = reviewer {
+            q_parts.push(format!("reviewers.display_name%3D%22{}%22", url_encode(r)));
         }
         if !q_parts.is_empty() {
             path.push_str(&format!("&q={}", q_parts.join("+AND+")));
@@ -446,9 +461,17 @@ impl BitbucketClient {
     }
 
     /// `POST /repositories/{ws}/{slug}/pullrequests/{id}/merge`
-    pub async fn merge_pr(&self, workspace: &str, slug: &str, id: u64) -> Result<PullRequest> {
+    pub async fn merge_pr(
+        &self,
+        workspace: &str,
+        slug: &str,
+        id: u64,
+        body: Option<&MergePrRequest>,
+    ) -> Result<PullRequest> {
         let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}/merge");
-        self.send(reqwest::Method::POST, &path, Some("{}")).await
+        let raw = body.map(|b| serde_json::to_string(b).unwrap_or_else(|_| "{}".into()));
+        self.send(reqwest::Method::POST, &path, raw.as_deref().or(Some("{}")))
+            .await
     }
 
     /// `POST /repositories/{ws}/{slug}/pullrequests/{id}/approve`

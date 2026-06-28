@@ -117,6 +117,8 @@ pub enum PrAction {
         author: Option<String>,
         #[arg(long, help = "filter by source branch name")]
         source_branch: Option<String>,
+        #[arg(long, help = "filter by reviewer display name")]
+        reviewer: Option<String>,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -229,6 +231,12 @@ pub enum PrAction {
     /// Merge a pull request.
     Merge {
         id: u64,
+        #[arg(long, help = "close source branch after merge")]
+        close_source_branch: bool,
+        #[arg(long, help = "merge strategy (merge_commit|squash|fast_forward)")]
+        strategy: Option<String>,
+        #[arg(long, help = "custom merge commit message")]
+        message: Option<String>,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -315,6 +323,20 @@ pub enum CiAction {
         latest: bool,
         #[arg(long, help = "write log to file instead of stdout")]
         output: Option<String>,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Show test reports for a pipeline step.
+    Tests {
+        /// Pipeline UUID (defaults to latest pipeline on current branch).
+        uuid: Option<String>,
+        #[arg(
+            long,
+            help = "step UUID or step name (default: first failed or latest)"
+        )]
+        step: Option<String>,
+        #[arg(long, help = "max test cases to show", default_value_t = 50)]
+        limit: u32,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -493,6 +515,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 limit,
                 author,
                 source_branch,
+                reviewer,
                 g,
             } => {
                 commands::pr::list(
@@ -501,6 +524,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
                     limit,
                     author.as_deref(),
                     source_branch.as_deref(),
+                    reviewer.as_deref(),
                 )
                 .await
             }
@@ -559,7 +583,22 @@ async fn dispatch(cli: Cli) -> Result<()> {
             PrAction::Conflicts { id, limit, g } => commands::pr::conflicts(&g, id, limit).await,
             PrAction::RequestChanges { id, g } => commands::pr::request_changes(&g, id).await,
             PrAction::UnrequestChanges { id, g } => commands::pr::unrequest_changes(&g, id).await,
-            PrAction::Merge { id, g } => commands::pr::merge(&g, id).await,
+            PrAction::Merge {
+                id,
+                close_source_branch,
+                strategy,
+                message,
+                g,
+            } => {
+                commands::pr::merge(
+                    &g,
+                    id,
+                    close_source_branch,
+                    strategy.as_deref(),
+                    message.as_deref(),
+                )
+                .await
+            }
             PrAction::Approve { id, g } => commands::pr::approve(&g, id).await,
             PrAction::Unapprove { id, g } => commands::pr::unapprove(&g, id).await,
             PrAction::Decline { id, g } => commands::pr::decline(&g, id).await,
@@ -606,6 +645,12 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 commands::ci::stop(&g, uuid.as_deref(), branch.as_deref()).await
             }
             CiAction::Steps { uuid, g } => commands::ci::steps(&g, uuid.as_deref()).await,
+            CiAction::Tests {
+                uuid,
+                step,
+                limit,
+                g,
+            } => commands::ci::tests(&g, uuid.as_deref(), step.as_deref(), limit).await,
         },
         Some(Command::Repo { action }) => match action {
             RepoAction::Info { g } => commands::repo::info(&g).await,

@@ -42,7 +42,7 @@ async fn lists_open_prs() {
 
     let c = client(&server.uri()).await;
     let values = c
-        .list_prs("sdadev", "bvrm", PrState::Open, 25, None, None)
+        .list_prs("sdadev", "bvrm", PrState::Open, 25, None, None, None)
         .await
         .unwrap();
     assert_eq!(values.len(), 1);

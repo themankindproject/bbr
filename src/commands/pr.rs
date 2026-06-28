@@ -3,8 +3,8 @@
 use serde::Serialize;
 
 use crate::api::pr::{
-    CreateBranchRef, CreateNamed, CreatePrRequest, PrState, PullRequest, PullRequestComment,
-    PullRequestConflict, PullRequestTask, ReviewerRef, UpdatePrRequest,
+    CreateBranchRef, CreateNamed, CreatePrRequest, MergePrRequest, PrState, PullRequest,
+    PullRequestComment, PullRequestConflict, PullRequestTask, ReviewerRef, UpdatePrRequest,
 };
 use crate::api::repo::Commit;
 use crate::api::status::BuildStatus;
@@ -172,6 +172,7 @@ pub async fn list(
     limit: u32,
     author: Option<&str>,
     source_branch: Option<&str>,
+    reviewer: Option<&str>,
 ) -> Result<()> {
     let state = PrState::parse(state)?;
     let repo = current_repo()?;
@@ -186,6 +187,7 @@ pub async fn list(
             limit,
             author,
             source_branch,
+            reviewer,
         )
         .await?;
     spinner.finish_and_clear();
@@ -549,9 +551,25 @@ pub async fn decline(g: &GlobalArgs, id: u64) -> Result<()> {
     fmt.print(&out, &format!("Declined PR #{}", id))
 }
 
-pub async fn merge(g: &GlobalArgs, id: u64) -> Result<()> {
+pub async fn merge(
+    g: &GlobalArgs,
+    id: u64,
+    close_source_branch: bool,
+    strategy: Option<&str>,
+    message: Option<&str>,
+) -> Result<()> {
     let repo = current_repo()?;
     let client = client(g)?;
+
+    let merge_body = MergePrRequest {
+        close_source_branch: if close_source_branch {
+            Some(true)
+        } else {
+            None
+        },
+        merge_strategy: strategy.map(|s| s.to_string()),
+        message: message.map(|m| m.to_string()),
+    };
 
     let spinner = make_spinner(g.json);
     spinner.set_message("Fetching PR details...");
@@ -575,7 +593,14 @@ pub async fn merge(g: &GlobalArgs, id: u64) -> Result<()> {
 
     let spinner = make_spinner(g.json);
     spinner.set_message("Merging...");
-    let pr = client.merge_pr(&repo.workspace, &repo.slug, id).await?;
+    let body = if close_source_branch || strategy.is_some() || message.is_some() {
+        Some(&merge_body)
+    } else {
+        None
+    };
+    let pr = client
+        .merge_pr(&repo.workspace, &repo.slug, id, body)
+        .await?;
     spinner.finish_and_clear();
 
     let out = PrViewOut::from(&pr);
