@@ -1,22 +1,30 @@
 //! Repository source / file content endpoints.
-use serde::{Deserialize, Serialize};
 use super::BitbucketClient;
 use crate::error::Result;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SourceEntry {
-    #[serde(rename = "type", default)] pub entry_type: String,
-    #[serde(default)] pub path: String,
-    #[serde(default)] pub size: Option<u64>,
-    #[serde(default)] pub attributes: Vec<String>,
-    #[serde(default)] pub commit: Option<SourceCommit>,
+    #[serde(rename = "type", default)]
+    pub entry_type: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub size: Option<u64>,
+    #[serde(default)]
+    pub attributes: Vec<String>,
+    #[serde(default)]
+    pub commit: Option<SourceCommit>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SourceCommit {
-    #[serde(default)] pub hash: String,
-    #[serde(default)] pub date: Option<String>,
-    #[serde(default)] pub message: Option<String>,
+    #[serde(default)]
+    pub hash: String,
+    #[serde(default)]
+    pub date: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
 }
 
 impl BitbucketClient {

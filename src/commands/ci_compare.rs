@@ -1,12 +1,12 @@
 //! Pipeline / CI comparison (`bb ci compare`).
 
-use serde::Serialize;
-use crate::cli::GlobalArgs;
-use crate::commands::{client, current_head, human_duration, resolve_repo, make_spinner};
-use crate::error::{BitbucketError, Result};
-use crate::output::Formatter;
-use crate::output::theme::Theme;
 use crate::api::pipeline::{Pipeline, PipelineStep};
+use crate::cli::GlobalArgs;
+use crate::commands::{client, current_head, human_duration, make_spinner, resolve_repo};
+use crate::error::{BitbucketError, Result};
+use crate::output::theme::Theme;
+use crate::output::Formatter;
+use serde::Serialize;
 
 #[derive(Debug, Serialize)]
 pub struct CiCompareOut {
@@ -57,12 +57,18 @@ async fn resolve_pipeline_ref(
     current_branch: &str,
 ) -> Result<Pipeline> {
     if ref_str.eq_ignore_ascii_case("last") || ref_str.eq_ignore_ascii_case("latest") {
-        let p = client.latest_pipeline(workspace, slug, Some(current_branch)).await?;
-        p.ok_or_else(|| BitbucketError::Other(format!("No pipeline found on branch {current_branch}")))
+        let p = client
+            .latest_pipeline(workspace, slug, Some(current_branch))
+            .await?;
+        p.ok_or_else(|| {
+            BitbucketError::Other(format!("No pipeline found on branch {current_branch}"))
+        })
     } else if let Ok(build_num) = ref_str.parse::<u64>() {
         let pipelines = client.list_pipelines(workspace, slug, None, 100).await?;
         let p = pipelines.into_iter().find(|p| p.build_number == build_num);
-        p.ok_or_else(|| BitbucketError::Other(format!("No pipeline found with build number {build_num}")))
+        p.ok_or_else(|| {
+            BitbucketError::Other(format!("No pipeline found with build number {build_num}"))
+        })
     } else {
         // Treat as UUID
         let uuid = crate::api::pipeline::ensure_uuid_braces(ref_str);
@@ -79,8 +85,10 @@ pub async fn compare(g: &GlobalArgs, a_ref: &str, b_ref: &str) -> Result<()> {
     let spinner = make_spinner(g.json);
     spinner.set_message("Resolving pipelines...");
 
-    let pipe_a = resolve_pipeline_ref(&client, &repo.workspace, &repo.slug, a_ref, &current_branch).await?;
-    let pipe_b = resolve_pipeline_ref(&client, &repo.workspace, &repo.slug, b_ref, &current_branch).await?;
+    let pipe_a =
+        resolve_pipeline_ref(&client, &repo.workspace, &repo.slug, a_ref, &current_branch).await?;
+    let pipe_b =
+        resolve_pipeline_ref(&client, &repo.workspace, &repo.slug, b_ref, &current_branch).await?;
 
     spinner.set_message("Fetching pipeline steps...");
     let (steps_a_res, steps_b_res) = tokio::join!(
@@ -92,7 +100,16 @@ pub async fn compare(g: &GlobalArgs, a_ref: &str, b_ref: &str) -> Result<()> {
 
     spinner.set_message("Fetching test reports...");
     // Fetch test reports concurrently
-    let test_deltas = compute_test_deltas(&client, &repo.workspace, &repo.slug, &pipe_a, &pipe_b, &steps_a, &steps_b).await?;
+    let test_deltas = compute_test_deltas(
+        &client,
+        &repo.workspace,
+        &repo.slug,
+        &pipe_a,
+        &pipe_b,
+        &steps_a,
+        &steps_b,
+    )
+    .await?;
 
     spinner.finish_and_clear();
 
@@ -178,7 +195,10 @@ async fn compute_test_deltas(
     let mut has_tests_a = false;
 
     for step in steps_a {
-        if let Ok(report) = client.test_report(workspace, slug, &pipe_a.uuid, &step.uuid).await {
+        if let Ok(report) = client
+            .test_report(workspace, slug, &pipe_a.uuid, &step.uuid)
+            .await
+        {
             total_a += report.total;
             passed_a += report.successful;
             failed_a += report.failed + report.errors;
@@ -194,7 +214,10 @@ async fn compute_test_deltas(
     let mut has_tests_b = false;
 
     for step in steps_b {
-        if let Ok(report) = client.test_report(workspace, slug, &pipe_b.uuid, &step.uuid).await {
+        if let Ok(report) = client
+            .test_report(workspace, slug, &pipe_b.uuid, &step.uuid)
+            .await
+        {
             total_b += report.total;
             passed_b += report.successful;
             failed_b += report.failed + report.errors;
@@ -210,7 +233,10 @@ async fn compute_test_deltas(
     // Now gather failed cases to compute new failures and fixed failures
     let mut failed_cases_a = Vec::new();
     for step in steps_a {
-        if let Ok(cases) = client.test_cases(workspace, slug, &pipe_a.uuid, &step.uuid, 100).await {
+        if let Ok(cases) = client
+            .test_cases(workspace, slug, &pipe_a.uuid, &step.uuid, 100)
+            .await
+        {
             for c in cases {
                 if c.status == "FAILED" || c.status == "ERROR" || c.status == "FAILURE" {
                     if let Some(name) = c.test_name {
@@ -223,7 +249,10 @@ async fn compute_test_deltas(
 
     let mut failed_cases_b = Vec::new();
     for step in steps_b {
-        if let Ok(cases) = client.test_cases(workspace, slug, &pipe_b.uuid, &step.uuid, 100).await {
+        if let Ok(cases) = client
+            .test_cases(workspace, slug, &pipe_b.uuid, &step.uuid, 100)
+            .await
+        {
             for c in cases {
                 if c.status == "FAILED" || c.status == "ERROR" || c.status == "FAILURE" {
                     if let Some(name) = c.test_name {
@@ -298,8 +327,14 @@ fn render_compare(out: &CiCompareOut) -> String {
     }
 
     for (i, delta) in out.step_deltas.iter().enumerate() {
-        let a_str = delta.duration_a.map(|d| format!("{}s", d)).unwrap_or_else(|| "—".to_string());
-        let b_str = delta.duration_b.map(|d| format!("{}s", d)).unwrap_or_else(|| "—".to_string());
+        let a_str = delta
+            .duration_a
+            .map(|d| format!("{}s", d))
+            .unwrap_or_else(|| "—".to_string());
+        let b_str = delta
+            .duration_b
+            .map(|d| format!("{}s", d))
+            .unwrap_or_else(|| "—".to_string());
         let delta_str = match delta.duration_delta {
             Some(d) => {
                 if d > 0 {
@@ -319,19 +354,21 @@ fn render_compare(out: &CiCompareOut) -> String {
 
         s.push_str(&format!(
             "  {:<17} {:<7} {:<7} {}{}\n",
-            delta.name,
-            a_str,
-            b_str,
-            delta_str,
-            highlight
+            delta.name, a_str, b_str, delta_str, highlight
         ));
     }
 
     if let Some(td) = &out.test_deltas {
         s.push_str(&format!("\n{}\n", theme.bold("Test Results")));
         s.push_str("              A         B\n");
-        s.push_str(&format!("  Passed      {:<9} {}\n", td.passed_a, td.passed_b));
-        s.push_str(&format!("  Failed      {:<9} {}\n", td.failed_a, td.failed_b));
+        s.push_str(&format!(
+            "  Passed      {:<9} {}\n",
+            td.passed_a, td.passed_b
+        ));
+        s.push_str(&format!(
+            "  Failed      {:<9} {}\n",
+            td.failed_a, td.failed_b
+        ));
         if !td.new_failures.is_empty() {
             s.push_str(&format!("  New failures: {}\n", td.new_failures.join(", ")));
         }

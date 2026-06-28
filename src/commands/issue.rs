@@ -1,10 +1,10 @@
 //! `bbr issue` — repository issue tracker.
-use serde::Serialize;
 use crate::cli::GlobalArgs;
 use crate::commands::{client, make_spinner, resolve_repo, truncate};
 use crate::error::Result;
 use crate::output::table::Table;
 use crate::output::Formatter;
+use serde::Serialize;
 
 #[derive(Debug, Serialize)]
 pub struct IssueOut {
@@ -96,7 +96,9 @@ pub async fn list(
     let out: Vec<IssueOut> = issues.iter().map(issue_to_out).collect();
 
     let fmt = Formatter::from_json_flag(g.json);
-    let mut table = Table::new().headers(["ID", "State", "Kind", "Priority", "Title", "Assignee", "Comments"]);
+    let mut table = Table::new().headers([
+        "ID", "State", "Kind", "Priority", "Title", "Assignee", "Comments",
+    ]);
     for (i, issue) in issues.iter().enumerate() {
         table = table.add_row([
             issue.id.to_string(),
@@ -220,7 +222,15 @@ pub async fn create(
     let spinner = make_spinner(g.json);
     spinner.set_message("Creating issue...");
     let issue = client
-        .create_issue(&repo.workspace, &repo.slug, title, body, kind, priority, assignee)
+        .create_issue(
+            &repo.workspace,
+            &repo.slug,
+            title,
+            body,
+            kind,
+            priority,
+            assignee,
+        )
         .await?;
     spinner.finish_and_clear();
     let out = issue_to_out(&issue);
@@ -284,10 +294,7 @@ pub async fn comment(g: &GlobalArgs, id: u64, body: &str) -> Result<()> {
             .as_ref()
             .map(|ct| ct.raw.clone())
             .unwrap_or_default(),
-        created_on: c
-            .created_on
-            .as_ref()
-            .map(|d| d.chars().take(10).collect()),
+        created_on: c.created_on.as_ref().map(|d| d.chars().take(10).collect()),
     };
     let fmt = Formatter::from_json_flag(g.json);
     let human = format!("Posted comment #{} on issue #{}", c.id, id);
@@ -314,10 +321,7 @@ pub async fn list_comments(g: &GlobalArgs, id: u64, limit: u32) -> Result<()> {
                 .as_ref()
                 .map(|ct| ct.raw.clone())
                 .unwrap_or_default(),
-            created_on: c
-                .created_on
-                .as_ref()
-                .map(|d| d.chars().take(10).collect()),
+            created_on: c.created_on.as_ref().map(|d| d.chars().take(10).collect()),
         })
         .collect();
 

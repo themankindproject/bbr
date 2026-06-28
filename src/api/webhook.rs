@@ -1,17 +1,24 @@
 //! Webhook (repository hook) endpoints.
-use serde::{Deserialize, Serialize};
 use super::BitbucketClient;
 use crate::error::Result;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Webhook {
-    #[serde(default)] pub uuid: String,
-    #[serde(default)] pub description: Option<String>,
-    #[serde(default)] pub url: String,
-    #[serde(default)] pub active: bool,
-    #[serde(default)] pub created_at: Option<String>,
-    #[serde(default)] pub secret_set: bool,
-    #[serde(default)] pub events: Vec<String>,
+    #[serde(default)]
+    pub uuid: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub active: bool,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub secret_set: bool,
+    #[serde(default)]
+    pub events: Vec<String>,
 }
 
 impl BitbucketClient {

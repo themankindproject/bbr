@@ -19,7 +19,7 @@ const SCHEMAS: &[(&str, &str, &str)] = &[
     "account_id": { "type": ["string", "null"] },
     "source": { "type": "string", "enum": ["environment", "config-file", "none"] }
   }
-}"#
+}"#,
     ),
     (
         "status",
@@ -58,7 +58,7 @@ const SCHEMAS: &[(&str, &str, &str)] = &[
       }
     }
   }
-}"#
+}"#,
     ),
     (
         "pr",
@@ -80,7 +80,7 @@ const SCHEMAS: &[(&str, &str, &str)] = &[
       "updated_on": { "type": "string" }
     }
   }
-}"#
+}"#,
     ),
     (
         "ci",
@@ -102,7 +102,7 @@ const SCHEMAS: &[(&str, &str, &str)] = &[
       "duration_seconds": { "type": "integer" }
     }
   }
-}"#
+}"#,
     ),
     (
         "webhook",
@@ -127,7 +127,7 @@ const SCHEMAS: &[(&str, &str, &str)] = &[
       }
     }
   }
-}"#
+}"#,
     ),
     (
         "src",
@@ -147,7 +147,7 @@ const SCHEMAS: &[(&str, &str, &str)] = &[
       "commit_date": { "type": ["string", "null"] }
     }
   }
-}"#
+}"#,
     ),
     (
         "issue",
@@ -173,8 +173,8 @@ const SCHEMAS: &[(&str, &str, &str)] = &[
       "url": { "type": ["string", "null"] }
     }
   }
-}"#
-    )
+}"#,
+    ),
 ];
 
 pub async fn run(g: &GlobalArgs, model: Option<&str>) -> Result<()> {

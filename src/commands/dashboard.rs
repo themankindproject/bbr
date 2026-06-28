@@ -1,13 +1,13 @@
 //! PR Dashboard (`bb pr dashboard`).
 
-use serde::Serialize;
-use crate::cli::GlobalArgs;
-use crate::commands::{client, resolve_repo, make_spinner, truncate};
-use crate::error::Result;
-use crate::output::Formatter;
-use crate::output::theme::Theme;
-use crate::api::pr::{PrState, Participant};
+use crate::api::pr::{Participant, PrState};
 use crate::api::repo::Repository;
+use crate::cli::GlobalArgs;
+use crate::commands::{client, make_spinner, resolve_repo, truncate};
+use crate::error::Result;
+use crate::output::theme::Theme;
+use crate::output::Formatter;
+use serde::Serialize;
 
 #[derive(Debug, Serialize)]
 pub struct DashboardOut {
@@ -72,7 +72,11 @@ fn write_cached_repos(workspace: &str, repos: &[Repository]) {
     }
 }
 
-pub async fn run_dashboard(g: &GlobalArgs, repos_limit: Option<u32>, filter: Option<&str>) -> Result<()> {
+pub async fn run_dashboard(
+    g: &GlobalArgs,
+    repos_limit: Option<u32>,
+    filter: Option<&str>,
+) -> Result<()> {
     let client = client(g)?;
     let repo = resolve_repo(g)?;
     let ws = &repo.workspace;
@@ -120,8 +124,14 @@ pub async fn run_dashboard(g: &GlobalArgs, repos_limit: Option<u32>, filter: Opt
         let slug_clone = r.slug.clone();
         let client_ref = &client;
         futures.push(async move {
-            let open_prs = client_ref.list_prs(&ws_clone, &slug_clone, PrState::Open, 20, None, None, None).await.unwrap_or_default();
-            let merged_prs = client_ref.list_prs(&ws_clone, &slug_clone, PrState::Merged, 5, None, None, None).await.unwrap_or_default();
+            let open_prs = client_ref
+                .list_prs(&ws_clone, &slug_clone, PrState::Open, 20, None, None, None)
+                .await
+                .unwrap_or_default();
+            let merged_prs = client_ref
+                .list_prs(&ws_clone, &slug_clone, PrState::Merged, 5, None, None, None)
+                .await
+                .unwrap_or_default();
             (slug_clone, open_prs, merged_prs)
         });
     }
@@ -134,26 +144,41 @@ pub async fn run_dashboard(g: &GlobalArgs, repos_limit: Option<u32>, filter: Opt
 
     for (slug, open, merged) in results {
         for pr in open {
-            let approvals = pr.participants.iter().filter(|p| p.approved).count() 
+            let approvals = pr.participants.iter().filter(|p| p.approved).count()
                 + pr.reviewers.iter().filter(|r| r.approved).count();
 
             let matches_me = |p: &Participant| {
                 if let (Some(u1), Some(u2)) = (&p.uuid, &user.uuid) {
-                    if u1 == u2 { return true; }
+                    if u1 == u2 {
+                        return true;
+                    }
                 }
                 if let (Some(n1), Some(n2)) = (&p.nickname, &user.nickname) {
-                    if n1 == n2 { return true; }
+                    if n1 == n2 {
+                        return true;
+                    }
                 }
                 p.display_name == user.display_name
             };
 
             let is_author = pr.author.as_ref().is_some_and(matches_me);
 
-            let is_reviewer = pr.reviewers.iter().any(matches_me) 
-                || pr.participants.iter().any(|p| p.role.eq_ignore_ascii_case("REVIEWER") && matches_me(p));
+            let is_reviewer = pr.reviewers.iter().any(matches_me)
+                || pr
+                    .participants
+                    .iter()
+                    .any(|p| p.role.eq_ignore_ascii_case("REVIEWER") && matches_me(p));
 
-            let my_approval = pr.reviewers.iter().find(|r| matches_me(r)).is_some_and(|r| r.approved)
-                || pr.participants.iter().find(|p| matches_me(p)).is_some_and(|p| p.approved);
+            let my_approval = pr
+                .reviewers
+                .iter()
+                .find(|r| matches_me(r))
+                .is_some_and(|r| r.approved)
+                || pr
+                    .participants
+                    .iter()
+                    .find(|p| matches_me(p))
+                    .is_some_and(|p| p.approved);
 
             let d_pr = DashboardPr {
                 repo: slug.clone(),
@@ -180,7 +205,12 @@ pub async fn run_dashboard(g: &GlobalArgs, repos_limit: Option<u32>, filter: Opt
             recent_activity.push(DashboardActivity {
                 repo: slug.clone(),
                 event: "merged".to_string(),
-                description: format!("PR #{} \"{}\" by @{}", pr.id, pr.title, pr.author.as_ref().map_or("unknown", |a| &a.display_name)),
+                description: format!(
+                    "PR #{} \"{}\" by @{}",
+                    pr.id,
+                    pr.title,
+                    pr.author.as_ref().map_or("unknown", |a| &a.display_name)
+                ),
                 timestamp: pr.updated_on.clone(),
             });
         }
@@ -213,7 +243,10 @@ fn render_dashboard(out: &DashboardOut) -> String {
     ));
     s.push_str(&format!("{}\n\n", theme.separator()));
 
-    s.push_str(&format!("{}\n", theme.bold(&format!("Needs Your Review ({})", out.needs_review.len()))));
+    s.push_str(&format!(
+        "{}\n",
+        theme.bold(&format!("Needs Your Review ({})", out.needs_review.len()))
+    ));
     if out.needs_review.is_empty() {
         s.push_str("  (No pull requests pending your approval)\n");
     } else {
@@ -229,7 +262,10 @@ fn render_dashboard(out: &DashboardOut) -> String {
         }
     }
 
-    s.push_str(&format!("\n{}\n", theme.bold(&format!("Your Open PRs ({})", out.my_prs.len()))));
+    s.push_str(&format!(
+        "\n{}\n",
+        theme.bold(&format!("Your Open PRs ({})", out.my_prs.len()))
+    ));
     if out.my_prs.is_empty() {
         s.push_str("  (No open pull requests)\n");
     } else {

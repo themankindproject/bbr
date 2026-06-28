@@ -1,67 +1,104 @@
 //! Issue tracker endpoints.
-use serde::{Deserialize, Serialize};
 use super::BitbucketClient;
 use crate::error::Result;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Issue {
-    #[serde(default)] pub id: u64,
-    #[serde(default)] pub title: String,
-    #[serde(default)] pub content: Option<IssueContent>,
-    #[serde(default)] pub state: String,
-    #[serde(default)] pub kind: String,
-    #[serde(default)] pub priority: String,
-    #[serde(default)] pub assignee: Option<IssueUser>,
-    #[serde(default)] pub reporter: Option<IssueUser>,
-    #[serde(default)] pub created_on: Option<String>,
-    #[serde(default)] pub updated_on: Option<String>,
-    #[serde(default)] pub comment_count: u32,
-    #[serde(default)] pub votes: u32,
-    #[serde(default)] pub watches: u32,
-    #[serde(default)] pub component: Option<IssueComponent>,
-    #[serde(default)] pub milestone: Option<IssueMilestone>,
-    #[serde(default)] pub version: Option<IssueVersion>,
-    #[serde(default)] pub links: IssueLinks,
+    #[serde(default)]
+    pub id: u64,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub content: Option<IssueContent>,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub priority: String,
+    #[serde(default)]
+    pub assignee: Option<IssueUser>,
+    #[serde(default)]
+    pub reporter: Option<IssueUser>,
+    #[serde(default)]
+    pub created_on: Option<String>,
+    #[serde(default)]
+    pub updated_on: Option<String>,
+    #[serde(default)]
+    pub comment_count: u32,
+    #[serde(default)]
+    pub votes: u32,
+    #[serde(default)]
+    pub watches: u32,
+    #[serde(default)]
+    pub component: Option<IssueComponent>,
+    #[serde(default)]
+    pub milestone: Option<IssueMilestone>,
+    #[serde(default)]
+    pub version: Option<IssueVersion>,
+    #[serde(default)]
+    pub links: IssueLinks,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IssueContent {
-    #[serde(default)] pub raw: String,
-    #[serde(default)] pub markup: String,
+    #[serde(default)]
+    pub raw: String,
+    #[serde(default)]
+    pub markup: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IssueUser {
-    #[serde(default)] pub display_name: String,
-    #[serde(default)] pub nickname: Option<String>,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub nickname: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct IssueComponent { #[serde(default)] pub name: String }
+pub struct IssueComponent {
+    #[serde(default)]
+    pub name: String,
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct IssueMilestone { #[serde(default)] pub name: String }
+pub struct IssueMilestone {
+    #[serde(default)]
+    pub name: String,
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct IssueVersion { #[serde(default)] pub name: String }
+pub struct IssueVersion {
+    #[serde(default)]
+    pub name: String,
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IssueLinks {
-    #[serde(default)] pub html: IssueLink,
+    #[serde(default)]
+    pub html: IssueLink,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IssueLink {
-    #[serde(default)] pub href: Option<String>,
+    #[serde(default)]
+    pub href: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IssueComment {
-    #[serde(default)] pub id: u64,
-    #[serde(default)] pub content: Option<IssueContent>,
-    #[serde(default)] pub author: Option<IssueUser>,
-    #[serde(default)] pub created_on: Option<String>,
-    #[serde(default)] pub updated_on: Option<String>,
+    #[serde(default)]
+    pub id: u64,
+    #[serde(default)]
+    pub content: Option<IssueContent>,
+    #[serde(default)]
+    pub author: Option<IssueUser>,
+    #[serde(default)]
+    pub created_on: Option<String>,
+    #[serde(default)]
+    pub updated_on: Option<String>,
 }
 
 /// Build a BBQL query string from optional filters.
@@ -72,10 +109,18 @@ fn build_issue_query(
     assignee: Option<&str>,
 ) -> String {
     let mut parts: Vec<String> = Vec::new();
-    if let Some(s) = status  { parts.push(format!("state=\"{s}\"")); }
-    if let Some(k) = kind    { parts.push(format!("kind=\"{k}\"")); }
-    if let Some(p) = priority { parts.push(format!("priority=\"{p}\"")); }
-    if let Some(a) = assignee { parts.push(format!("assignee.nickname=\"{a}\"")); }
+    if let Some(s) = status {
+        parts.push(format!("state=\"{s}\""));
+    }
+    if let Some(k) = kind {
+        parts.push(format!("kind=\"{k}\""));
+    }
+    if let Some(p) = priority {
+        parts.push(format!("priority=\"{p}\""));
+    }
+    if let Some(a) = assignee {
+        parts.push(format!("assignee.nickname=\"{a}\""));
+    }
     parts.join(" AND ")
 }
 
@@ -105,17 +150,11 @@ impl BitbucketClient {
                 "/repositories/{workspace}/{slug}/issues?pagelen={pagelen}&sort=-updated_on&q={encoded_q}"
             )
         };
-        let page: super::Paginated<Issue> =
-            self.send(reqwest::Method::GET, &path, None).await?;
+        let page: super::Paginated<Issue> = self.send(reqwest::Method::GET, &path, None).await?;
         Ok(page.values)
     }
 
-    pub async fn get_issue(
-        &self,
-        workspace: &str,
-        slug: &str,
-        id: u64,
-    ) -> Result<Issue> {
+    pub async fn get_issue(&self, workspace: &str, slug: &str, id: u64) -> Result<Issue> {
         let path = format!("/repositories/{workspace}/{slug}/issues/{id}");
         self.send(reqwest::Method::GET, &path, None).await
     }
@@ -183,12 +222,7 @@ impl BitbucketClient {
         self.send(reqwest::Method::PUT, &path, Some(&raw)).await
     }
 
-    pub async fn delete_issue(
-        &self,
-        workspace: &str,
-        slug: &str,
-        id: u64,
-    ) -> Result<()> {
+    pub async fn delete_issue(&self, workspace: &str, slug: &str, id: u64) -> Result<()> {
         let path = format!("/repositories/{workspace}/{slug}/issues/{id}");
         self.send_empty(reqwest::Method::DELETE, &path, None).await
     }
@@ -201,9 +235,8 @@ impl BitbucketClient {
         limit: u32,
     ) -> Result<Vec<IssueComment>> {
         let pagelen = limit.min(50);
-        let path = format!(
-            "/repositories/{workspace}/{slug}/issues/{id}/comments?pagelen={pagelen}"
-        );
+        let path =
+            format!("/repositories/{workspace}/{slug}/issues/{id}/comments?pagelen={pagelen}");
         let page: super::Paginated<IssueComment> =
             self.send(reqwest::Method::GET, &path, None).await?;
         Ok(page.values)

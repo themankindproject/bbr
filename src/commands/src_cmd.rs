@@ -1,10 +1,10 @@
 //! `bbr src` — remote source browser.
-use serde::Serialize;
 use crate::cli::GlobalArgs;
 use crate::commands::{client, current_head, make_spinner, resolve_repo};
 use crate::error::Result;
 use crate::output::table::Table;
 use crate::output::Formatter;
+use serde::Serialize;
 
 #[derive(Debug, Serialize)]
 pub struct SrcCatOut {
@@ -77,10 +77,7 @@ pub async fn ls(g: &GlobalArgs, path: Option<&str>, git_ref: Option<&str>) -> Re
             },
             path: e.path.clone(),
             size: e.size,
-            commit_hash: e
-                .commit
-                .as_ref()
-                .map(|c| c.hash.chars().take(8).collect()),
+            commit_hash: e.commit.as_ref().map(|c| c.hash.chars().take(8).collect()),
             commit_date: e
                 .commit
                 .as_ref()

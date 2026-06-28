@@ -94,7 +94,18 @@ async fn test_webhooks_crud() {
 
     let c = client(&server.uri()).await;
 
-    let webhook = c.create_webhook("sdadev", "bvrm", "https://example.com/callback", None, &["repo:push".to_string()], true, None).await.unwrap();
+    let webhook = c
+        .create_webhook(
+            "sdadev",
+            "bvrm",
+            "https://example.com/callback",
+            None,
+            &["repo:push".to_string()],
+            true,
+            None,
+        )
+        .await
+        .unwrap();
     assert_eq!(webhook.uuid, "{hook-1}");
     assert_eq!(webhook.url, "https://example.com/callback");
     assert!(webhook.active);
@@ -130,7 +141,10 @@ async fn test_issue_tracker() {
 
     let c = client(&server.uri()).await;
 
-    let issues = c.list_issues("sdadev", "bvrm", 10, None, None, None, None, None).await.unwrap();
+    let issues = c
+        .list_issues("sdadev", "bvrm", 10, None, None, None, None, None)
+        .await
+        .unwrap();
     assert_eq!(issues.len(), 1);
     assert_eq!(issues[0].id, 1);
     assert_eq!(issues[0].title, "A test issue");
@@ -172,6 +186,9 @@ async fn test_source_browser() {
     assert_eq!(entries[0].path, "README.md");
     assert_eq!(entries[0].size, Some(120));
 
-    let raw = c.get_file_raw("sdadev", "bvrm", "main", "README.md").await.unwrap();
+    let raw = c
+        .get_file_raw("sdadev", "bvrm", "main", "README.md")
+        .await
+        .unwrap();
     assert_eq!(raw, "hello world");
 }

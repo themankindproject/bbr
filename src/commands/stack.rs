@@ -1,13 +1,13 @@
 //! Stacked PRs CLI command (`bb pr stack`).
 
-use serde::Serialize;
+use crate::api::pr::{CreateBranchRef, CreateNamed, CreatePrRequest, MergePrRequest};
 use crate::cli::GlobalArgs;
-use crate::commands::{client, resolve_repo, current_head, confirm, make_spinner};
+use crate::commands::{client, confirm, current_head, make_spinner, resolve_repo};
 use crate::error::{BitbucketError, Result};
-use crate::output::Formatter;
 use crate::output::theme::Theme;
+use crate::output::Formatter;
 use crate::stack::{StackConfig, StackDef, StackPr};
-use crate::api::pr::{CreatePrRequest, CreateBranchRef, CreateNamed, MergePrRequest};
+use serde::Serialize;
 
 #[derive(Debug, Serialize)]
 pub struct StackInitOut {
@@ -71,10 +71,13 @@ pub struct StackAbortOut {
 
 pub async fn init(g: &GlobalArgs, name: &str, base: Option<&str>) -> Result<()> {
     let mut config = StackConfig::load().unwrap_or_default();
-    
+
     // Check if stack already exists
     if config.find_stack(name).is_some() {
-        return Err(BitbucketError::Other(format!("Stack '{}' already exists.", name)));
+        return Err(BitbucketError::Other(format!(
+            "Stack '{}' already exists.",
+            name
+        )));
     }
 
     let base_branch = match base {
@@ -127,25 +130,37 @@ pub async fn add(g: &GlobalArgs, branch: &str, parent: Option<&str>) -> Result<(
 
     let spinner = make_spinner(g.json);
     spinner.set_message(format!("Pushing branch {} to remote...", branch));
-    
+
     // Push branch to remote
     crate::git::push_branch(branch)?;
 
-    spinner.set_message(format!("Creating pull request: {} → {}...", branch, parent_branch));
+    spinner.set_message(format!(
+        "Creating pull request: {} → {}...",
+        branch, parent_branch
+    ));
     let pr_req = CreatePrRequest {
         title: format!("Stacked PR: {}", branch),
-        description: Some(format!("Dependant stacked PR in chain. Targets parent branch: `{}`.", parent_branch)),
+        description: Some(format!(
+            "Dependant stacked PR in chain. Targets parent branch: `{}`.",
+            parent_branch
+        )),
         source: CreateBranchRef {
-            branch: CreateNamed { name: branch.to_string() },
+            branch: CreateNamed {
+                name: branch.to_string(),
+            },
         },
         destination: CreateBranchRef {
-            branch: CreateNamed { name: parent_branch.clone() },
+            branch: CreateNamed {
+                name: parent_branch.clone(),
+            },
         },
         close_source_branch: Some(true),
         reviewers: Vec::new(),
     };
 
-    let pr = client.create_pr(&repo.workspace, &repo.slug, &pr_req).await?;
+    let pr = client
+        .create_pr(&repo.workspace, &repo.slug, &pr_req)
+        .await?;
     spinner.finish_and_clear();
 
     stack.prs.push(StackPr {
@@ -220,7 +235,9 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
 
 pub async fn rebase(g: &GlobalArgs, push: bool) -> Result<()> {
     if !crate::git::is_working_tree_clean()? {
-        return Err(BitbucketError::Other("Working directory is dirty. Please commit or stash changes before rebasing.".into()));
+        return Err(BitbucketError::Other(
+            "Working directory is dirty. Please commit or stash changes before rebasing.".into(),
+        ));
     }
 
     let config = StackConfig::load()?;
@@ -230,12 +247,18 @@ pub async fn rebase(g: &GlobalArgs, push: bool) -> Result<()> {
     let mut steps = Vec::new();
 
     for pr in &stack.prs {
-        spinner.set_message(format!("Rebasing {} onto {}...", pr.branch, pr.parent_branch));
+        spinner.set_message(format!(
+            "Rebasing {} onto {}...",
+            pr.branch, pr.parent_branch
+        ));
         match crate::git::rebase_branch(&pr.branch, &pr.parent_branch) {
             Ok(_) => {
                 let mut push_msg = String::new();
                 if push {
-                    spinner.set_message(format!("Pushing branch {} with force-with-lease...", pr.branch));
+                    spinner.set_message(format!(
+                        "Pushing branch {} with force-with-lease...",
+                        pr.branch
+                    ));
                     match crate::git::push_force_with_lease(&pr.branch) {
                         Ok(_) => push_msg = " and pushed".to_string(),
                         Err(e) => {
@@ -274,20 +297,29 @@ pub async fn rebase(g: &GlobalArgs, push: bool) -> Result<()> {
 
 pub async fn land(g: &GlobalArgs, strategy: Option<&str>, yes: bool) -> Result<()> {
     if !crate::git::is_working_tree_clean()? {
-        return Err(BitbucketError::Other("Working directory is dirty. Please commit or stash changes before landing.".into()));
+        return Err(BitbucketError::Other(
+            "Working directory is dirty. Please commit or stash changes before landing.".into(),
+        ));
     }
 
     let config = StackConfig::load()?;
     let stack = config.active_stack()?.clone();
 
     if stack.prs.is_empty() {
-        return Err(BitbucketError::Other("Empty stack. Nothing to land.".into()));
+        return Err(BitbucketError::Other(
+            "Empty stack. Nothing to land.".into(),
+        ));
     }
 
     let client = client(g)?;
     let repo = resolve_repo(g)?;
 
-    if !yes && !confirm(&format!("Merge and land {} stacked pull requests bottom-up? (y/n): ", stack.prs.len()))? {
+    if !yes
+        && !confirm(&format!(
+            "Merge and land {} stacked pull requests bottom-up? (y/n): ",
+            stack.prs.len()
+        ))?
+    {
         return Ok(());
     }
 
@@ -303,7 +335,10 @@ pub async fn land(g: &GlobalArgs, strategy: Option<&str>, yes: bool) -> Result<(
                 merge_strategy: strategy.map(|s| s.to_string()),
                 message: None,
             };
-            match client.merge_pr(&repo.workspace, &repo.slug, id, Some(&merge_req)).await {
+            match client
+                .merge_pr(&repo.workspace, &repo.slug, id, Some(&merge_req))
+                .await
+            {
                 Ok(_) => {
                     merged.push(id);
                     // Also clean up local branch
@@ -344,7 +379,12 @@ pub async fn abort(g: &GlobalArgs, yes: bool) -> Result<()> {
     let config = StackConfig::load()?;
     let stack = config.active_stack()?.clone();
 
-    if !yes && !confirm(&format!("Decline all PRs and delete branches for stack '{}'? (y/n): ", stack.name))? {
+    if !yes
+        && !confirm(&format!(
+            "Decline all PRs and delete branches for stack '{}'? (y/n): ",
+            stack.name
+        ))?
+    {
         return Ok(());
     }
 
@@ -358,7 +398,11 @@ pub async fn abort(g: &GlobalArgs, yes: bool) -> Result<()> {
     for pr in &stack.prs {
         if let Some(id) = pr.pr_id {
             spinner.set_message(format!("Declining PR #{}...", id));
-            if client.decline_pr(&repo.workspace, &repo.slug, id).await.is_ok() {
+            if client
+                .decline_pr(&repo.workspace, &repo.slug, id)
+                .await
+                .is_ok()
+            {
                 declined.push(id);
             }
         }
@@ -385,7 +429,9 @@ pub async fn abort(g: &GlobalArgs, yes: bool) -> Result<()> {
 
     let human = format!(
         "Stack '{}' aborted.\nDeclined {} pull requests.\nCleaned up {} branch references.",
-        stack.name, out.declined.len(), out.branches_deleted.len()
+        stack.name,
+        out.declined.len(),
+        out.branches_deleted.len()
     );
     Formatter::from_json_flag(g.json).print(&out, &human)
 }
@@ -406,7 +452,10 @@ fn render_stack_list(out: &StackListOut) -> String {
         s.push_str("  (No branches added to this stack yet)\n");
     } else {
         for (i, pr) in out.prs.iter().enumerate() {
-            let id_str = pr.pr_id.map(|id| format!("PR #{}", id)).unwrap_or_else(|| "No PR".to_string());
+            let id_str = pr
+                .pr_id
+                .map(|id| format!("PR #{}", id))
+                .unwrap_or_else(|| "No PR".to_string());
             let state_str = pr.state.as_deref().unwrap_or("PENDING");
             s.push_str(&format!(
                 "  {}. {:<16}  {:<8}  {:<10}  → {}\n",
@@ -449,7 +498,14 @@ fn render_land(out: &StackLandOut) -> String {
     s.push_str(&format!("{}\n", theme.separator()));
 
     if !out.merged.is_empty() {
-        s.push_str(&format!("  Merged PRs: {}\n", out.merged.iter().map(|id| format!("#{}", id)).collect::<Vec<_>>().join(", ")));
+        s.push_str(&format!(
+            "  Merged PRs: {}\n",
+            out.merged
+                .iter()
+                .map(|id| format!("#{}", id))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     }
     if !out.failed.is_empty() {
         s.push_str("\nFailed to merge:\n");

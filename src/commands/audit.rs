@@ -1,12 +1,12 @@
 //! Repo Audit command (`bb repo audit`).
 
-use serde::Serialize;
-use crate::cli::GlobalArgs;
-use crate::commands::{client, resolve_repo, make_spinner};
-use crate::error::Result;
-use crate::output::Formatter;
-use crate::output::theme::Theme;
 use crate::api::repo::{BranchRestriction, DefaultReviewer};
+use crate::cli::GlobalArgs;
+use crate::commands::{client, make_spinner, resolve_repo};
+use crate::error::Result;
+use crate::output::theme::Theme;
+use crate::output::Formatter;
+use serde::Serialize;
 
 #[derive(Debug, Serialize)]
 pub struct AuditOut {
@@ -60,7 +60,7 @@ pub async fn run_audit(g: &GlobalArgs, slug_arg: Option<&str>) -> Result<()> {
 
     for r in &repos {
         spinner.set_message(format!("Auditing repository {}...", r.slug));
-        
+
         let (restrictions_res, reviewers_res) = tokio::join!(
             client.list_branch_restrictions(ws, &r.slug),
             client.list_default_reviewers(ws, &r.slug)
@@ -116,7 +116,11 @@ fn matches_main(r: &BranchRestriction) -> bool {
     }
 }
 
-fn audit_repo(slug: &str, restrictions: &[BranchRestriction], default_reviewers: &[DefaultReviewer]) -> RepoAuditEntry {
+fn audit_repo(
+    slug: &str,
+    restrictions: &[BranchRestriction],
+    default_reviewers: &[DefaultReviewer],
+) -> RepoAuditEntry {
     let mut has_approval_requirement = false;
     let mut required_approvals = None;
     let mut push_restricted_main = false;
@@ -215,7 +219,11 @@ fn render_audit(out: &AuditOut) -> String {
 
     for repo in &out.repos {
         if repo.issues.is_empty() {
-            s.push_str(&format!("{} {} ✓\n", repo.slug, theme.success("(0 issues)")));
+            s.push_str(&format!(
+                "{} {} ✓\n",
+                repo.slug,
+                theme.success("(0 issues)")
+            ));
         } else {
             s.push_str(&format!("{} ({} issues)\n", repo.slug, repo.issues.len()));
             for issue in &repo.issues {
@@ -233,10 +241,7 @@ fn render_audit(out: &AuditOut) -> String {
 
     s.push_str(&format!(
         "Summary: {} issues ({} errors, {} warnings, {} info)",
-        out.summary.total_issues,
-        out.summary.errors,
-        out.summary.warnings,
-        out.summary.info
+        out.summary.total_issues, out.summary.errors, out.summary.warnings, out.summary.info
     ));
 
     s

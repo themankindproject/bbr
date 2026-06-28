@@ -1,10 +1,10 @@
 //! `bbr webhook` — repository webhook management.
-use serde::Serialize;
 use crate::cli::GlobalArgs;
 use crate::commands::{client, confirm, make_spinner, resolve_repo, truncate};
 use crate::error::{BitbucketError, Result};
 use crate::output::table::Table;
 use crate::output::Formatter;
+use serde::Serialize;
 
 #[derive(Debug, Serialize)]
 pub struct WebhookOut {

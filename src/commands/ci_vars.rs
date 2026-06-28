@@ -1,10 +1,10 @@
 //! `bbr ci vars` — pipeline variable management.
-use serde::Serialize;
 use crate::cli::GlobalArgs;
 use crate::commands::{client, make_spinner, resolve_repo};
 use crate::error::{BitbucketError, Result};
 use crate::output::table::Table;
 use crate::output::Formatter;
+use serde::Serialize;
 
 #[derive(Debug, Serialize)]
 pub struct CiVarOut {
@@ -20,7 +20,9 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
 
     let spinner = make_spinner(g.json);
     spinner.set_message("Fetching pipeline variables...");
-    let vars = api.list_pipeline_variables(&repo.workspace, &repo.slug).await?;
+    let vars = api
+        .list_pipeline_variables(&repo.workspace, &repo.slug)
+        .await?;
     spinner.finish_and_clear();
 
     let out: Vec<CiVarOut> = vars
@@ -41,11 +43,7 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
         } else {
             v.value.as_deref().unwrap_or("-").to_string()
         };
-        table = table.add_row([
-            v.key.clone(),
-            v.secured.to_string(),
-            display_value,
-        ]);
+        table = table.add_row([v.key.clone(), v.secured.to_string(), display_value]);
     }
     let human = table.render();
     fmt.print(&out, &human)
@@ -57,13 +55,23 @@ pub async fn set(g: &GlobalArgs, key: &str, value: &str, secured: bool) -> Resul
 
     let spinner = make_spinner(g.json);
     spinner.set_message("Checking existing variables...");
-    let vars = api.list_pipeline_variables(&repo.workspace, &repo.slug).await?;
+    let vars = api
+        .list_pipeline_variables(&repo.workspace, &repo.slug)
+        .await?;
     spinner.finish_and_clear();
 
     if let Some(existing) = vars.iter().find(|v| v.key == key) {
         let spinner2 = make_spinner(g.json);
         spinner2.set_message(format!("Updating {key}..."));
-        api.update_pipeline_variable(&repo.workspace, &repo.slug, &existing.uuid, key, value, secured).await?;
+        api.update_pipeline_variable(
+            &repo.workspace,
+            &repo.slug,
+            &existing.uuid,
+            key,
+            value,
+            secured,
+        )
+        .await?;
         spinner2.finish_and_clear();
         if !g.json {
             println!("Updated {key}");
@@ -71,7 +79,8 @@ pub async fn set(g: &GlobalArgs, key: &str, value: &str, secured: bool) -> Resul
     } else {
         let spinner2 = make_spinner(g.json);
         spinner2.set_message(format!("Creating {key}..."));
-        api.create_pipeline_variable(&repo.workspace, &repo.slug, key, value, secured).await?;
+        api.create_pipeline_variable(&repo.workspace, &repo.slug, key, value, secured)
+            .await?;
         spinner2.finish_and_clear();
         if !g.json {
             println!("Created {key}");
@@ -87,7 +96,9 @@ pub async fn delete(g: &GlobalArgs, key: &str) -> Result<()> {
 
     let spinner = make_spinner(g.json);
     spinner.set_message("Fetching variables...");
-    let vars = api.list_pipeline_variables(&repo.workspace, &repo.slug).await?;
+    let vars = api
+        .list_pipeline_variables(&repo.workspace, &repo.slug)
+        .await?;
     spinner.finish_and_clear();
 
     let var = vars
@@ -97,7 +108,8 @@ pub async fn delete(g: &GlobalArgs, key: &str) -> Result<()> {
 
     let spinner2 = make_spinner(g.json);
     spinner2.set_message(format!("Deleting {key}..."));
-    api.delete_pipeline_variable(&repo.workspace, &repo.slug, &var.uuid).await?;
+    api.delete_pipeline_variable(&repo.workspace, &repo.slug, &var.uuid)
+        .await?;
     spinner2.finish_and_clear();
 
     if !g.json {

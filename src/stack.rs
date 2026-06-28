@@ -1,8 +1,8 @@
 //! Stacked PRs configuration `.bbr/stack.toml`.
 
+use crate::error::{BitbucketError, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use crate::error::{BitbucketError, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StackConfig {
@@ -47,8 +47,9 @@ impl StackConfig {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let content = toml::to_string_pretty(self)
-            .map_err(|e| BitbucketError::Other(format!("failed to serialize stack config: {}", e)))?;
+        let content = toml::to_string_pretty(self).map_err(|e| {
+            BitbucketError::Other(format!("failed to serialize stack config: {}", e))
+        })?;
         std::fs::write(&path, content)
             .map_err(|e| BitbucketError::Other(format!("failed to write stack config: {}", e)))?;
         Ok(())
@@ -64,7 +65,9 @@ impl StackConfig {
 
     pub fn active_stack(&self) -> Result<&StackDef> {
         if self.stacks.is_empty() {
-            return Err(BitbucketError::Other("No stacks initialized. Run `bb pr stack init <name>` first.".into()));
+            return Err(BitbucketError::Other(
+                "No stacks initialized. Run `bb pr stack init <name>` first.".into(),
+            ));
         }
         // For simplicity, treat the first stack as active, or search if we want to store active stack
         Ok(&self.stacks[0])
@@ -72,7 +75,9 @@ impl StackConfig {
 
     pub fn active_stack_mut(&mut self) -> Result<&mut StackDef> {
         if self.stacks.is_empty() {
-            return Err(BitbucketError::Other("No stacks initialized. Run `bb pr stack init <name>` first.".into()));
+            return Err(BitbucketError::Other(
+                "No stacks initialized. Run `bb pr stack init <name>` first.".into(),
+            ));
         }
         Ok(&mut self.stacks[0])
     }

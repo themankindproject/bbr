@@ -247,7 +247,6 @@ pub struct DefaultReviewer {
     pub user: Option<super::pr::User>,
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

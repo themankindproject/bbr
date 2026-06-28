@@ -201,10 +201,14 @@ pub struct TestCase {
 /// A pipeline-level repository variable.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PipelineVariable {
-    #[serde(default)] pub uuid: String,
-    #[serde(default)] pub key: String,
-    #[serde(default)] pub value: Option<String>,
-    #[serde(default)] pub secured: bool,
+    #[serde(default)]
+    pub uuid: String,
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    pub value: Option<String>,
+    #[serde(default)]
+    pub secured: bool,
 }
 
 /// Strip braces for comparison (use in `select_step`).
@@ -367,26 +371,52 @@ impl BitbucketClient {
         }
     }
 
-    pub async fn list_pipeline_variables(&self, workspace: &str, slug: &str) -> Result<Vec<PipelineVariable>> {
-        let path = format!("/repositories/{workspace}/{slug}/pipelines_config/variables/?pagelen=100");
-        let page: super::Paginated<PipelineVariable> = self.send(reqwest::Method::GET, &path, None).await?;
+    pub async fn list_pipeline_variables(
+        &self,
+        workspace: &str,
+        slug: &str,
+    ) -> Result<Vec<PipelineVariable>> {
+        let path =
+            format!("/repositories/{workspace}/{slug}/pipelines_config/variables/?pagelen=100");
+        let page: super::Paginated<PipelineVariable> =
+            self.send(reqwest::Method::GET, &path, None).await?;
         Ok(page.values)
     }
 
-    pub async fn create_pipeline_variable(&self, workspace: &str, slug: &str, key: &str, value: &str, secured: bool) -> Result<PipelineVariable> {
+    pub async fn create_pipeline_variable(
+        &self,
+        workspace: &str,
+        slug: &str,
+        key: &str,
+        value: &str,
+        secured: bool,
+    ) -> Result<PipelineVariable> {
         let path = format!("/repositories/{workspace}/{slug}/pipelines_config/variables/");
         let body = serde_json::json!({"key": key, "value": value, "secured": secured});
         self.post(&path, &body).await
     }
 
-    pub async fn update_pipeline_variable(&self, workspace: &str, slug: &str, uuid: &str, key: &str, value: &str, secured: bool) -> Result<PipelineVariable> {
+    pub async fn update_pipeline_variable(
+        &self,
+        workspace: &str,
+        slug: &str,
+        uuid: &str,
+        key: &str,
+        value: &str,
+        secured: bool,
+    ) -> Result<PipelineVariable> {
         let path = format!("/repositories/{workspace}/{slug}/pipelines_config/variables/{uuid}");
         let body = serde_json::json!({"key": key, "value": value, "secured": secured});
         let raw = serde_json::to_string(&body)?;
         self.send(reqwest::Method::PUT, &path, Some(&raw)).await
     }
 
-    pub async fn delete_pipeline_variable(&self, workspace: &str, slug: &str, uuid: &str) -> Result<()> {
+    pub async fn delete_pipeline_variable(
+        &self,
+        workspace: &str,
+        slug: &str,
+        uuid: &str,
+    ) -> Result<()> {
         let path = format!("/repositories/{workspace}/{slug}/pipelines_config/variables/{uuid}");
         self.send_empty(reqwest::Method::DELETE, &path, None).await
     }

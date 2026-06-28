@@ -1,13 +1,13 @@
 //! Batch operations (`bb batch`).
 
-use serde::Serialize;
+use crate::api::pr::{MergePrRequest, PrState};
 use crate::cli::GlobalArgs;
-use crate::commands::{client, resolve_repo, confirm, make_spinner};
+use crate::commands::{client, confirm, make_spinner, resolve_repo};
 use crate::error::Result;
-use crate::output::Formatter;
-use crate::output::theme::Theme;
 use crate::output::table::Table;
-use crate::api::pr::{PrState, MergePrRequest};
+use crate::output::theme::Theme;
+use crate::output::Formatter;
+use serde::Serialize;
 
 #[derive(Debug, Serialize)]
 pub struct BatchPlan<T: Serialize> {
@@ -66,7 +66,9 @@ pub async fn merge_approved(
     let spinner = make_spinner(g.json);
     spinner.set_message("Fetching open pull requests...");
 
-    let prs = client.list_prs(&repo.workspace, slug, PrState::Open, 100, None, None, None).await?;
+    let prs = client
+        .list_prs(&repo.workspace, slug, PrState::Open, 100, None, None, None)
+        .await?;
 
     let mut approved_actions = Vec::new();
 
@@ -74,7 +76,11 @@ pub async fn merge_approved(
         spinner.set_message(format!("Checking approvals for PR #{}...", pr.id));
         if let Ok(full_pr) = client.get_pr(&repo.workspace, slug, pr.id).await {
             let reviewers = if full_pr.reviewers.is_empty() {
-                full_pr.participants.iter().filter(|p| p.role.eq_ignore_ascii_case("REVIEWER")).collect::<Vec<_>>()
+                full_pr
+                    .participants
+                    .iter()
+                    .filter(|p| p.role.eq_ignore_ascii_case("REVIEWER"))
+                    .collect::<Vec<_>>()
             } else {
                 full_pr.reviewers.iter().collect::<Vec<_>>()
             };
@@ -114,7 +120,8 @@ pub async fn merge_approved(
     if !g.json {
         let theme = Theme::current();
         println!("{}", theme.bold("Proposed Merge Plan:"));
-        let mut table = Table::new().headers(["PR ID", "Title", "Source", "Destination", "Approvals"]);
+        let mut table =
+            Table::new().headers(["PR ID", "Title", "Source", "Destination", "Approvals"]);
         for act in &approved_actions {
             table = table.add_row([
                 act.pr_id.to_string(),
@@ -134,7 +141,12 @@ pub async fn merge_approved(
         return Ok(());
     }
 
-    if !yes && !confirm(&format!("Merge {} pull requests? (y/n): ", approved_actions.len()))? {
+    if !yes
+        && !confirm(&format!(
+            "Merge {} pull requests? (y/n): ",
+            approved_actions.len()
+        ))?
+    {
         return Ok(());
     }
 
@@ -149,7 +161,10 @@ pub async fn merge_approved(
             merge_strategy: strategy.map(|s| s.to_string()),
             message: None,
         };
-        match client.merge_pr(&repo.workspace, slug, act.pr_id, Some(&merge_req)).await {
+        match client
+            .merge_pr(&repo.workspace, slug, act.pr_id, Some(&merge_req))
+            .await
+        {
             Ok(_) => succeeded.push(BatchActionOutcome {
                 id: act.pr_id.to_string(),
                 description: format!("PR #{} merged successfully", act.pr_id),
@@ -183,7 +198,9 @@ pub async fn rerun_failed(
     let spinner = make_spinner(g.json);
     spinner.set_message("Fetching recent pipelines...");
 
-    let pipelines = client.list_pipelines(&repo.workspace, slug, branch_filter, 50).await?;
+    let pipelines = client
+        .list_pipelines(&repo.workspace, slug, branch_filter, 50)
+        .await?;
 
     // Keep the latest pipeline per branch
     let mut latest_by_branch = std::collections::HashMap::new();
@@ -195,7 +212,9 @@ pub async fn rerun_failed(
 
     let mut failed_actions = Vec::new();
     for (_, p) in latest_by_branch {
-        if p.state_name().eq_ignore_ascii_case("FAILED") || p.state_name().eq_ignore_ascii_case("ERROR") {
+        if p.state_name().eq_ignore_ascii_case("FAILED")
+            || p.state_name().eq_ignore_ascii_case("ERROR")
+        {
             failed_actions.push(RerunAction {
                 pipeline_uuid: p.uuid.clone(),
                 build_number: p.build_number,
@@ -244,7 +263,12 @@ pub async fn rerun_failed(
         return Ok(());
     }
 
-    if !yes && !confirm(&format!("Rerun {} pipelines? (y/n): ", failed_actions.len()))? {
+    if !yes
+        && !confirm(&format!(
+            "Rerun {} pipelines? (y/n): ",
+            failed_actions.len()
+        ))?
+    {
         return Ok(());
     }
 
@@ -254,10 +278,16 @@ pub async fn rerun_failed(
     let run_spinner = make_spinner(g.json);
     for act in failed_actions {
         run_spinner.set_message(format!("Rerunning pipeline #{}...", act.build_number));
-        match client.rerun_pipeline(&repo.workspace, slug, &act.pipeline_uuid).await {
+        match client
+            .rerun_pipeline(&repo.workspace, slug, &act.pipeline_uuid)
+            .await
+        {
             Ok(new_p) => succeeded.push(BatchActionOutcome {
                 id: act.build_number.to_string(),
-                description: format!("Pipeline #{} rerun started. New build is #{}", act.build_number, new_p.build_number),
+                description: format!(
+                    "Pipeline #{} rerun started. New build is #{}",
+                    act.build_number, new_p.build_number
+                ),
                 error: None,
             }),
             Err(e) => failed.push(BatchActionOutcome {
@@ -294,7 +324,13 @@ pub async fn cleanup_merged_branches(
 
     let mut cleanup_actions = Vec::new();
     for branch in branches {
-        if branch.merged && !protected_branches.iter().any(|&p| branch.name == p || branch.name.starts_with("release/") || branch.name.starts_with("hotfix/")) {
+        if branch.merged
+            && !protected_branches.iter().any(|&p| {
+                branch.name == p
+                    || branch.name.starts_with("release/")
+                    || branch.name.starts_with("hotfix/")
+            })
+        {
             // Local cleanup is always proposed
             cleanup_actions.push(CleanupAction {
                 branch_name: branch.name.clone(),
@@ -344,7 +380,12 @@ pub async fn cleanup_merged_branches(
         return Ok(());
     }
 
-    if !yes && !confirm(&format!("Delete/cleanup {} branch targets? (y/n): ", cleanup_actions.len()))? {
+    if !yes
+        && !confirm(&format!(
+            "Delete/cleanup {} branch targets? (y/n): ",
+            cleanup_actions.len()
+        ))?
+    {
         return Ok(());
     }
 
@@ -355,7 +396,10 @@ pub async fn cleanup_merged_branches(
     for act in cleanup_actions {
         if act.is_remote {
             run_spinner.set_message(format!("Deleting remote branch {}...", act.branch_name));
-            match client.delete_branch(&repo.workspace, slug, &act.branch_name).await {
+            match client
+                .delete_branch(&repo.workspace, slug, &act.branch_name)
+                .await
+            {
                 Ok(_) => succeeded.push(BatchActionOutcome {
                     id: format!("remote/{}", act.branch_name),
                     description: format!("Deleted remote branch {}", act.branch_name),
@@ -383,7 +427,10 @@ pub async fn cleanup_merged_branches(
                     let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
                     failed.push(BatchActionOutcome {
                         id: format!("local/{}", act.branch_name),
-                        description: format!("Failed to delete local branch {} (use -D manually or prune)", act.branch_name),
+                        description: format!(
+                            "Failed to delete local branch {} (use -D manually or prune)",
+                            act.branch_name
+                        ),
                         error: Some(err),
                     })
                 }

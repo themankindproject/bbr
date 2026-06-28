@@ -16,7 +16,9 @@ fn help_lists_subcommands() {
         .stdout(predicate::str::contains("Pull request operations"))
         .stdout(predicate::str::contains("Credential management"))
         .stdout(predicate::str::contains("completion"))
-        .stdout(predicate::str::contains("Deployment and environment operations"))
+        .stdout(predicate::str::contains(
+            "Deployment and environment operations",
+        ))
         .stdout(predicate::str::contains("Manage repository issues"))
         .stdout(predicate::str::contains("Repository webhook management"))
         .stdout(predicate::str::contains("Browse remote source files"));
