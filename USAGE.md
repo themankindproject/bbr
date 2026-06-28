@@ -1,110 +1,40 @@
 # bbr Usage Guide
 
-> Complete reference and examples for `bbr`, the Bitbucket Cloud CLI for coding agents and humans.
+> Complete reference for `bbr`, the Bitbucket Cloud CLI.
 
 ---
 
-## Table of Contents
-
 - [Quick Start](#quick-start)
-- [Core Concepts](#core-concepts)
 - [Commands](#commands)
-  - [`bb status`](#bb-status) — the killer feature
-  - [`bb pr`](#bb-pr) — pull request operations
-  - [`bb ci`](#bb-ci) — pipeline operations
-  - [`bb repo`](#bb-repo) — repository metadata
-  - [`bb commit`](#bb-commit) — commit build statuses
-  - [`bb open`](#bb-open) — browser shortcuts
-  - [`bb auth`](#bb-auth) — credential management
-  - [`bb completion`](#bb-completion) — shell completions
+  - [`bb status`](#bb-status)
+  - [`bb pr`](#bb-pr)
+  - [`bb ci`](#bb-ci)
+  - [`bb repo`](#bb-repo)
+  - [`bb commit`](#bb-commit)
+  - [`bb open`](#bb-open)
+  - [`bb auth`](#bb-auth)
+  - [`bb completion`](#bb-completion)
 - [Authentication](#authentication)
-- [Output Formats](#output-formats)
 - [Exit Codes](#exit-codes)
 - [JSON Schema](#json-schema)
 - [Scripting Patterns](#scripting-patterns)
 - [Error Handling](#error-handling)
-- [Performance](#performance)
-- [Roadmap](#roadmap)
 - [Environment Variables](#environment-variables)
-- [License](#license)
 
 ---
 
 ## Quick Start
 
-### Install
-
 ```bash
-# from source
-cargo install --locked --git https://github.com/themankindproject/bbr
-
-# pre-built binary (releases page)
-curl -sSf https://github.com/themankindproject/bbr/releases/latest/download/bbr-x86_64-unknown-linux-gnu.tar.gz | tar xz
-sudo mv bb /usr/local/bin/bb
-```
-
-### Authenticate
-
-```bash
-# Option A: env vars (CI / scripts)
 export BITBUCKET_USERNAME="you@example.com"
-export BITBUCKET_TOKEN="..."
+export BITBUCKET_TOKEN="<pat-from-id.atlassian.com>"
 
-# Option B: interactive setup (local dev)
-bb auth setup
+bb status              # PR + CI for current branch
+bb pr list             # open PRs
+bb pr create --title T --body B
+bb ci list             # pipelines for this branch
+bb open pr             # open current PR in browser
 ```
-
-### Use
-
-```bash
-bb status            # PR + CI for current branch
-bb pr list           # open PRs
-bb pr create --title "Fix X" --body-file pr.md
-bb pr comments       # review comments for current branch's PR
-bb pr tasks          # tasks for current branch's PR
-bb ci status         # last pipeline
-bb ci logs --failed  # failed step log from latest pipeline
-bb commit status set --key lint --state successful --url "$CI_JOB_URL"
-bb ci watch --logs   # live-tail and print failing logs on failure
-bb open pr           # open current branch's PR
-```
-
----
-
-## Core Concepts
-
-### What is bbr?
-
-**BitBucket Remote** — a single-binary CLI that wraps the Bitbucket Cloud REST API. Designed for coding agents (fast, machine-readable) and humans (pretty output).
-
-### Agent-first design
-
-Every data command supports `--json` for stable, predictable output:
-
-```bash
-bb status --json
-bb pr list --json
-bb ci status --json
-```
-
-JSON output is designed for piping to other tools or consuming by coding agents.
-
-### Human-first design
-
-Default output uses pretty tables, color, and emoji. Respects `NO_COLOR` and auto-disables decoration when stdout is not a TTY.
-
-### Exit codes
-
-Stable exit codes for scripting:
-
-| Code | Meaning |
-|------|---------|
-| 0 | success |
-| 1 | generic error |
-| 2 | auth error (no creds / bad creds) |
-| 3 | not found (no PR / no pipeline) |
-| 4 | API rate limit |
-| 5 | pipeline failed (for `bb ci watch`) |
 
 ---
 
@@ -112,73 +42,39 @@ Stable exit codes for scripting:
 
 ### `bb status`
 
-The killer feature — shows PR + CI for the current branch in one view.
+PR + CI for the current branch in one view. The killer feature.
 
 ```bash
-$ bb status
-Repo: sdadev/bvrm-backend
-On branch: feat/av1-ffprobe-timeout  (commit 765d8bec)
+bb status                        # full overview
+bb status --short                # compact single-line
+bb status --watch [--interval N] # live refresh every N seconds (default 5)
+bb status --json                 # machine-readable
+```
+
+#### `--short`
+
+```
+sdadev/bvrm-backend  feat/av1-ffprobe-timeout  cedc6b27d5  #467 OPEN | SUCCESSFUL  7m 48s
+```
+
+#### `--watch`
+
+```
+bb status --watch (refreshing every 5s — Ctrl+C to stop)
+
+sdadev/bvrm-backend
+feat/av1-ffprobe-timeout  cedc6b27d5
 
 PR #467 — open
   feat/av1-ffprobe-timeout -> main
   Title: create frame_utils_1_2 with ffprobe-based AV1 detection
-  Author: bravo1goingdark
-  Reviewers: Ash approved, Sam pending
-  Comments: 5  /  Tasks: 1
-  URL:   https://bitbucket.org/sdadev/bvrm-backend/pull-requests/467
+  Comments: 0  /  Tasks: 0
 
-CI - last pipeline
-  [ok] SUCCESSFUL (172s)
+Pipeline
+────────────────────────────────────
+  [ok] SUCCESSFUL  (7m 48s)
   Branch: test-ci  /  Commit: 4644ec4b
-  Steps:
-    [ok] Run Tests        172s
-
-Next:
-  bb open pr
-  bb open ci
-```
-
-#### JSON output
-
-```bash
-$ bb status --json
-{
-  "repo": {
-    "workspace": "sdadev",
-    "slug": "bvrm-backend",
-    "full_name": "sdadev/bvrm-backend"
-  },
-  "branch": "feat/av1-ffprobe-timeout",
-  "commit": "765d8bec",
-  "pr": {
-    "id": 467,
-    "state": "OPEN",
-    "title": "create frame_utils_1_2 with ffprobe-based AV1 detection",
-    "source": "feat/av1-ffprobe-timeout",
-    "destination": "main",
-    "url": "https://bitbucket.org/sdadev/bvrm-backend/pull-requests/467",
-    "author": "bravo1goingdark",
-    "comment_count": 5,
-    "task_count": 1,
-    "reviewers": [
-      { "display_name": "Ash", "approved": true },
-      { "display_name": "Sam", "approved": false }
-    ]
-  },
-  "pipeline": {
-    "uuid": "{abc-123}",
-    "state": "SUCCESSFUL",
-    "duration_seconds": 172,
-    "branch": "test-ci",
-    "commit": "4644ec4b",
-    "url": "https://bitbucket.org/sdadev/bvrm-backend/pipelines/results/42",
-    "failing_steps": [],
-    "steps": [
-      { "uuid": "{step-1}", "name": "Run Tests", "state": "SUCCESSFUL", "duration_seconds": 172 }
-    ]
-  },
-  "suggested_commands": ["bb open pr", "bb open ci"]
-}
+  [ok] Run Tests           7m 48s
 ```
 
 ---
@@ -190,78 +86,78 @@ Pull request operations.
 #### `bb pr list`
 
 ```bash
-$ bb pr list
-ID    State   Title                                                  Source -> Destination
-467   OPEN    create frame_utils_1_2 with ffprobe-based AV1 detection feat/av1-ffprobe-timeout -> main
-462   OPEN    Fix library flag to mark matches outside licensed...    fix/lib-flag -> main
-458   MERGED  Increase download chunk size to 512KB                  feat/chunk-size -> main
+bb pr list                          # open PRs (default)
+bb pr list --state merged           # merged PRs
+bb pr list --state all --limit 50   # all states, more results
+bb pr list --json                   # JSON array
 ```
 
-Options:
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--state` | Filter by state: `open`, `merged`, `declined`, `all` | `open` |
-| `--limit` | Max PRs to show | `25` |
-| `--json` | Emit JSON | `false` |
+Output uses a table with columns: ID, State, Title, Source, Destination, Author.
 
 #### `bb pr view`
 
-View a single PR. Defaults to the current branch's PR.
-
 ```bash
-bb pr view 467          # by ID
-bb pr view              # current branch's PR
-bb pr view --json       # JSON output
+bb pr view                          # current branch's open PR
+bb pr view 467                      # by ID
+bb pr view --diff                   # append diff to output
+bb pr view --comments               # show comments inline
+bb pr view --json
 ```
 
 #### `bb pr create`
 
-Create a pull request.
-
 ```bash
-bb pr create --title "Fix X" --body "Description" --source feat/x --destination main
-bb pr create --title "Fix X" --body-file pr-description.md
-echo "Body from stdin" | bb pr create --title "Fix X" --body-stdin
+bb pr create --title "Fix X" --body "Description"
+bb pr create --title "Fix X" --body-file pr.md
+bb pr create --title "Fix X" --body-stdin       # body from stdin
+bb pr create --title "Fix X" \
+  --src feat/x --dst main                       # explicit branches
+bb pr create --title "Fix X" \
+  --close-source-branch                         # auto-close source
+bb pr create --title "Fix X" \
+  --reviewer "user1" --reviewer "user2"         # add reviewers
 ```
 
-Options:
+Defaults: `--src` = current branch, `--dst` = repo default branch.
 
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--title` | PR title (required) | — |
-| `--body` | PR description | `null` |
-| `--body-file` | Read body from file | — |
-| `--body-stdin` | Read body from stdin | `false` |
-| `--src` | Source branch | current branch |
-| `--dst` | Destination branch | `main` |
-| `--close-source-branch` | Close source branch after merge | `false` |
-| `--json` | Emit JSON | `false` |
+#### `bb pr update`
+
+```bash
+bb pr update 467 --title "New title"
+bb pr update 467 --description "New description"
+bb pr update 467 --title "New" --description "New"
+```
 
 #### `bb pr comment`
-
-Add a comment to a PR.
 
 ```bash
 bb pr comment 467 --body "Looks good!"
 bb pr comment 467 --body-file review.md
-echo "Approved" | bb pr comment 467 --body-stdin
+bb pr comment 467 --reply-to 123 --body "Agreed"   # reply to a comment
 ```
 
-#### PR review data
-
-Review subcommands default to the current branch's open PR when the ID is
-omitted.
+#### `bb pr approve / decline / merge`
 
 ```bash
-bb pr comments [467] [--limit 50]
-bb pr tasks [467] [--limit 50]
-bb pr commits [467] [--limit 50]
-bb pr statuses [467] [--limit 50]
-bb pr conflicts [467] [--limit 50]
+bb pr approve 467           # approve
+bb pr unapprove 467         # remove approval
+bb pr decline 467           # decline (close without merging)
+bb pr merge 467             # merge with confirmation prompt
 ```
 
-Change requests are explicit write operations:
+#### Review data subcommands
+
+All default to the current branch's PR when ID is omitted.
+
+```bash
+bb pr comments [<id>] [--limit 50]
+bb pr tasks [<id>] [--limit 50]
+bb pr commits [<id>] [--limit 50]
+bb pr statuses [<id>] [--limit 50]    # commit build statuses
+bb pr conflicts [<id>]                # merge conflict info
+```
+
+Change requests:
 
 ```bash
 bb pr request-changes 467
@@ -274,97 +170,81 @@ bb pr unrequest-changes 467
 
 Pipeline / CI operations.
 
-#### `bb ci status`
-
-Show the latest pipeline for a branch.
+#### `bb ci list`
 
 ```bash
-$ bb ci status
-Branch: feat/x
-
-Pipeline #42  [ok] SUCCESSFUL  (172s)
-  Branch: test-ci  /  Commit: 4644ec4b
-  Steps:
-    [ok] Run Tests        172s
+bb ci list                          # latest pipelines for current branch
+bb ci list --branch main            # pipelines for a specific branch
+bb ci list --json
 ```
 
-Options:
+Output uses a table with columns: #, State, Step, Duration. Each step is its own row.
 
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--branch` | Branch to check | current branch |
-| `--json` | Emit JSON | `false` |
+#### `bb ci status`
+
+```bash
+bb ci status                        # latest pipeline for current branch
+bb ci status --branch main
+bb ci status --json
+```
+
+#### `bb ci steps`
+
+```bash
+bb ci steps                         # steps for latest pipeline (current branch)
+bb ci steps <uuid>                  # steps for a specific pipeline
+bb ci steps --json
+```
+
+Output uses a table with columns: Step, State, Duration.
 
 #### `bb ci watch`
 
-Live-tail a running pipeline. Exits non-zero on failure (for CI scripts).
+Live-tail a running pipeline. Exits non-zero on failure.
 
 ```bash
-$ bb ci watch
-Watching pipeline {abc-123} on test-ci...
-  [~] IN_PROGRESS      Run Tests (1m 23s)
-  [ok] SUCCESSFUL       Run Tests (2m 52s)
-
-Pipeline [ok] SUCCESSFUL in 172s
+bb ci watch                         # current branch
+bb ci watch --branch main
+bb ci watch --logs                  # print failing log on failure
+bb ci watch --interval-secs 10      # poll interval (default 5)
 ```
-
-Options:
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--branch` | Branch to watch | current branch |
-| `--interval-secs` | Poll interval | `5` |
-| `--logs` | Print the failing step log when the pipeline fails | `false` |
-| `--json` | Emit JSON | `false` |
 
 #### `bb ci logs`
 
-Fetch logs for a pipeline step. With no UUID, it uses the latest pipeline for the current branch and prefers a failed step.
-
 ```bash
-bb ci logs                              # smart default: failed step, else latest step
-bb ci logs --failed                     # require a failed step
-bb ci logs --latest                     # latest step from latest pipeline
-bb ci logs {abc-123}                    # first step's log for a specific pipeline
-bb ci logs {abc-123} --failed           # failed step for a specific pipeline
-bb ci logs {abc-123} --step {step-1}    # specific step UUID
-bb ci logs {abc-123} --step "Run Tests" # specific step name
+bb ci logs                          # smart default: failed step, else latest
+bb ci logs --failed                 # require a failed step
+bb ci logs --latest                 # latest step from latest pipeline
+bb ci logs <uuid>                   # first step's log for a pipeline
+bb ci logs <uuid> --failed          # failed step for a pipeline
+bb ci logs <uuid> --step <step-uuid> # specific step UUID
+bb ci logs <uuid> --step "Run Tests" # specific step name
+bb ci logs --output ./pipeline.log  # write log to file (not stdout)
 ```
 
 ---
 
 ### `bb repo`
 
-Repository metadata.
+Repository information.
 
 ```bash
-$ bb repo info
-workspace: sdadev
-slug:      bvrm-backend
-full name: sdadev/bvrm-backend
-scm:       git
-private:   true
-language:  Rust
-url:       https://bitbucket.org/sdadev/bvrm-backend
+bb repo info                        # workspace, slug, language, url, etc.
+bb repo branches [--limit 50]       # remote branches (table)
+bb repo tags [--limit 50]           # remote tags (table)
+bb repo commits [--branch main] [--limit 50]  # commits (table)
 ```
 
-```bash
-bb repo branches [--limit 20]
-bb repo tags [--limit 20]
-bb repo commits [--branch main] [--limit 20]
-```
+All support `--json`.
 
 ---
 
 ### `bb commit`
 
-Commit metadata and build statuses.
-
-Create or update a build status for a commit. If `commit` is omitted, `bb`
-uses the current HEAD commit.
+Create or update a build status on a commit. Defaults to HEAD when commit is omitted.
 
 ```bash
-bb commit status set [commit] \
+bb commit status set [<commit>] \
   --key lint \
   --state successful \
   --name "Lint" \
@@ -373,20 +253,22 @@ bb commit status set [commit] \
   --refname "$BITBUCKET_BRANCH"
 ```
 
-Accepted states are `successful`, `failed`, `inprogress`, and `stopped`.
+Accepted states: `successful`, `failed`, `inprogress`, `stopped`.
 
 ---
 
 ### `bb open`
 
-Open Bitbucket pages in your browser. With `--json`, `bb` prints the URL and does not launch a browser.
+Open Bitbucket pages in your browser. With `--json`, prints the URL and does not launch a browser.
 
 ```bash
-bb open              # repository page
-bb open repo         # repository page
-bb open pr           # current branch's open PR
-bb open pr 467       # PR by ID
-bb open ci           # latest pipeline for current branch
+bb open                           # repository page
+bb open repo                      # same
+bb open pr-list                   # PR list
+bb open pr                        # current branch's open PR
+bb open pr 467                    # PR by ID
+bb open pipelines                 # pipelines list
+bb open ci                        # latest pipeline for current branch
 bb open ci --branch main
 ```
 
@@ -396,50 +278,21 @@ bb open ci --branch main
 
 Credential management.
 
-#### `bb auth setup`
-
-Interactive credential setup.
-
 ```bash
-$ bb auth setup
-  Need a Personal Access Token? https://id.atlassian.com/manage-profile/security/api-tokens
-  Required scopes: account:read, repository:read, repository:write,
-                   pullrequest:read, pullrequest:write, pipeline:read
-
-Bitbucket username (email): you@example.com
-  Credential type:
-    1) Atlassian API Token (recommended, from id.atlassian.com)
-    2) Personal Access Token (from bitbucket.org)
-    3) App password (legacy)
-Choose [1]: 1
-Secret: ********
-  Stored credentials in: ~/.config/bb/credentials.toml
-  Run `bb auth status` to verify.
+bb auth setup                     # interactive credential setup
+bb auth test                      # validate credentials against /user
+bb auth status                    # show current auth method
+bb auth logout                    # remove stored credentials
 ```
 
-#### `bb auth status`
-
-Verify stored credentials work.
-
-```bash
-$ bb auth status
-Authenticated as Your Name (you@example.com) via config-file
+`bb auth test` output:
 ```
-
-#### `bb auth logout`
-
-Remove stored credentials.
-
-```bash
-$ bb auth logout
-Removed stored credentials.
+✓ Authenticated as Your Name (you@example.com)
 ```
 
 ---
 
 ### `bb completion`
-
-Emit shell completions to stdout.
 
 ```bash
 bb completion bash > /etc/bash_completion.d/bb
@@ -451,13 +304,13 @@ bb completion fish > ~/.config/fish/completions/bb.fish
 
 ## Authentication
 
-`bbr` tries three credential sources, in order:
+`bbr` checks credential sources in order:
 
 ### 1. Environment variables (CI / scripts)
 
 ```bash
 export BITBUCKET_USERNAME="you@example.com"
-export BITBUCKET_TOKEN="..."              # PAT (preferred)
+export BITBUCKET_TOKEN="..."            # PAT (preferred)
 # or legacy:
 export BITBUCKET_APP_PASSWORD="..."
 ```
@@ -473,18 +326,10 @@ username = "you@example.com"
 token = "..."
 ```
 
-On macOS: `~/Library/Application Support/bb/credentials.toml`.
-On Windows: `%APPDATA%\bb\credentials.toml`.
-
-### 3. System keyring (planned for v0.3)
-
-- macOS Keychain
-- Linux Secret Service (gnome-keyring, kwallet)
-- Windows Credential Manager
+macOS: `~/Library/Application Support/bb/credentials.toml`.
+Windows: `%APPDATA%\bb\credentials.toml`.
 
 ### PAT scopes
-
-Required scopes for a Personal Access Token:
 
 | Scope | Access |
 |-------|--------|
@@ -495,125 +340,55 @@ Required scopes for a Personal Access Token:
 | `pullrequest:write` | Create PRs/comments and request changes |
 | `pipeline:read` | Read pipeline status |
 
-### App password scopes (legacy)
-
-| Scope | Access |
-|-------|--------|
-| `Pull requests: Read, Write` | Read and create PRs |
-| `Pipelines: Read` | Read pipeline status |
-| `Account: Read` | Read user info |
-| `Repositories: Read` | Read repos and branches |
-
----
-
-## Output Formats
-
-### Human output (default)
-
-Pretty tables, color, emoji. Respects `NO_COLOR` and auto-disables decoration when stdout is not a TTY.
-
-```bash
-bb pr list                # table output
-bb status                 # merged PR + CI view
-```
-
-### JSON output (`--json`)
-
-Stable, predictable JSON for coding agents.
-
-```bash
-bb pr list --json         # JSON array of PRs
-bb status --json          # JSON object with PR + CI
-bb ci status --json       # JSON object with pipeline
-```
-
-Schema documented in [`docs/output-schema.md`](docs/output-schema.md).
-
 ---
 
 ## Exit Codes
 
-| Code | Meaning | When |
-|------|---------|------|
-| 0 | success | command completed successfully |
-| 1 | generic error | network failure, invalid input, etc. |
-| 2 | auth error | no credentials found or invalid credentials |
-| 3 | not found | no PR or pipeline found |
-| 4 | API rate limit | Bitbucket API rate limit exceeded |
-| 5 | pipeline failed | `bb ci watch` when pipeline fails |
+| Code | Meaning |
+|------|---------|
+| 0 | success |
+| 1 | generic error |
+| 2 | auth failure |
+| 3 | not found |
+| 4 | rate limited |
+| 5 | pipeline failed (`bb ci watch`) |
 
 ---
 
 ## JSON Schema
 
-See [`docs/output-schema.md`](docs/output-schema.md) for the complete schema.
+All data commands accept `--json`. Schema is documented in [`docs/output-schema.md`](docs/output-schema.md).
 
-### Common shapes
+### Common patterns
 
-#### `bb status --json`
-
-```json
-{
-  "branch": "feat/x",
-  "commit": "765d8bec",
-  "pr": { "id": 467, "state": "OPEN", "title": "...", "source": "feat/x", "destination": "main", "url": "..." },
-  "pipeline": { "uuid": "...", "state": "SUCCESSFUL", "duration_seconds": 172, "steps": [...] }
-}
-```
-
-#### `bb pr list --json`
-
-```json
-{
-  "workspace": "sdadev",
-  "slug": "bvrm",
-  "state": "open",
-  "pull_requests": [
-    { "id": 467, "state": "OPEN", "title": "...", "source": "feat/x", "destination": "main" }
-  ]
-}
+```bash
+bb status --json       # { branch, commit, pr?, pipeline?, ... }
+bb pr list --json      # { workspace, slug, state, pull_requests: [...] }
+bb ci status --json    # { branch, pipeline: { uuid, state, steps, ... } }
 ```
 
 ---
 
 ## Scripting Patterns
 
-### Check if PR is ready to merge
-
 ```bash
-if bb status --json | jq -e '.pr.state == "OPEN"' > /dev/null; then
-  echo "PR is open, checking CI..."
-  if bb status --json | jq -e '.pipeline.state == "SUCCESSFUL"' > /dev/null; then
-    echo "CI passed, ready to merge"
-  fi
-fi
-```
+# Check PR state
+bb status --json | jq -r '.pr.state'
 
-### Create PR from script
+# Get PR URL
+bb pr view --json | jq -r '.url'
 
-```bash
-bb pr create \
-  --title "Fix: $TITLE" \
-  --body-file /tmp/pr-body.md \
-  --source "$BRANCH" \
-  --destination main \
-  --json | jq -r '.url'
-```
+# Create PR and get URL
+bb pr create --title "Fix" --body-file body.md --json | jq -r '.url'
 
-### Watch CI in CI script
-
-```bash
+# Wait for CI
 bb ci watch --branch "$BRANCH" --interval-secs 10
-# exits non-zero if pipeline fails
-```
 
-### Batch check multiple PRs
+# List PRs with details
+bb pr list --state open --json | jq -c '.pull_requests[] | {id, title}'
 
-```bash
-bb pr list --state open --json | jq -r '.pull_requests[].id' | while read id; do
-  echo "PR #$id:"
-  bb pr view "$id" --json | jq '{title, state, url}'
-done
+# Check commit status
+bb pr statuses --json | jq -r '.statuses[] | select(.state == "FAILED") | .key'
 ```
 
 ---
@@ -623,74 +398,11 @@ done
 All errors go to stderr with a clear message:
 
 ```bash
-bb status 2>&1
-# bb: no Bitbucket credentials found; run `bb auth setup` or set BITBUCKET_USERNAME + BITBUCKET_TOKEN
-# hint: run `bb auth setup`, or set BITBUCKET_USERNAME + BITBUCKET_TOKEN
+$ bb status
+bb: no Bitbucket credentials found; run `bb auth setup` or set BITBUCKET_USERNAME + BITBUCKET_TOKEN
 ```
 
-Exit codes are stable and documented — scripts can branch on them.
-
----
-
-## Performance
-
-Measured on a typical dev machine:
-
-| Operation | Cold start | Typical |
-|-----------|-----------|---------|
-| `bb --version` | < 10 ms | < 10 ms |
-| `bb status` | 50-100 ms | 200-500 ms |
-| `bb pr list` | 50-100 ms | 300-800 ms |
-| `bb ci status` | 50-100 ms | 200-500 ms |
-| `bb ci watch` | 50-100 ms | polls every 5s |
-
-Cold start includes binary startup + auth resolution. Subsequent API calls are faster.
-
----
-
-## Roadmap
-
-The implemented command set now covers the common inner loop:
-
-- find the current repo and branch
-- inspect PR state, comments, tasks, commits, statuses, and conflicts
-- create/update/comment/approve/merge PRs
-- inspect and watch pipelines
-- fetch logs and steps
-- list branches/tags/commits
-- publish commit build statuses
-
-The next production-grade improvements should stay workflow-driven rather than
-wrapping the whole Bitbucket API at once.
-
-### Highest-value next commands
-
-| Area | Candidate commands | Notes |
-|------|--------------------|-------|
-| Pipeline test reports | `bb ci tests`, `bb ci tests --failed` | Summarize failing test cases before falling back to full logs |
-| Branch restrictions | `bb branch restrictions`, `bb branch protect` | Useful for repo policy audits and reproducible setup |
-| Reports and annotations | `bb report publish`, `bb report annotations` | Lets CI and agents write lint/test findings into Bitbucket |
-| Source browsing | `bb source ls`, `bb source cat`, `bb source history` | Inspect files at refs without cloning or switching branches |
-| Webhooks | `bb webhooks list/create/delete` | Manage integrations as code |
-| Downloads | `bb downloads list/upload/delete` | Release artifact workflows |
-
-### Suggested implementation order
-
-1. Add read-only CI test report commands.
-2. Add read-only branch restriction listing before write commands.
-3. Add report/annotation publishing for CI integrations.
-4. Add source browsing as read-only commands.
-5. Add webhook and downloads management.
-
-### Design rules for new commands
-
-- Every data command should support `--json`.
-- JSON output should be documented before release.
-- Write commands should have explicit names and avoid surprising defaults.
-- Read commands should default to current repo/current branch when that matches
-  existing `bb status`, `bb pr view`, and `bb ci logs` behavior.
-- Mock-server integration tests should cover endpoint paths, auth headers, and
-  representative response bodies.
+Exit codes are stable — scripts can branch on `$?`.
 
 ---
 
@@ -699,14 +411,8 @@ wrapping the whole Bitbucket API at once.
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `BITBUCKET_USERNAME` | Bitbucket username (email) | — |
-| `BITBUCKET_TOKEN` | Personal Access Token (PAT) | — |
+| `BITBUCKET_TOKEN` | Personal Access Token | — |
 | `BITBUCKET_APP_PASSWORD` | Legacy app password | — |
 | `BITBUCKET_API_BASE` | API base URL | `https://api.bitbucket.org/2.0` |
 | `NO_COLOR` | Disable color output | — |
 | `XDG_CONFIG_HOME` | Config directory (Linux) | `~/.config` |
-
----
-
-## License
-
-MIT. See [LICENSE](LICENSE).
