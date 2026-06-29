@@ -49,21 +49,26 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target/${{ matrix.target }}/release/bbr.exe dist/
-          Copy-Item README.md LICENSE dist/
+          Copy-Item -Path README.md, LICENSE -Destination dist/
           Compress-Archive dist/* bbr-${{ matrix.target }}.zip
 
       - name: Generate shell completions
+        shell: bash
         run: |
-          cargo run --release -- completion bash > bb.bash
-          cargo run --release -- completion zsh  > bb.zsh
-          cargo run --release -- completion fish > bb.fish
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            BIN="./target/${{ matrix.target }}/release/bbr.exe"
+          else
+            BIN="./target/${{ matrix.target }}/release/bbr"
+          fi
+          $BIN completion bash > bbr.bash
+          $BIN completion zsh  > bbr.zsh
+          $BIN completion fish > bbr.fish
 
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            bbr-${{ matrix.target }}.tar.gz
-            bbr-${{ matrix.target }}.zip
-            bb.bash
-            bb.zsh
-            bb.fish
+            bbr-${{ matrix.target }}.${{ matrix.archive }}
+            bbr.bash
+            bbr.zsh
+            bbr.fish
           generate_release_notes: true
