@@ -1,4 +1,4 @@
-//! `bb ci` — status / watch / logs.
+//! `bbr ci` — status / watch / logs.
 
 use std::time::Duration;
 
@@ -584,7 +584,7 @@ pub async fn rerun(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
     let fmt = Formatter::from_json_flag(g.json);
     let human = format!("Reran pipeline #{}", new_pipeline.build_number);
     if !g.json {
-        fmt.print(&out, &format!("{human}\nNext: bb ci watch"))
+        fmt.print(&out, &format!("{human}\nNext: bbr ci watch"))
     } else {
         fmt.print(&out, &human)
     }

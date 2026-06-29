@@ -32,7 +32,7 @@ pub struct GlobalArgs {
     pub workspace: Option<String>,
 }
 
-/// `bb` — a Bitbucket Cloud CLI.
+/// `bbr` — a Bitbucket Cloud CLI.
 #[derive(Debug, Parser)]
 #[command(
     name = "bbr",

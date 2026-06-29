@@ -1,4 +1,4 @@
-//! Repo Audit command (`bb repo audit`).
+//! Repo Audit command (`bbr repo audit`).
 
 use crate::api::repo::{BranchRestriction, DefaultReviewer};
 use crate::cli::GlobalArgs;

@@ -1,7 +1,7 @@
 //! `bbr` — a Bitbucket Cloud CLI library + binary.
 //!
 //! The library is exposed so integration tests can exercise the API client
-//! directly. The `bb` binary (`src/main.rs`) is a thin wrapper around
+//! directly. The `bbr` binary (`src/main.rs`) is a thin wrapper around
 //! [`cli::run`].
 
 pub mod api;

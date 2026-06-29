@@ -16,7 +16,7 @@ pub const CREDENTIALS_FILE: &str = "credentials.toml";
 /// Filename for general config (v0.3+; reserved now).
 pub const CONFIG_FILE: &str = "config.toml";
 
-/// Returns the platform-appropriate config directory for `bb`.
+/// Returns the platform-appropriate config directory for `bbr`.
 ///
 /// - Linux: `$XDG_CONFIG_HOME/bbr` or `$HOME/.config/bbr`
 /// - macOS: `~/Library/Application Support/bbr`

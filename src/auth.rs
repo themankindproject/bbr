@@ -1,4 +1,4 @@
-//! Credential resolution for `bb`.
+//! Credential resolution for `bbr`.
 //!
 //! Order of precedence:
 //! 1. Environment variables (`BITBUCKET_USERNAME`, `BITBUCKET_TOKEN`).

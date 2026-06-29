@@ -1,7 +1,7 @@
 //! End-to-end CLI smoke tests against a mock Bitbucket server.
 //!
 //! These exercise the binary's `--help`, version, completion, and a couple of
-//! `--json` data paths. They build the `bb` binary via `assert_cmd`.
+//! `--json` data paths. They build the `bbr` binary via `assert_cmd`.
 
 use assert_cmd::Command;
 use predicates::prelude::*;

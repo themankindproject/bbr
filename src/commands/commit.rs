@@ -1,4 +1,4 @@
-//! `bb commit` — commit metadata and build-status operations.
+//! `bbr commit` — commit metadata and build-status operations.
 
 use serde::Serialize;
 

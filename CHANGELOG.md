@@ -13,7 +13,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- PowerShell `bb completion --install` wrote to `.config/powershell/` instead of `Documents/PowerShell/` on Windows.
+- PowerShell `bbr completion --install` wrote to `.config/powershell/` instead of `Documents/PowerShell/` on Windows.
+
+## [0.1.1] - 2026-06-29
+
+### Fixed
+
+- Pasting API tokens in `bbr auth setup` no longer corrupts them with bracketed-paste
+  escape sequences (`\x1b[200~` … `\x1b[201~`) from modern terminals.
+- Pasted API tokens are now trimmed of leading/trailing whitespace, matching the
+  behaviour of the username prompt.
+
+### Changed
+
+- All internal command references and suggested commands unified to `bbr`
+  (was inconsistently mixing `bb` and `bbr`).
 
 ## [0.1.0] - 2026-06-29
 
@@ -139,5 +153,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credentials file opened with mode `0o600` at creation time on Unix, closing TOCTOU window.
 - No system keyring dependency (avoids 671 MB texlive pull).
 
-[Unreleased]: https://github.com/themankindproject/bbr/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/themankindproject/bbr/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/themankindproject/bbr/releases/tag/v0.1.1
 [0.1.0]: https://github.com/themankindproject/bbr/releases/tag/v0.1.0

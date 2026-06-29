@@ -1,4 +1,4 @@
-//! Stacked PRs CLI command (`bb pr stack`).
+//! Stacked PRs CLI command (`bbr pr stack`).
 
 use crate::api::pr::{CreateBranchRef, CreateNamed, CreatePrRequest, MergePrRequest};
 use crate::cli::GlobalArgs;

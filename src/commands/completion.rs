@@ -1,4 +1,4 @@
-//! `bb completion install` — auto-wire shell completions.
+//! `bbr completion install` — auto-wire shell completions.
 
 use std::fmt::Write as FmtWrite;
 use std::fs;

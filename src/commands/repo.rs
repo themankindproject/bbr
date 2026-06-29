@@ -1,4 +1,4 @@
-//! `bb repo` — info, branches, commits.
+//! `bbr repo` — info, branches, commits.
 
 use serde::Serialize;
 

@@ -1,4 +1,4 @@
-//! `bb auth` — setup / status / logout.
+//! `bbr auth` — setup / status / logout.
 
 use std::io::{self, BufRead, Write};
 
@@ -26,9 +26,9 @@ pub struct AuthStatusOut {
 /// Credential setup (interactive or non-interactive).
 pub fn setup(username: Option<String>, token: Option<String>) -> Result<()> {
     let (username, secret) = match (username, token) {
-        (Some(u), Some(t)) => (u.trim().to_string(), t),
+        (Some(u), Some(t)) => (u.trim().to_string(), t.trim().to_string()),
         (None, None) => {
-            println!("bb auth setup");
+            println!("bbr auth setup");
             println!("  Need an API token? {API_TOKEN_URL}");
             println!("  Required scopes: account:read, repository:read, repository:write,");
             println!("                   pullrequest:read, pullrequest:write, pipeline:read");
@@ -177,5 +177,17 @@ fn prompt(msg: &str) -> Result<String> {
 }
 
 fn prompt_secret(msg: &str) -> Result<String> {
-    rpassword::prompt_password(msg).map_err(BitbucketError::Io)
+    let s = rpassword::prompt_password(msg).map_err(BitbucketError::Io)?;
+    let s = strip_bracketed_paste(&s);
+    Ok(s.trim().to_string())
+}
+
+/// Strip bracketed-paste escape sequences that modern terminals wrap pasted
+/// text in (`\x1b[200~` … `\x1b[201~`).  These pass through in canonical
+/// mode (which `rpassword` uses) and would corrupt the stored credential.
+fn strip_bracketed_paste(s: &str) -> &str {
+    const BP_START: &str = "\x1b[200~";
+    const BP_END: &str = "\x1b[201~";
+    let s = s.strip_prefix(BP_START).unwrap_or(s);
+    s.strip_suffix(BP_END).unwrap_or(s)
 }

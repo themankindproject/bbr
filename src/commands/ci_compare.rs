@@ -1,4 +1,4 @@
-//! Pipeline / CI comparison (`bb ci compare`).
+//! Pipeline / CI comparison (`bbr ci compare`).
 
 use crate::api::pipeline::{Pipeline, PipelineStep};
 use crate::cli::GlobalArgs;

@@ -1,4 +1,4 @@
-//! `bb pr` — list / view / create / comment.
+//! `bbr pr` — list / view / create / comment.
 
 use serde::Serialize;
 
@@ -343,7 +343,7 @@ pub async fn create(
         if out.url.is_some() {
             fmt.print(
                 &out,
-                &format!("{human}\nNext: bb open pr {id}", id = out.id),
+                &format!("{human}\nNext: bbr open pr {id}", id = out.id),
             )
         } else {
             fmt.print(&out, &human)
@@ -608,7 +608,7 @@ pub async fn merge(
     let fmt = Formatter::from_json_flag(g.json);
     let human = format!("Merged PR #{}", id);
     if !g.json {
-        fmt.print(&out, &format!("{human}\nNext: bb status"))
+        fmt.print(&out, &format!("{human}\nNext: bbr status"))
     } else {
         fmt.print(&out, &human)
     }

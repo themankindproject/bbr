@@ -1,4 +1,4 @@
-//! `bb config` — view and manage configuration.
+//! `bbr config` — view and manage configuration.
 
 use serde::Serialize;
 

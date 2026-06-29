@@ -1,4 +1,4 @@
-//! `bb api` — raw Bitbucket API passthrough.
+//! `bbr api` — raw Bitbucket API passthrough.
 
 use crate::cli::GlobalArgs;
 use crate::commands::client;

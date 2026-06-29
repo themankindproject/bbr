@@ -68,7 +68,7 @@ impl BitbucketClient {
         })
     }
 
-    /// Credentials accessor (used by `bb auth status`).
+    /// Credentials accessor (used by `bbr auth status`).
     pub fn creds(&self) -> &Credentials {
         &self.creds
     }

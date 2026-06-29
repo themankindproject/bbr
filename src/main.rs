@@ -1,4 +1,4 @@
-//! `bb` binary entry point.
+//! `bbr` binary entry point.
 
 use std::process::ExitCode;
 

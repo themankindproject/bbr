@@ -1,4 +1,4 @@
-//! `bb open` — open Bitbucket pages in the user's browser.
+//! `bbr open` — open Bitbucket pages in the user's browser.
 
 use serde::Serialize;
 

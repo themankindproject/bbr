@@ -66,7 +66,7 @@ impl StackConfig {
     pub fn active_stack(&self) -> Result<&StackDef> {
         if self.stacks.is_empty() {
             return Err(BitbucketError::Other(
-                "No stacks initialized. Run `bb pr stack init <name>` first.".into(),
+                "No stacks initialized. Run `bbr pr stack init <name>` first.".into(),
             ));
         }
         // For simplicity, treat the first stack as active, or search if we want to store active stack
@@ -76,7 +76,7 @@ impl StackConfig {
     pub fn active_stack_mut(&mut self) -> Result<&mut StackDef> {
         if self.stacks.is_empty() {
             return Err(BitbucketError::Other(
-                "No stacks initialized. Run `bb pr stack init <name>` first.".into(),
+                "No stacks initialized. Run `bbr pr stack init <name>` first.".into(),
             ));
         }
         Ok(&mut self.stacks[0])

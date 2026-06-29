@@ -1,4 +1,4 @@
-//! PR Dashboard (`bb pr dashboard`).
+//! PR Dashboard (`bbr pr dashboard`).
 
 use crate::api::pr::{Participant, PrState};
 use crate::api::repo::Repository;

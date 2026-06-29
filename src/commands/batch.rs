@@ -1,4 +1,4 @@
-//! Batch operations (`bb batch`).
+//! Batch operations (`bbr batch`).
 
 use crate::api::pr::{MergePrRequest, PrState};
 use crate::cli::GlobalArgs;

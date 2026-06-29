@@ -1,8 +1,8 @@
-//! Centralized error type and exit-code mapping for `bb`.
+//! Centralized error type and exit-code mapping for `bbr`.
 
 use thiserror::Error;
 
-/// Numeric exit codes used by `bb`.
+/// Numeric exit codes used by `bbr`.
 ///
 /// These are stable and part of the public contract (documented in the README),
 /// so CI scripts and coding agents can branch on them.
@@ -24,7 +24,7 @@ impl ExitCode {
     }
 }
 
-/// All errors emitted by `bb` collapse into [`BitbucketError`].
+/// All errors emitted by `bbr` collapse into [`BitbucketError`].
 #[derive(Debug, Error)]
 pub enum BitbucketError {
     #[error("no Bitbucket credentials found; run `bbr auth setup` or set BITBUCKET_USERNAME + BITBUCKET_TOKEN")]
@@ -79,7 +79,7 @@ pub type Result<T, E = BitbucketError> = std::result::Result<T, E>;
 /// Convenience for the top-level `main`: print a friendly message to stderr
 /// and return the right process exit code.
 pub fn report(e: &BitbucketError) -> std::process::ExitCode {
-    eprintln!("bb: {e}");
+    eprintln!("bbr: {e}");
     if matches!(e, BitbucketError::NoCredentials) {
         eprintln!("hint: run `bbr auth setup`, or set BITBUCKET_USERNAME + BITBUCKET_TOKEN");
     }

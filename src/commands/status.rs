@@ -1,4 +1,4 @@
-//! `bb status` / `bb` — PR + CI for the current branch, or repo overview.
+//! `bbr status` / `bbr` — PR + CI for the current branch, or repo overview.
 
 use serde::Serialize;
 
@@ -120,14 +120,14 @@ pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
                 eprint!("\x1B[H\x1B[J");
                 eprint!(
                     "{} (refreshing every {interval_secs}s — Ctrl+C to stop)\n\n",
-                    theme.bold("bb status --watch")
+                    theme.bold("bbr status --watch")
                 );
                 let fmt = Formatter::from_json_flag(g.json);
                 fmt.print(&out, &human)?;
             }
             Err(e) => {
                 eprint!("\x1B[2J\x1B[H");
-                eprintln!("bb: {e}");
+                eprintln!("bbr: {e}");
                 if matches!(
                     e,
                     crate::error::BitbucketError::AuthFailed(_)
@@ -358,24 +358,24 @@ fn step_summary(s: &PipelineStep) -> StepSummary {
 fn suggested_commands(pr: &Option<PrSummary>, pipeline: &Option<PipelineSummary>) -> Vec<String> {
     let mut commands = Vec::new();
     if pr.is_some() {
-        commands.push("bb open pr".into());
+        commands.push("bbr open pr".into());
     } else {
-        commands.push("bb pr create --title \"...\"".into());
+        commands.push("bbr pr create --title \"...\"".into());
     }
     match pipeline {
         Some(p) if !p.failing_steps.is_empty() || p.state.eq_ignore_ascii_case("FAILED") => {
-            commands.push("bb ci logs --failed".into());
-            commands.push("bb ci watch --logs".into());
+            commands.push("bbr ci logs --failed".into());
+            commands.push("bbr ci watch --logs".into());
         }
         Some(p)
             if p.state.eq_ignore_ascii_case("INPROGRESS")
                 || p.state.eq_ignore_ascii_case("RUNNING") =>
         {
-            commands.push("bb ci watch --logs".into());
-            commands.push("bb open ci".into());
+            commands.push("bbr ci watch --logs".into());
+            commands.push("bbr open ci".into());
         }
-        Some(_) => commands.push("bb open ci".into()),
-        None => commands.push("bb ci status".into()),
+        Some(_) => commands.push("bbr open ci".into()),
+        None => commands.push("bbr ci status".into()),
     }
     commands
 }
@@ -768,7 +768,7 @@ mod tests {
                 }],
             }),
             commit_statuses: vec![],
-            suggested_commands: vec!["bb open pr".into(), "bb open ci".into()],
+            suggested_commands: vec!["bbr open pr".into(), "bbr open ci".into()],
         };
         let out = render_human(&out);
         assert!(out.contains("ws/repo"), "header with bold repo name");
@@ -813,7 +813,7 @@ mod tests {
             steps: Vec::new(),
         });
         let commands = suggested_commands(&None, &pipeline);
-        assert!(commands.contains(&"bb ci logs --failed".into()));
+        assert!(commands.contains(&"bbr ci logs --failed".into()));
     }
 
     #[test]
@@ -831,14 +831,14 @@ mod tests {
             reviewers: vec![],
         });
         let commands = suggested_commands(&pr, &None);
-        assert!(commands.contains(&"bb open pr".into()));
-        assert!(!commands.contains(&"bb pr create".into()));
+        assert!(commands.contains(&"bbr open pr".into()));
+        assert!(!commands.contains(&"bbr pr create".into()));
     }
 
     #[test]
     fn suggested_commands_without_pr_suggests_create() {
         let commands = suggested_commands(&None, &None);
-        assert!(commands.contains(&"bb pr create --title \"...\"".into()));
+        assert!(commands.contains(&"bbr pr create --title \"...\"".into()));
     }
 
     #[test]
@@ -854,8 +854,8 @@ mod tests {
             steps: vec![],
         });
         let commands = suggested_commands(&None, &pipeline);
-        assert!(commands.contains(&"bb ci watch --logs".into()));
-        assert!(commands.contains(&"bb open ci".into()));
+        assert!(commands.contains(&"bbr ci watch --logs".into()));
+        assert!(commands.contains(&"bbr open ci".into()));
     }
 
     #[test]
@@ -871,13 +871,13 @@ mod tests {
             steps: vec![],
         });
         let commands = suggested_commands(&None, &pipeline);
-        assert!(commands.contains(&"bb open ci".into()));
+        assert!(commands.contains(&"bbr open ci".into()));
     }
 
     #[test]
     fn suggested_commands_no_pipeline_suggests_ci_status() {
         let commands = suggested_commands(&None, &None);
-        assert!(commands.contains(&"bb ci status".into()));
+        assert!(commands.contains(&"bbr ci status".into()));
     }
 
     #[test]
@@ -1159,7 +1159,7 @@ mod tests {
                 key: "buildkite/test".into(),
                 url: "https://url".into(),
             }],
-            suggested_commands: vec!["bb ci status".into()],
+            suggested_commands: vec!["bbr ci status".into()],
         };
         let json = serde_json::to_value(&out).unwrap();
         assert_eq!(json["repo"]["full_name"], "w/r");
