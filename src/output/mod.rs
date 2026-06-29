@@ -44,6 +44,14 @@ impl Formatter {
             Formatter::Human => print_paginated(human),
         }
     }
+
+    /// Print diff output with syntax highlighting (bat) and paging.
+    pub fn print_diff<T: serde::Serialize>(&self, value: &T, human: &str) -> Result<()> {
+        match self {
+            Formatter::Json => json::print_json(value),
+            Formatter::Human => print_diff(human),
+        }
+    }
 }
 
 /// Write a human-readable block to stdout.
@@ -54,6 +62,39 @@ pub fn print_block(s: &str) -> Result<()> {
         out.write_all(b"\n")?;
     }
     Ok(())
+}
+
+/// Print a diff with syntax highlighting (via `bat`) and paging, falling
+/// back to `print_paginated` if `bat` is not available.
+pub fn print_diff(s: &str) -> Result<()> {
+    if !io::stdout().is_terminal() {
+        return print_block(s);
+    }
+
+    let pager_env = std::env::var("PAGER").unwrap_or_default();
+
+    // If the user explicitly set PAGER, respect it instead of sniffing for bat.
+    // Otherwise, try bat first.
+    if pager_env.is_empty() {
+        if let Ok(mut child) = Command::new("bat")
+            .args(["--language=diff", "--paging=always", "--color=always"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(s.as_bytes());
+                if !s.ends_with('\n') {
+                    let _ = stdin.write_all(b"\n");
+                }
+            }
+            let _ = child.wait();
+            return Ok(());
+        }
+    }
+
+    print_paginated(s)
 }
 
 /// Write a human-readable block to stdout with optional pagination using less/PAGER.

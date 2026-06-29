@@ -80,8 +80,21 @@ pub type Result<T, E = BitbucketError> = std::result::Result<T, E>;
 /// and return the right process exit code.
 pub fn report(e: &BitbucketError) -> std::process::ExitCode {
     eprintln!("bbr: {e}");
-    if matches!(e, BitbucketError::NoCredentials) {
-        eprintln!("hint: run `bbr auth setup`, or set BITBUCKET_USERNAME + BITBUCKET_TOKEN");
+    match e {
+        BitbucketError::NoCredentials => {
+            eprintln!("  hint: run `bbr auth setup`, or set BITBUCKET_USERNAME + BITBUCKET_TOKEN");
+        }
+        BitbucketError::AuthFailed(_) => {
+            eprintln!("  hint: verify your token is valid and has the required scopes.");
+            eprintln!("  hint: create a new token at https://id.atlassian.com/manage-profile/security/api-tokens");
+            eprintln!("  hint: required scopes include at minimum:");
+            eprintln!("         read:user:bitbucket, read:repository:bitbucket,");
+            eprintln!("         read:pullrequest:bitbucket, read:pipeline:bitbucket");
+        }
+        BitbucketError::RateLimit(_) => {
+            eprintln!("  hint: wait a few minutes or lower your request frequency.");
+        }
+        _ => {}
     }
     e.exit_code().as_process()
 }

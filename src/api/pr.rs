@@ -248,6 +248,8 @@ pub struct CreatePrRequest {
     pub close_source_branch: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub reviewers: Vec<ReviewerRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub draft: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -758,6 +760,7 @@ mod tests {
             },
             close_source_branch: Some(true),
             reviewers: vec![ReviewerRef { uuid: "r1".into() }],
+            draft: Some(true),
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["title"], "My PR");
@@ -782,6 +785,7 @@ mod tests {
             },
             close_source_branch: None,
             reviewers: vec![],
+            draft: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert!(json.get("description").is_none());

@@ -590,6 +590,45 @@ pub async fn rerun(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
     }
 }
 
+pub async fn trigger(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
+    let repo = resolve_repo(g)?;
+    let branch = match branch {
+        Some(b) => b.to_string(),
+        None => current_head()?.branch,
+    };
+    let client = client(g)?;
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message(format!("Triggering pipeline for '{branch}'..."));
+    let pipeline = client
+        .trigger_pipeline(&repo.workspace, &repo.slug, &branch)
+        .await?;
+    spinner.finish_and_clear();
+
+    let out = CiStatusOut {
+        branch: branch.clone(),
+        pipeline: Some(PipelineOut {
+            uuid: pipeline.uuid.clone(),
+            build_number: pipeline.build_number,
+            state: pipeline.state_name().to_string(),
+            duration_seconds: pipeline.duration_in_seconds,
+            branch: pipeline.target.ref_name.clone(),
+            commit: pipeline.target.commit.as_ref().map(|c| c.hash.clone()),
+            steps: Vec::new(),
+        }),
+    };
+    let fmt = Formatter::from_json_flag(g.json);
+    let human = format!(
+        "Triggered pipeline #{} for '{}'",
+        pipeline.build_number, branch
+    );
+    if !g.json {
+        fmt.print(&out, &format!("{human}\nNext: bbr ci watch"))
+    } else {
+        fmt.print(&out, &human)
+    }
+}
+
 async fn steps_for_pipeline(
     client: &BitbucketClient,
     workspace: &str,

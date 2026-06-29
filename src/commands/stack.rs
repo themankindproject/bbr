@@ -69,7 +69,7 @@ pub struct StackAbortOut {
     pub branches_deleted: Vec<String>,
 }
 
-pub async fn init(g: &GlobalArgs, name: &str, base: Option<&str>) -> Result<()> {
+pub fn init(g: &GlobalArgs, name: &str, base: Option<&str>) -> Result<()> {
     let mut config = StackConfig::load().unwrap_or_default();
 
     // Check if stack already exists
@@ -156,6 +156,7 @@ pub async fn add(g: &GlobalArgs, branch: &str, parent: Option<&str>) -> Result<(
         },
         close_source_branch: Some(true),
         reviewers: Vec::new(),
+        draft: None,
     };
 
     let pr = client
@@ -233,7 +234,7 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
     Formatter::from_json_flag(g.json).print(&out, &human)
 }
 
-pub async fn rebase(g: &GlobalArgs, push: bool) -> Result<()> {
+pub fn rebase(g: &GlobalArgs, push: bool) -> Result<()> {
     if !crate::git::is_working_tree_clean()? {
         return Err(BitbucketError::Other(
             "Working directory is dirty. Please commit or stash changes before rebasing.".into(),

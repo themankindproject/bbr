@@ -154,10 +154,25 @@ pub enum Command {
         #[command(subcommand)]
         action: IssueAction,
     },
+    /// Search code across the workspace.
+    Search {
+        /// Search query.
+        query: String,
+        /// Max results.
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
     /// Print JSON schema for a command's --json output.
     Schema {
         /// Name of the model schema to print (e.g. status, pr, ci, repo, webhook, src, issue).
         model: Option<String>,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Check for and install updates.
+    Update {
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -213,6 +228,8 @@ pub enum PrAction {
         dst: Option<String>,
         #[arg(long, help = "close source branch after merge")]
         close_source_branch: bool,
+        #[arg(long, help = "create as draft")]
+        draft: bool,
         #[arg(long, help = "reviewer UUID (repeatable)")]
         reviewer: Vec<String>,
         #[command(flatten)]
@@ -490,6 +507,13 @@ pub enum CiAction {
         a: String,
         /// Second pipeline reference (UUID, build number, or "last").
         b: String,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Trigger a new pipeline for a branch.
+    Trigger {
+        #[arg(long, help = "branch name (default: current branch)")]
+        branch: Option<String>,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -1001,7 +1025,12 @@ pub async fn run() -> ExitCode {
 async fn dispatch(cli: Cli) -> Result<()> {
     let g = &cli.global;
     match cli.command {
-        None => commands::status::run_overview(g).await,
+        None => {
+            let result = commands::status::run_overview(g).await;
+            // Fire-and-forget version check (silent on failure)
+            commands::update::notify_if_outdated().await;
+            result
+        }
         Some(Command::Status {
             g,
             watch,
@@ -1059,6 +1088,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 src,
                 dst,
                 close_source_branch,
+                draft,
                 reviewer,
                 g,
             } => {
@@ -1071,6 +1101,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
                     src.as_deref(),
                     dst.as_deref(),
                     close_source_branch,
+                    draft,
                     &reviewer,
                 )
                 .await
@@ -1132,13 +1163,13 @@ async fn dispatch(cli: Cli) -> Result<()> {
             }
             PrAction::Stack { action } => match action {
                 StackAction::Init { name, base } => {
-                    commands::stack::init(&cli.global, &name, base.as_deref()).await
+                    commands::stack::init(&cli.global, &name, base.as_deref())
                 }
                 StackAction::Add { branch, parent } => {
                     commands::stack::add(&cli.global, &branch, parent.as_deref()).await
                 }
                 StackAction::List => commands::stack::list(&cli.global).await,
-                StackAction::Rebase { push } => commands::stack::rebase(&cli.global, push).await,
+                StackAction::Rebase { push } => commands::stack::rebase(&cli.global, push),
                 StackAction::Land { strategy, yes } => {
                     commands::stack::land(&cli.global, strategy.as_deref(), yes).await
                 }
@@ -1175,6 +1206,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 commands::ci::list(&g, branch.as_deref(), limit).await
             }
             CiAction::Rerun { branch, g } => commands::ci::rerun(&g, branch.as_deref()).await,
+            CiAction::Trigger { branch, g } => commands::ci::trigger(&g, branch.as_deref()).await,
             CiAction::Stop { uuid, branch, g } => {
                 commands::ci::stop(&g, uuid.as_deref(), branch.as_deref()).await
             }
@@ -1449,7 +1481,9 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 commands::issue::list_comments(&g, id, limit).await
             }
         },
-        Some(Command::Schema { model, g }) => commands::schema::run(&g, model.as_deref()).await,
+        Some(Command::Search { query, limit, g }) => commands::search::run(&g, &query, limit).await,
+        Some(Command::Schema { model, g }) => commands::schema::run(&g, model.as_deref()),
+        Some(Command::Update { g }) => commands::update::run(&g).await,
     }
 }
 

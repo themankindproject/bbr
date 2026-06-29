@@ -6,16 +6,18 @@
 
 A fast, single-binary Bitbucket Cloud CLI. Agent-first (`--json` everywhere, zero-config env auth) with pretty human output.
 
-| Area | Others | bbr |
-|------|--------|-----|
-| Auth | PAT, OAuth, complex setup | env vars or single `bbr auth setup` prompt |
-| Output | human-only or requires `jq` | `--json` everywhere, stable schema, no scraping |
-| PRs | basic list/view | create, update, merge, comment, approve, request-changes, stacked PRs, dashboard |
-| CI | web UI only | `bbr ci watch --logs` with live tail, step-by-step breakdown, compare runs, test reports |
-| Batch | manual | `bbr batch merge-approved`, `rerun-failed`, `cleanup-merged-branches` |
-| Status | piecemeal | `bbr status` = PR + CI + commit statuses + suggested next commands in one shot |
-| Config | YAML/JSON files | zero-config — `BITBUCKET_USERNAME` + `BITBUCKET_TOKEN` or interactive setup |
-| Extras | — | webhooks CRUD, issue tracker, source browser, deployments, completions, repo audit |
+| Area | Other tools | bbr |
+|------|-------------|-----|
+| Auth | OAuth flows, profile systems, multi-cred | `BITBUCKET_USERNAME` + `BITBUCKET_TOKEN` env vars or single `bbr auth setup` |
+| Output | human-only, JSON ad-hoc | `--json` on **every** command with stable schema + `bbr schema` introspection |
+| Status | per-resource commands | `bbr` = PR + CI + commit statuses + suggested next commands in one shot |
+| PRs | list / view / approve / merge | same + stacked PRs (`init`→`add`→`rebase`→`land`→`abort`), cross-repo dashboard |
+| CI | web UI, basic CLI logs | `bbr ci watch --logs` live-tail with auto-fetch of failing steps, `bbr ci compare` (step/test deltas), test reports |
+| Batch | manual per-repo | `bbr batch merge-approved`, `rerun-failed`, `cleanup-merged-branches` with `--dry-run` |
+| Repo | info, branches, tags | same + `bbr repo audit` (compliance: branch restrictions, default reviewers) |
+| Extras | webhooks, issues, source browsing | same + deployments, environment variables, raw API passthrough with pagination |
+
+**bbr is the only Bitbucket CLI with:** stacked PRs, pipeline comparison, batch operations, repo audit, live CI watch with auto-log-fetch, `--json` on every command + schema introspection, and a one-shot status overview — all in a single Rust binary with no runtime dependencies.
 
 ```bash
 curl -fsSL https://github.com/themankindproject/bbr/raw/main/install.sh | bash

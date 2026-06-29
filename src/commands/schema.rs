@@ -177,7 +177,7 @@ const SCHEMAS: &[(&str, &str, &str)] = &[
     ),
 ];
 
-pub async fn run(g: &GlobalArgs, model: Option<&str>) -> Result<()> {
+pub fn run(g: &GlobalArgs, model: Option<&str>) -> Result<()> {
     let fmt = crate::output::Formatter::from_json_flag(g.json);
 
     if let Some(m) = model {

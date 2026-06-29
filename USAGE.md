@@ -11,6 +11,7 @@
   - [`bbr pr`](#bbr-pr)
   - [`bbr batch`](#bbr-batch)
   - [`bbr ci`](#bbr-ci)
+  - [`bbr search`](#bbr-search)
   - [`bbr repo`](#bbr-repo)
   - [`bbr commit`](#bbr-commit)
   - [`bbr open`](#bbr-open)
@@ -18,6 +19,7 @@
   - [`bbr config`](#bbr-config)
   - [`bbr api`](#bbr-api)
   - [`bbr completion`](#bbr-completion)
+  - [`bbr update`](#bbr-update)
 - [Authentication](#authentication)
 - [Exit Codes](#exit-codes)
 - [JSON Schema](#json-schema)
@@ -31,21 +33,24 @@
 
 ```bash
 export BITBUCKET_USERNAME="you@example.com"
-export BITBUCKET_TOKEN="<pat-from-id.atlassian.com>"
+export BITBUCKET_TOKEN="<api-token>"
 
 bbr status                       # PR + CI for current branch
 bbr pr list                      # open PRs
 bbr pr create --title T --body B
-bbr ci list                      # pipelines for this branch
+bbr ci trigger                   # trigger a pipeline for current branch
 bbr open pr                      # open current PR in browser
 
-# New power features
+# Power features
 bbr status --export slack        # Slack-ready standup snippet
 bbr pr dashboard                 # workspace-wide PR dashboard
 bbr batch merge-approved         # merge all fully-approved PRs
 bbr ci compare last 42           # compare latest vs build #42
+bbr ci trigger --branch main     # trigger pipeline on main
+bbr search "TODO:"               # code search across workspace
 bbr repo audit                   # SOC2-readiness compliance check
 bbr pr stack init my-stack       # start a stacked PR chain
+bbr update                       # self-update to latest release
 ```
 
 ---
@@ -155,7 +160,7 @@ bbr pr list --source-branch "feat/x"         # filter by source branch
 bbr pr list --json                           # JSON array
 ```
 
-Output: table with columns `ID  State  Title  Source  Destination  Author`.
+Output: table with columns `ID  State  Title  Source  Destination  Author  URL`.
 
 #### `bbr pr view`
 
@@ -173,6 +178,7 @@ bbr pr view --json
 bbr pr create --title "Fix X" --body "Description"
 bbr pr create --title "Fix X" --body-file pr.md
 bbr pr create --title "Fix X" --body-stdin       # body from stdin
+bbr pr create --title "Fix X" --draft            # create as draft PR
 bbr pr create --title "Fix X" \
   --src feat/x --dst main                        # explicit branches
 bbr pr create --title "Fix X" \
@@ -221,7 +227,7 @@ bbr pr checkout 467
 
 #### `bbr pr diff`
 
-Print the raw diff for a PR:
+Print the diff for a PR with syntax highlighting and paging. Uses `bat` if installed, falls back to `less`/`$PAGER`, and writes raw to stdout when piped.
 
 ```bash
 bbr pr diff 467
@@ -420,6 +426,15 @@ bbr ci watch --logs                  # print failing step log on failure
 bbr ci watch --interval-secs 10      # poll interval (default 5)
 ```
 
+#### `bbr ci trigger`
+
+Trigger a new pipeline for a branch.
+
+```bash
+bbr ci trigger                       # current branch
+bbr ci trigger --branch main
+```
+
 #### `bbr ci rerun`
 
 Rerun the latest pipeline for a branch.
@@ -514,6 +529,27 @@ Test Results
 ```
 
 The step with the largest absolute duration delta is highlighted with `←`. If no test reports exist for either pipeline the test section is omitted.
+
+---
+
+### `bbr search`
+
+Search code across all repos in the workspace via the Bitbucket code search API.
+
+```bash
+bbr search "TODO:"                     # search for TODOs
+bbr search "fn main" --limit 50        # max results (default 20)
+bbr search "class Repository" --json   # machine-readable
+```
+
+Output:
+```
+4 result(s) for 'TODO:'
+  src/api/pr.rs
+    src/api/pr.rs:142    // TODO: handle pagination
+  src/commands/pr.rs
+    src/commands/pr.rs:89    // TODO: extract helper
+```
 
 ---
 
@@ -702,6 +738,20 @@ bbr completion --install
 
 ---
 
+### `bbr update`
+
+Self-update `bbr` to the latest GitHub release. Downloads the correct binary for your platform from GitHub Releases and replaces the current binary.
+
+```bash
+bbr update                            # check + auto-install if newer
+bbr update --check                    # check only, no install
+bbr update --json                     # machine-readable version info
+```
+
+Background version check: running `bbr status` (or bare `bbr`) automatically checks for updates once per 24 hours and prints a notice if a newer version is available. The check is silently skipped in CI environments.
+
+---
+
 ## Authentication
 
 `bbr` checks credential sources in priority order:
@@ -771,6 +821,8 @@ bbr batch merge-approved --dry-run --json  # { dry_run, action_count, actions: [
 bbr ci compare 42 57 --json  # { a, b, step_deltas, test_deltas }
 bbr repo audit --json     # { workspace, total_repos, repos: [...], summary }
 bbr pr stack list --json  # { name, base_branch, prs: [...] }
+bbr search "TODO" --json  # { query, total, results: [{ file, content_matches }] }
+bbr update --json         # { current_version, latest_version, up_to_date, downloaded? }
 ```
 
 ---

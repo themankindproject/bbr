@@ -28,10 +28,7 @@ pub struct Pipeline {
 impl Pipeline {
     pub fn is_terminal(&self) -> bool {
         let name = self.effective_result_name();
-        matches!(
-            name,
-            Some("SUCCESSFUL") | Some("FAILED") | Some("STOPPED") | Some("ERROR")
-        )
+        matches!(name, Some("SUCCESSFUL" | "FAILED" | "STOPPED" | "ERROR"))
     }
 
     pub fn state_name(&self) -> &str {
@@ -315,6 +312,25 @@ impl BitbucketClient {
         let path = format!("/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/{step}/log");
         let text = self.send_raw(reqwest::Method::GET, &path, "*/*").await?;
         Ok(StepLog { text })
+    }
+
+    /// `POST /repositories/{ws}/{slug}/pipelines/` — trigger a new pipeline.
+    pub async fn trigger_pipeline(
+        &self,
+        workspace: &str,
+        slug: &str,
+        branch: &str,
+    ) -> Result<Pipeline> {
+        let path = format!("/repositories/{workspace}/{slug}/pipelines/");
+        let body = serde_json::json!({
+            "target": {
+                "ref_type": "branch",
+                "type": "pipeline_ref_target",
+                "ref_name": branch,
+            }
+        });
+        self.send::<Pipeline>(reqwest::Method::POST, &path, Some(&body.to_string()))
+            .await
     }
 
     pub async fn rerun_pipeline(

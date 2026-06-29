@@ -7,6 +7,7 @@ use crate::error::{BitbucketError, Result};
 use crate::output::theme::Theme;
 use crate::output::Formatter;
 use serde::Serialize;
+use std::fmt::Write as FmtWrite;
 
 #[derive(Debug, Serialize)]
 pub struct CiCompareOut {
@@ -80,7 +81,7 @@ pub async fn compare(g: &GlobalArgs, a_ref: &str, b_ref: &str) -> Result<()> {
     let client = client(g)?;
     let repo = resolve_repo(g)?;
     let head = current_head().ok();
-    let current_branch = head.map(|h| h.branch).unwrap_or_else(|| "main".to_string());
+    let current_branch = head.map_or_else(|| "main".to_string(), |h| h.branch);
 
     let spinner = make_spinner(g.json);
     spinner.set_message("Resolving pipelines...");
@@ -293,27 +294,28 @@ fn render_compare(out: &CiCompareOut) -> String {
     let theme = Theme::current();
     let mut s = String::new();
 
-    s.push_str(&format!("{}\n", theme.bold("Pipeline Comparison")));
-    s.push_str(&format!(
-        "  A: #{} ({}) — {} — {}\n",
+    let _ = writeln!(s, "{}", theme.bold("Pipeline Comparison"));
+    let _ = writeln!(
+        s,
+        "  A: #{} ({}) — {} — {}",
         out.a.build_number,
         out.a.branch.as_deref().unwrap_or("unknown"),
         theme.status_glyph(&out.a.state),
         human_duration(out.a.duration_seconds)
-    ));
-    s.push_str(&format!(
-        "  B: #{} ({}) — {} — {}\n\n",
+    );
+    let _ = writeln!(
+        s,
+        "  B: #{} ({}) — {} — {}",
         out.b.build_number,
         out.b.branch.as_deref().unwrap_or("unknown"),
         theme.status_glyph(&out.b.state),
         human_duration(out.b.duration_seconds)
-    ));
+    );
 
-    s.push_str(&format!("{}\n", theme.bold("Step Duration Deltas")));
-    s.push_str("  Step              A       B       Δ\n");
-    s.push_str(&format!("  {}\n", "─".repeat(50)));
+    let _ = writeln!(s, "{}", theme.bold("Step Duration Deltas"));
+    let _ = writeln!(s, "  Step              A       B       Δ");
+    let _ = writeln!(s, "  {}", "─".repeat(50));
 
-    // Find the step with the maximum absolute non-zero duration delta to highlight
     let mut max_abs_delta = 0;
     let mut highlight_index = None;
     for (i, delta) in out.step_deltas.iter().enumerate() {
@@ -352,28 +354,24 @@ fn render_compare(out: &CiCompareOut) -> String {
             ""
         };
 
-        s.push_str(&format!(
-            "  {:<17} {:<7} {:<7} {}{}\n",
+        let _ = writeln!(
+            s,
+            "  {:<17} {:<7} {:<7} {}{}",
             delta.name, a_str, b_str, delta_str, highlight
-        ));
+        );
     }
 
     if let Some(td) = &out.test_deltas {
-        s.push_str(&format!("\n{}\n", theme.bold("Test Results")));
-        s.push_str("              A         B\n");
-        s.push_str(&format!(
-            "  Passed      {:<9} {}\n",
-            td.passed_a, td.passed_b
-        ));
-        s.push_str(&format!(
-            "  Failed      {:<9} {}\n",
-            td.failed_a, td.failed_b
-        ));
+        let _ = writeln!(s);
+        let _ = writeln!(s, "{}", theme.bold("Test Results"));
+        let _ = writeln!(s, "              A         B");
+        let _ = writeln!(s, "  Passed      {:<9} {}", td.passed_a, td.passed_b);
+        let _ = writeln!(s, "  Failed      {:<9} {}", td.failed_a, td.failed_b);
         if !td.new_failures.is_empty() {
-            s.push_str(&format!("  New failures: {}\n", td.new_failures.join(", ")));
+            let _ = writeln!(s, "  New failures: {}", td.new_failures.join(", "));
         }
         if !td.fixed.is_empty() {
-            s.push_str(&format!("  Fixed:        {}\n", td.fixed.join(", ")));
+            let _ = writeln!(s, "  Fixed:        {}", td.fixed.join(", "));
         }
     }
 

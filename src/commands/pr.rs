@@ -278,6 +278,7 @@ pub async fn create(
     src: Option<&str>,
     dst: Option<&str>,
     close_source_branch: bool,
+    draft: bool,
     reviewers: &[String],
 ) -> Result<()> {
     let repo = resolve_repo(g)?;
@@ -320,6 +321,7 @@ pub async fn create(
             .iter()
             .map(|uuid| ReviewerRef { uuid: uuid.clone() })
             .collect(),
+        draft: if draft { Some(true) } else { None },
     };
 
     let spinner = make_spinner(g.json);
@@ -699,7 +701,7 @@ pub async fn diff(g: &GlobalArgs, id: u64) -> Result<()> {
     spinner.finish_and_clear();
 
     let fmt = Formatter::from_json_flag(g.json);
-    fmt.print_paginated(&serde_json::json!({ "id": id, "diff": body }), &body)
+    fmt.print_diff(&serde_json::json!({ "id": id, "diff": body }), &body)
 }
 
 // ---- helpers --------------------------------------------------------------
@@ -834,8 +836,15 @@ fn render_list(out: &PrListOut) -> String {
         return format!("No pull requests (state: {}).", out.state);
     }
     let theme = Theme::current();
-    let mut table =
-        Table::new().headers(["ID", "State", "Title", "Source", "Destination", "Author"]);
+    let mut table = Table::new().headers([
+        "ID",
+        "State",
+        "Title",
+        "Source",
+        "Destination",
+        "Author",
+        "URL",
+    ]);
     for pr in &out.pull_requests {
         let state = match pr.state.to_ascii_uppercase().as_str() {
             "OPEN" => theme.bold(&pr.state),
@@ -849,7 +858,8 @@ fn render_list(out: &PrListOut) -> String {
             truncate(&pr.title, 55),
             truncate(&pr.source, 30),
             truncate(&pr.destination, 30),
-            pr.author.clone().unwrap_or_else(|| "-".into()),
+            pr.author.as_deref().unwrap_or("-").to_string(),
+            pr.url.as_deref().unwrap_or("").to_string(),
         ]);
     }
     table.render()
@@ -901,7 +911,7 @@ fn render_tasks(out: &PrTasksOut) -> String {
             task.id.to_string(),
             state.into_owned(),
             truncate(&task.body, 80),
-            task.assignee.clone().unwrap_or_else(|| "-".into()),
+            task.assignee.as_deref().unwrap_or("-").to_string(),
         ]);
     }
     table.render()
@@ -916,7 +926,7 @@ fn render_commits(out: &PrCommitsOut) -> String {
     for commit in &out.commits {
         table = table.add_row([
             truncate(&commit.hash, 10),
-            commit.author.clone().unwrap_or_else(|| "-".into()),
+            commit.author.as_deref().unwrap_or("-").to_string(),
             theme
                 .dim(commit.date.as_deref().unwrap_or("-"))
                 .into_owned(),
@@ -959,8 +969,8 @@ fn render_conflicts(out: &PrConflictsOut) -> String {
     for conflict in &out.conflicts {
         table = table.add_row([
             conflict.path.clone(),
-            conflict.conflict_type.clone().unwrap_or_else(|| "-".into()),
-            conflict.kind.clone().unwrap_or_else(|| "-".into()),
+            conflict.conflict_type.as_deref().unwrap_or("-").to_string(),
+            conflict.kind.as_deref().unwrap_or("-").to_string(),
         ]);
     }
     table.render()

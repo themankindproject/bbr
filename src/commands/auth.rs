@@ -30,8 +30,17 @@ pub fn setup(username: Option<String>, token: Option<String>) -> Result<()> {
         (None, None) => {
             println!("bbr auth setup");
             println!("  Need an API token? {API_TOKEN_URL}");
-            println!("  Required scopes: account:read, repository:read, repository:write,");
-            println!("                   pullrequest:read, pullrequest:write, pipeline:read");
+            println!("  Required scopes (select ALL for full CLI access):");
+            println!("    ✓ read:user:bitbucket");
+            println!("    ✓ read:repository:bitbucket");
+            println!("    ✓ write:repository:bitbucket  (for commit statuses)");
+            println!("    ✓ read:pullrequest:bitbucket");
+            println!("    ✓ write:pullrequest:bitbucket  (create/merge/approve PRs)");
+            println!("    ✓ read:pipeline:bitbucket");
+            println!("    ✓ write:pipeline:bitbucket    (rerun/stop pipelines)");
+            println!("    ✓ read:issue:bitbucket        (optional — issue tracking)");
+            println!("    ✓ write:issue:bitbucket       (optional — create issues)");
+            println!("    ✓ webhook:bitbucket           (optional — webhook management)");
             println!();
 
             let u = prompt("Bitbucket username (email): ")?;
@@ -179,7 +188,9 @@ fn prompt(msg: &str) -> Result<String> {
 fn prompt_secret(msg: &str) -> Result<String> {
     let s = rpassword::prompt_password(msg).map_err(BitbucketError::Io)?;
     let s = strip_bracketed_paste(&s);
-    Ok(s.trim().to_string())
+    let s = s.trim().to_string();
+    eprintln!("  ✓ Token read ({} characters)", s.len());
+    Ok(s)
 }
 
 /// Strip bracketed-paste escape sequences that modern terminals wrap pasted

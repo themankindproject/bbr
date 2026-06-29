@@ -10,10 +10,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - CI now runs `cargo test` and `cargo nextest` on macOS and Windows in addition to Linux.
+- **`bbr update`** — new subcommand that checks for and automatically installs newer
+  releases from GitHub. If a newer version exists, it downloads, extracts, and
+  replaces the current binary in one step. Version check results are cached in
+  `~/.config/bbr/update-check.json` (24h TTL).
+- **Auto-update notification** — running `bbr` (no subcommand) or `bbr status` now
+  performs a lightweight background check against GitHub and prints a hint if a
+  newer version is available.
+- **Auth scope guidance** — `bbr auth setup` now lists all required API token scopes
+  (`read:user:bitbucket`, `read:repository:bitbucket`, `read:pullrequest:bitbucket`,
+  `write:pullrequest:bitbucket`, `read:pipeline:bitbucket`, `write:pipeline:bitbucket`,
+  plus optional issue/webhook scopes) instead of the old OAuth-style scope names.
+- **Better error hints** — `bbr` now shows scoped guidance on auth failures
+  (API token URL, minimum required scopes) and rate-limit hints.
+
+### Performance
+
+- Replaced `s.push_str(&format!(...))` with `write!()` in the CI comparison renderer
+  (`src/commands/ci_compare.rs`) — avoids 11 temporary `String` allocations per render.
+- Removed `async` from three purely-synchronous functions (`schema::run`,
+  `stack::init`, `stack::rebase`) — eliminates unnecessary future/task overhead.
+- Eliminated unnecessary `.clone()` on `Option<String>` render fields in
+  `pr.rs` and `status.rs` (6 call sites) — uses `as_deref().unwrap_or("-").to_string()` instead.
 
 ### Fixed
 
 - PowerShell `bbr completion --install` wrote to `.config/powershell/` instead of `Documents/PowerShell/` on Windows.
+- `bbr auth setup` now prints a confirmation line (`✓ Token read (N characters)`) after pasting
+  the API token, preventing users from pasting multiple times due to lack of visual feedback.
+- Nested or-pattern in `api/pipeline.rs:33` flattened (`Some("SUCCESSFUL" | "FAILED" | "STOPPED" | "ERROR")`).
+- Unnecessary raw-string hashes in `commands/completion.rs:79` (`r#"..."#` → `r"..."`).
+- `map(|h| h.branch).unwrap_or_else(|| "main".to_string())` replaced with
+  `map_or_else` in `ci_compare.rs`.
 
 ## [0.1.1] - 2026-06-29
 

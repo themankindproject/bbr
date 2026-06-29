@@ -18,9 +18,11 @@ pub mod open;
 pub mod pr;
 pub mod repo;
 pub mod schema;
+pub mod search;
 pub mod src_cmd;
 pub mod stack;
 pub mod status;
+pub mod update;
 pub mod webhook;
 
 use std::sync::OnceLock;

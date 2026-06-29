@@ -76,7 +76,7 @@ fn shell_paths(shell: &Shell) -> Result<(PathBuf, String, RcLine)> {
         Shell::Zsh => {
             let dir = home.join(".zsh/completions");
             let filename = "_bbr".to_string();
-            let line = (".zshrc", format!(r#"fpath=({} $fpath)"#, dir.display()));
+            let line = (".zshrc", format!(r"fpath=({} $fpath)", dir.display()));
             Ok((dir, filename, Some(line)))
         }
         Shell::Fish => {

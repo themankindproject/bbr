@@ -680,7 +680,7 @@ fn render_overview_human(out: &OverviewOut) -> String {
                 truncate(&pr.title, 50),
                 truncate(&pr.source, 25),
                 truncate(&pr.destination, 25),
-                pr.author.clone().unwrap_or_else(|| "-".into()),
+                pr.author.as_deref().unwrap_or("-").to_string(),
             ]);
         }
         s.push_str(&table.render());
