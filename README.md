@@ -6,8 +6,20 @@
 
 A fast, single-binary Bitbucket Cloud CLI. Agent-first (`--json` everywhere, zero-config env auth) with pretty human output.
 
+| Area | Others | bbr |
+|------|--------|-----|
+| Auth | PAT, OAuth, complex setup | env vars or single `bbr auth setup` prompt |
+| Output | human-only or requires `jq` | `--json` everywhere, stable schema, no scraping |
+| PRs | basic list/view | create, update, merge, comment, approve, request-changes, stacked PRs, dashboard |
+| CI | web UI only | `bbr ci watch --logs` with live tail, step-by-step breakdown, compare runs, test reports |
+| Batch | manual | `bbr batch merge-approved`, `rerun-failed`, `cleanup-merged-branches` |
+| Status | piecemeal | `bbr status` = PR + CI + commit statuses + suggested next commands in one shot |
+| Config | YAML/JSON files | zero-config — `BITBUCKET_USERNAME` + `BITBUCKET_TOKEN` or interactive setup |
+| Extras | — | webhooks CRUD, issue tracker, source browser, deployments, completions, repo audit |
+
 ```bash
-cargo install --locked --git https://github.com/themankindproject/bbr
+curl -fsSL https://github.com/themankindproject/bbr/raw/main/install.sh | bash
+# or: cargo install --locked --git https://github.com/themankindproject/bbr --tag $(curl -fsSL https://api.github.com/repos/themankindproject/bbr/releases/latest | grep tag_name | cut -d'"' -f4)
 ```
 
 ## Quick Start
@@ -84,7 +96,7 @@ bbr completion bash|zsh|fish
 
 ## Authentication
 
-Sources checked in order: `BITBUCKET_USERNAME` + `BITBUCKET_TOKEN` env vars → `bbr auth setup` config file (`~/.config/bb/credentials.toml`, mode 0600).
+Sources checked in order: `BITBUCKET_USERNAME` + `BITBUCKET_TOKEN` env vars → `bbr auth setup` config file (`~/.config/bbr/credentials.toml`, mode 0600).
 
 Requires an [Atlassian API token](https://id.atlassian.com/manage-profile/security/api-tokens) with scopes: `account:read`, `repository:read`, `repository:write`, `pullrequest:read`, `pullrequest:write`, `pipeline:read`.
 
