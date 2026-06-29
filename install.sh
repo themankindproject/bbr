@@ -59,7 +59,7 @@ else
   exit 1
 fi
 
-install -m 0755 "$TMP/dist/${APP}" "$DEST/${APP}"
+install -m 0755 "$TMP/${APP}" "$DEST/${APP}"
 echo "Installed ${APP} to ${DEST}/${APP}"
 
 # ---- shell completions (optional) ------------------------------------------
