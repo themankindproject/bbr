@@ -377,3 +377,98 @@ fn render_compare(out: &CiCompareOut) -> String {
 
     s
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::pipeline::{PipelineState, PipelineStep};
+
+    fn make_step(name: &str, duration: u64, state_name: &str) -> PipelineStep {
+        PipelineStep {
+            uuid: format!("step-{name}"),
+            name: name.to_string(),
+            state: PipelineState {
+                name: state_name.to_string(),
+                ..Default::default()
+            },
+            duration_in_seconds: duration,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn compute_step_deltas_matching_steps() {
+        let steps_a = vec![
+            make_step("build", 30, "SUCCESSFUL"),
+            make_step("test", 60, "SUCCESSFUL"),
+        ];
+        let steps_b = vec![
+            make_step("build", 25, "SUCCESSFUL"),
+            make_step("test", 80, "SUCCESSFUL"),
+        ];
+        let deltas = compute_step_deltas(&steps_a, &steps_b);
+        assert_eq!(deltas.len(), 2);
+        assert_eq!(deltas[0].duration_delta, Some(-5));
+        assert_eq!(deltas[1].duration_delta, Some(20));
+    }
+
+    #[test]
+    fn compute_step_deltas_missing_step_in_b() {
+        let steps_a = vec![
+            make_step("build", 30, "SUCCESSFUL"),
+            make_step("lint", 10, "SUCCESSFUL"),
+        ];
+        let steps_b = vec![make_step("build", 30, "SUCCESSFUL")];
+        let deltas = compute_step_deltas(&steps_a, &steps_b);
+        assert_eq!(deltas.len(), 2);
+        assert_eq!(deltas[0].state_b, "SUCCESSFUL");
+        assert_eq!(deltas[1].state_b, "ABSENT");
+        assert_eq!(deltas[1].duration_b, None);
+    }
+
+    #[test]
+    fn compute_step_deltas_new_step_in_b() {
+        let steps_a = vec![make_step("build", 30, "SUCCESSFUL")];
+        let steps_b = vec![
+            make_step("build", 30, "SUCCESSFUL"),
+            make_step("deploy", 45, "SUCCESSFUL"),
+        ];
+        let deltas = compute_step_deltas(&steps_a, &steps_b);
+        assert_eq!(deltas.len(), 2);
+        assert_eq!(deltas[1].name, "deploy");
+        assert_eq!(deltas[1].state_a, "ABSENT");
+        assert_eq!(deltas[1].duration_a, None);
+    }
+
+    #[test]
+    fn compute_step_deltas_empty() {
+        let deltas = compute_step_deltas(&[], &[]);
+        assert!(deltas.is_empty());
+    }
+
+    #[test]
+    fn render_compare_includes_pipeline_info() {
+        let out = CiCompareOut {
+            a: ComparedPipeline {
+                uuid: "a-uuid".into(),
+                build_number: 10,
+                state: "SUCCESSFUL".into(),
+                duration_seconds: 60,
+                branch: Some("main".into()),
+            },
+            b: ComparedPipeline {
+                uuid: "b-uuid".into(),
+                build_number: 11,
+                state: "FAILED".into(),
+                duration_seconds: 90,
+                branch: Some("main".into()),
+            },
+            step_deltas: vec![],
+            test_deltas: None,
+        };
+        let rendered = render_compare(&out);
+        assert!(rendered.contains("#10"));
+        assert!(rendered.contains("#11"));
+        assert!(rendered.contains("Pipeline Comparison"));
+    }
+}

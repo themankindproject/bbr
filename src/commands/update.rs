@@ -439,3 +439,77 @@ async fn download_and_install(release: &GithubRelease, _latest: &str) -> Result<
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_version_strips_v_prefix() {
+        assert_eq!(parse_version("v1.2.3"), Some(vec![1, 2, 3]));
+        assert_eq!(parse_version("1.2.3"), Some(vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn parse_version_handles_two_parts() {
+        assert_eq!(parse_version("v1.2"), Some(vec![1, 2]));
+    }
+
+    #[test]
+    fn parse_version_returns_none_for_invalid() {
+        assert_eq!(parse_version("abc"), None);
+        assert_eq!(parse_version(""), None);
+        assert_eq!(parse_version("v1.x.3"), None);
+    }
+
+    #[test]
+    fn is_newer_detects_higher_version() {
+        assert!(is_newer("v1.1.0", "v1.0.0"));
+        assert!(is_newer("v2.0.0", "v1.9.9"));
+        assert!(is_newer("v0.2.0", "v0.1.1"));
+    }
+
+    #[test]
+    fn is_newer_returns_false_for_same() {
+        assert!(!is_newer("v1.0.0", "v1.0.0"));
+    }
+
+    #[test]
+    fn is_newer_returns_false_for_older() {
+        assert!(!is_newer("v1.0.0", "v1.1.0"));
+    }
+
+    #[test]
+    fn is_newer_falls_back_to_string_compare() {
+        assert!(is_newer("v1.0.1", "v1.0.0"));
+        assert!(!is_newer("v1.0.0", "v1.0.1"));
+    }
+
+    #[test]
+    fn render_update_shows_up_to_date() {
+        let out = UpdateOut {
+            current_version: "1.0.0".into(),
+            latest_version: "1.0.0".into(),
+            up_to_date: true,
+            release_url: None,
+            install_hint: None,
+        };
+        let rendered = render_update(&out);
+        assert!(rendered.contains("up to date"));
+        assert!(rendered.contains("1.0.0"));
+    }
+
+    #[test]
+    fn render_update_shows_new_version() {
+        let out = UpdateOut {
+            current_version: "1.0.0".into(),
+            latest_version: "2.0.0".into(),
+            up_to_date: false,
+            release_url: Some("https://github.com/test/releases/tag/v2.0.0".into()),
+            install_hint: Some("Run `bbr update`".into()),
+        };
+        let rendered = render_update(&out);
+        assert!(rendered.contains("2.0.0"));
+        assert!(rendered.contains("1.0.0"));
+    }
+}

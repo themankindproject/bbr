@@ -244,3 +244,84 @@ pub fn format_overview_markdown(out: &OverviewOut) -> String {
     }
     s
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::status::*;
+
+    fn minimal_status() -> StatusOut {
+        StatusOut {
+            repo: RepoSummary {
+                workspace: "ws".into(),
+                slug: "repo".into(),
+                full_name: "ws/repo".into(),
+            },
+            branch: "main".into(),
+            commit: "abc123".into(),
+            pr: None,
+            pipeline: None,
+            commit_statuses: vec![],
+            suggested_commands: vec![],
+        }
+    }
+
+    #[test]
+    fn format_slack_with_no_pr_or_pipeline() {
+        let out = minimal_status();
+        let s = format_slack(&out);
+        assert!(s.contains("main"));
+        assert!(s.contains("ws/repo"));
+        assert!(s.contains("PR: None"));
+        assert!(s.contains("Pipeline: None"));
+    }
+
+    #[test]
+    fn format_slack_with_pr() {
+        let mut out = minimal_status();
+        out.pr = Some(PrSummary {
+            id: 42,
+            state: "OPEN".into(),
+            title: "Fix bug".into(),
+            source: "fix".into(),
+            destination: "main".into(),
+            url: None,
+            author: Some("alice".into()),
+            comment_count: 3,
+            task_count: 1,
+            reviewers: vec![],
+        });
+        let s = format_slack(&out);
+        assert!(s.contains("#42"));
+        assert!(s.contains("Fix bug"));
+        assert!(s.contains("OPEN"));
+        assert!(s.contains("@alice"));
+    }
+
+    #[test]
+    fn format_markdown_with_no_pr_or_pipeline() {
+        let out = minimal_status();
+        let s = format_markdown(&out);
+        assert!(s.contains("## Status"));
+        assert!(s.contains("main"));
+        assert!(s.contains("None"));
+    }
+
+    #[test]
+    fn format_markdown_with_pipeline() {
+        let mut out = minimal_status();
+        out.pipeline = Some(PipelineSummary {
+            uuid: "pipe-uuid".into(),
+            state: "SUCCESSFUL".into(),
+            duration_seconds: 45,
+            branch: Some("main".into()),
+            commit: Some("abc123".into()),
+            url: None,
+            failing_steps: vec![],
+            steps: vec![],
+        });
+        let s = format_markdown(&out);
+        assert!(s.contains("SUCCESSFUL"));
+        assert!(s.contains("45s"));
+    }
+}
