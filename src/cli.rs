@@ -1030,7 +1030,6 @@ async fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
         None => {
             let result = commands::status::run_overview(g).await;
-            // Fire-and-forget version check (silent on failure)
             commands::update::notify_if_outdated().await;
             result
         }
@@ -1040,223 +1039,10 @@ async fn dispatch(cli: Cli) -> Result<()> {
             interval,
             short,
             export,
-        }) => {
-            if let Some(fmt) = export {
-                let status_res = commands::status::run_inner(&g).await?;
-                let text = match fmt.as_str() {
-                    "slack" => commands::export::format_slack(&status_res),
-                    "markdown" => commands::export::format_markdown(&status_res),
-                    _ => unreachable!(),
-                };
-                println!("{}", text);
-                Ok(())
-            } else if watch {
-                commands::status::run_watch(&g, interval).await
-            } else if short {
-                commands::status::run_short(&g).await
-            } else {
-                commands::status::run(&g).await
-            }
-        }
-        Some(Command::Pr { action }) => match action {
-            PrAction::List {
-                state,
-                limit,
-                author,
-                source_branch,
-                reviewer,
-                g,
-            } => {
-                commands::pr::list(
-                    &g,
-                    &state,
-                    limit,
-                    author.as_deref(),
-                    source_branch.as_deref(),
-                    reviewer.as_deref(),
-                )
-                .await
-            }
-            PrAction::View {
-                id,
-                diff,
-                comments,
-                g,
-            } => commands::pr::view(&g, id, diff, comments).await,
-            PrAction::Create {
-                title,
-                body,
-                body_file,
-                body_stdin,
-                src,
-                dst,
-                close_source_branch,
-                draft,
-                reviewer,
-                g,
-            } => {
-                commands::pr::create(
-                    &g,
-                    &title,
-                    body.as_deref(),
-                    body_file.as_deref(),
-                    body_stdin,
-                    src.as_deref(),
-                    dst.as_deref(),
-                    close_source_branch,
-                    draft,
-                    &reviewer,
-                )
-                .await
-            }
-            PrAction::Comment {
-                id,
-                body,
-                body_file,
-                body_stdin,
-                reply_to,
-                g,
-            } => {
-                commands::pr::comment(
-                    &g,
-                    id,
-                    body.as_deref(),
-                    body_file.as_deref(),
-                    body_stdin,
-                    reply_to,
-                )
-                .await
-            }
-            PrAction::Comments { id, limit, g } => commands::pr::comments(&g, id, limit).await,
-            PrAction::Tasks { id, limit, g } => commands::pr::tasks(&g, id, limit).await,
-            PrAction::Commits { id, limit, g } => commands::pr::commits(&g, id, limit).await,
-            PrAction::Statuses { id, limit, g } => commands::pr::statuses(&g, id, limit).await,
-            PrAction::Conflicts { id, limit, g } => commands::pr::conflicts(&g, id, limit).await,
-            PrAction::RequestChanges { id, g } => commands::pr::request_changes(&g, id).await,
-            PrAction::UnrequestChanges { id, g } => commands::pr::unrequest_changes(&g, id).await,
-            PrAction::Merge {
-                id,
-                close_source_branch,
-                strategy,
-                message,
-                g,
-            } => {
-                commands::pr::merge(
-                    &g,
-                    id,
-                    close_source_branch,
-                    strategy.as_deref(),
-                    message.as_deref(),
-                )
-                .await
-            }
-            PrAction::Approve { id, g } => commands::pr::approve(&g, id).await,
-            PrAction::Unapprove { id, g } => commands::pr::unapprove(&g, id).await,
-            PrAction::Decline { id, g } => commands::pr::decline(&g, id).await,
-            PrAction::Checkout { id, g } => commands::pr::checkout(&g, id).await,
-            PrAction::Diff { id, g } => commands::pr::diff(&g, id).await,
-            PrAction::Update {
-                id,
-                title,
-                description,
-                g,
-            } => commands::pr::update(&g, id, title.as_deref(), description.as_deref()).await,
-            PrAction::Dashboard { repos, filter, g } => {
-                commands::dashboard::run_dashboard(&g, repos, filter.as_deref()).await
-            }
-            PrAction::Stack { action } => match action {
-                StackAction::Init { name, base } => {
-                    commands::stack::init(&cli.global, &name, base.as_deref())
-                }
-                StackAction::Add { branch, parent } => {
-                    commands::stack::add(&cli.global, &branch, parent.as_deref()).await
-                }
-                StackAction::List => commands::stack::list(&cli.global).await,
-                StackAction::Rebase { push } => commands::stack::rebase(&cli.global, push),
-                StackAction::Land { strategy, yes } => {
-                    commands::stack::land(&cli.global, strategy.as_deref(), yes).await
-                }
-                StackAction::Abort { yes } => commands::stack::abort(&cli.global, yes).await,
-            },
-        },
-        Some(Command::Ci { action }) => match action {
-            CiAction::Status { branch, g } => commands::ci::status(&g, branch.as_deref()).await,
-            CiAction::Watch {
-                branch,
-                interval_secs,
-                logs,
-                g,
-            } => commands::ci::watch(&g, branch.as_deref(), interval_secs, logs).await,
-            CiAction::Logs {
-                uuid,
-                step,
-                failed,
-                latest,
-                output,
-                g,
-            } => {
-                commands::ci::logs(
-                    &g,
-                    uuid.as_deref(),
-                    step.as_deref(),
-                    failed,
-                    latest,
-                    output.as_deref(),
-                )
-                .await
-            }
-            CiAction::List { branch, limit, g } => {
-                commands::ci::list(&g, branch.as_deref(), limit).await
-            }
-            CiAction::Rerun { branch, g } => commands::ci::rerun(&g, branch.as_deref()).await,
-            CiAction::Trigger { branch, g } => commands::ci::trigger(&g, branch.as_deref()).await,
-            CiAction::Stop { uuid, branch, g } => {
-                commands::ci::stop(&g, uuid.as_deref(), branch.as_deref()).await
-            }
-            CiAction::Steps { uuid, g } => commands::ci::steps(&g, uuid.as_deref()).await,
-            CiAction::Tests {
-                uuid,
-                step,
-                limit,
-                g,
-            } => commands::ci::tests(&g, uuid.as_deref(), step.as_deref(), limit).await,
-            CiAction::Compare { a, b, g } => commands::ci_compare::compare(&g, &a, &b).await,
-            CiAction::Vars { action } => match action {
-                CiVarsAction::List { g } => commands::ci_vars::list(&g).await,
-                CiVarsAction::Set {
-                    key,
-                    value,
-                    secured,
-                    g,
-                } => commands::ci_vars::set(&g, &key, &value, secured).await,
-                CiVarsAction::Delete { key, g } => commands::ci_vars::delete(&g, &key).await,
-            },
-        },
-        Some(Command::Repo { action }) => match action {
-            RepoAction::Info { g } => commands::repo::info(&g).await,
-            RepoAction::Branches { limit, g } => commands::repo::list_branches(&g, limit).await,
-            RepoAction::Tags { limit, g } => commands::repo::list_tags(&g, limit).await,
-            RepoAction::Commits { branch, limit, g } => {
-                commands::repo::list_commits(&g, branch.as_deref(), limit).await
-            }
-            RepoAction::Create {
-                slug,
-                private,
-                description,
-                language,
-                g,
-            } => {
-                commands::repo::create(
-                    &g,
-                    &slug,
-                    private,
-                    description.as_deref(),
-                    language.as_deref(),
-                )
-                .await
-            }
-            RepoAction::Audit { slug, g } => commands::audit::run_audit(&g, slug.as_deref()).await,
-        },
+        }) => dispatch_status(g, watch, interval, short, export).await,
+        Some(Command::Pr { action }) => dispatch_pr(&cli.global, action).await,
+        Some(Command::Ci { action }) => dispatch_ci(action).await,
+        Some(Command::Repo { action }) => dispatch_repo(action).await,
         Some(Command::Commit { action }) => match action {
             CommitAction::Status { action } => match action {
                 CommitStatusAction::Set {
@@ -1283,60 +1069,9 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 }
             },
         },
-        Some(Command::Batch { action }) => match action {
-            BatchAction::MergeApproved {
-                repo,
-                dry_run,
-                strategy,
-                yes,
-            } => {
-                commands::batch::merge_approved(
-                    &cli.global,
-                    repo.as_deref(),
-                    dry_run,
-                    strategy.as_deref(),
-                    yes,
-                )
-                .await
-            }
-            BatchAction::RerunFailed {
-                branch,
-                repo,
-                dry_run,
-                yes,
-            } => {
-                commands::batch::rerun_failed(
-                    &cli.global,
-                    branch.as_deref(),
-                    repo.as_deref(),
-                    dry_run,
-                    yes,
-                )
-                .await
-            }
-            BatchAction::CleanupMergedBranches {
-                repo,
-                remote,
-                dry_run,
-                yes,
-            } => {
-                commands::batch::cleanup_merged_branches(
-                    &cli.global,
-                    repo.as_deref(),
-                    remote,
-                    dry_run,
-                    yes,
-                )
-                .await
-            }
-        },
+        Some(Command::Batch { action }) => dispatch_batch(&cli.global, action).await,
         Some(Command::Open { action, g }) => commands::open::run(&g, action).await,
-        Some(Command::Auth { action }) => match action {
-            AuthAction::Setup { username, token } => commands::auth::setup(username, token),
-            AuthAction::Status { g } => commands::auth::status(&g).await,
-            AuthAction::Logout { g } => commands::auth::logout(&g),
-            AuthAction::Test { g } => commands::auth::test(&g).await,
-        },
+        Some(Command::Auth { action }) => dispatch_auth(action),
         Some(Command::Completion { shell, install }) => {
             if install {
                 commands::completion::install(shell)?;
@@ -1354,47 +1089,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
             paginate,
             g,
         }) => commands::api::run(&g, &method, &path, data.as_deref(), paginate).await,
-        Some(Command::Webhook { action }) => match action {
-            WebhookAction::List { g } => commands::webhook::list(&g).await,
-            WebhookAction::View { uid, g } => commands::webhook::view(&g, &uid).await,
-            WebhookAction::Create {
-                url,
-                events,
-                description,
-                active,
-                secret,
-                g,
-            } => {
-                commands::webhook::create(
-                    &g,
-                    &url,
-                    &events,
-                    description.as_deref(),
-                    active,
-                    secret.as_deref(),
-                )
-                .await
-            }
-            WebhookAction::Update {
-                uid,
-                url,
-                events,
-                description,
-                active,
-                g,
-            } => {
-                commands::webhook::update(
-                    &g,
-                    &uid,
-                    url.as_deref(),
-                    events.as_deref(),
-                    description.as_deref(),
-                    active,
-                )
-                .await
-            }
-            WebhookAction::Delete { uid, yes, g } => commands::webhook::delete(&g, &uid, yes).await,
-        },
+        Some(Command::Webhook { action }) => dispatch_webhook(action).await,
         Some(Command::Src { action }) => match action {
             SrcAction::Cat { path, git_ref, g } => {
                 commands::src_cmd::cat(&g, &path, git_ref.as_deref()).await
@@ -1403,90 +1098,417 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 commands::src_cmd::ls(&g, path.as_deref(), git_ref.as_deref()).await
             }
         },
-        Some(Command::Deploy { action }) => match action {
-            DeployAction::List { limit, g } => commands::deploy::list_deployments(&g, limit).await,
-            DeployAction::Env { action } => match action {
-                DeployEnvAction::List { g } => commands::deploy::list_environments(&g).await,
-                DeployEnvAction::Vars { action } => match action {
-                    DeployEnvVarsAction::List { env_uuid, g } => {
-                        commands::deploy::list_env_vars(&g, &env_uuid).await
-                    }
-                    DeployEnvVarsAction::Set {
-                        env_uuid,
-                        key,
-                        value,
-                        secured,
-                        g,
-                    } => commands::deploy::set_env_var(&g, &env_uuid, &key, &value, secured).await,
-                    DeployEnvVarsAction::Delete { env_uuid, key, g } => {
-                        commands::deploy::delete_env_var(&g, &env_uuid, &key).await
-                    }
-                },
-            },
-        },
-        Some(Command::Issue { action }) => match action {
-            IssueAction::List {
-                limit,
-                status,
-                kind,
-                priority,
-                assignee,
-                query,
-                g,
-            } => {
-                commands::issue::list(
-                    &g,
-                    limit,
-                    status.as_deref(),
-                    kind.as_deref(),
-                    priority.as_deref(),
-                    assignee.as_deref(),
-                    query.as_deref(),
-                )
-                .await
-            }
-            IssueAction::View { id, comments, g } => commands::issue::view(&g, id, comments).await,
-            IssueAction::Create {
-                title,
-                body,
-                kind,
-                priority,
-                assignee,
-                g,
-            } => {
-                commands::issue::create(&g, &title, &body, &kind, &priority, assignee.as_deref())
-                    .await
-            }
-            IssueAction::Update {
-                id,
-                title,
-                body,
-                status,
-                kind,
-                priority,
-                assignee,
-                g,
-            } => {
-                commands::issue::update(
-                    &g,
-                    id,
-                    title.as_deref(),
-                    body.as_deref(),
-                    status.as_deref(),
-                    kind.as_deref(),
-                    priority.as_deref(),
-                    assignee.as_deref(),
-                )
-                .await
-            }
-            IssueAction::Comment { id, body, g } => commands::issue::comment(&g, id, &body).await,
-            IssueAction::Comments { id, limit, g } => {
-                commands::issue::list_comments(&g, id, limit).await
-            }
-        },
+        Some(Command::Deploy { action }) => dispatch_deploy(action).await,
+        Some(Command::Issue { action }) => dispatch_issue(action).await,
         Some(Command::Search { query, limit, g }) => commands::search::run(&g, &query, limit).await,
         Some(Command::Schema { model, g }) => commands::schema::run(&g, model.as_deref()),
         Some(Command::Update { check, g }) => commands::update::run(&g, check).await,
+    }
+}
+
+async fn dispatch_status(
+    g: GlobalArgs,
+    watch: bool,
+    interval: u64,
+    short: bool,
+    export: Option<String>,
+) -> Result<()> {
+    if let Some(fmt) = export {
+        let status_res = commands::status::run_inner(&g).await?;
+        let text = match fmt.as_str() {
+            "slack" => commands::export::format_slack(&status_res),
+            "markdown" => commands::export::format_markdown(&status_res),
+            _ => unreachable!(),
+        };
+        println!("{}", text);
+        Ok(())
+    } else if watch {
+        commands::status::run_watch(&g, interval).await
+    } else if short {
+        commands::status::run_short(&g).await
+    } else {
+        commands::status::run(&g).await
+    }
+}
+
+async fn dispatch_pr(g: &GlobalArgs, action: PrAction) -> Result<()> {
+    match action {
+        PrAction::List {
+            state,
+            limit,
+            author,
+            source_branch,
+            reviewer,
+            g,
+        } => {
+            commands::pr::list(
+                &g,
+                &state,
+                limit,
+                author.as_deref(),
+                source_branch.as_deref(),
+                reviewer.as_deref(),
+            )
+            .await
+        }
+        PrAction::View {
+            id,
+            diff,
+            comments,
+            g,
+        } => commands::pr::view(&g, id, diff, comments).await,
+        PrAction::Create {
+            title,
+            body,
+            body_file,
+            body_stdin,
+            src,
+            dst,
+            close_source_branch,
+            draft,
+            reviewer,
+            g,
+        } => {
+            commands::pr::create(
+                &g,
+                &title,
+                body.as_deref(),
+                body_file.as_deref(),
+                body_stdin,
+                src.as_deref(),
+                dst.as_deref(),
+                close_source_branch,
+                draft,
+                &reviewer,
+            )
+            .await
+        }
+        PrAction::Comment {
+            id,
+            body,
+            body_file,
+            body_stdin,
+            reply_to,
+            g,
+        } => {
+            commands::pr::comment(
+                &g,
+                id,
+                body.as_deref(),
+                body_file.as_deref(),
+                body_stdin,
+                reply_to,
+            )
+            .await
+        }
+        PrAction::Comments { id, limit, g } => commands::pr::comments(&g, id, limit).await,
+        PrAction::Tasks { id, limit, g } => commands::pr::tasks(&g, id, limit).await,
+        PrAction::Commits { id, limit, g } => commands::pr::commits(&g, id, limit).await,
+        PrAction::Statuses { id, limit, g } => commands::pr::statuses(&g, id, limit).await,
+        PrAction::Conflicts { id, limit, g } => commands::pr::conflicts(&g, id, limit).await,
+        PrAction::RequestChanges { id, g } => commands::pr::request_changes(&g, id).await,
+        PrAction::UnrequestChanges { id, g } => commands::pr::unrequest_changes(&g, id).await,
+        PrAction::Merge {
+            id,
+            close_source_branch,
+            strategy,
+            message,
+            g,
+        } => {
+            commands::pr::merge(
+                &g,
+                id,
+                close_source_branch,
+                strategy.as_deref(),
+                message.as_deref(),
+            )
+            .await
+        }
+        PrAction::Approve { id, g } => commands::pr::approve(&g, id).await,
+        PrAction::Unapprove { id, g } => commands::pr::unapprove(&g, id).await,
+        PrAction::Decline { id, g } => commands::pr::decline(&g, id).await,
+        PrAction::Checkout { id, g } => commands::pr::checkout(&g, id).await,
+        PrAction::Diff { id, g } => commands::pr::diff(&g, id).await,
+        PrAction::Update {
+            id,
+            title,
+            description,
+            g,
+        } => commands::pr::update(&g, id, title.as_deref(), description.as_deref()).await,
+        PrAction::Dashboard { repos, filter, g } => {
+            commands::dashboard::run_dashboard(&g, repos, filter.as_deref()).await
+        }
+        PrAction::Stack { action } => match action {
+            StackAction::Init { name, base } => commands::stack::init(g, &name, base.as_deref()),
+            StackAction::Add { branch, parent } => {
+                commands::stack::add(g, &branch, parent.as_deref()).await
+            }
+            StackAction::List => commands::stack::list(g).await,
+            StackAction::Rebase { push } => commands::stack::rebase(g, push),
+            StackAction::Land { strategy, yes } => {
+                commands::stack::land(g, strategy.as_deref(), yes).await
+            }
+            StackAction::Abort { yes } => commands::stack::abort(g, yes).await,
+        },
+    }
+}
+
+async fn dispatch_ci(action: CiAction) -> Result<()> {
+    match action {
+        CiAction::Status { branch, g } => commands::ci::status(&g, branch.as_deref()).await,
+        CiAction::Watch {
+            branch,
+            interval_secs,
+            logs,
+            g,
+        } => commands::ci::watch(&g, branch.as_deref(), interval_secs, logs).await,
+        CiAction::Logs {
+            uuid,
+            step,
+            failed,
+            latest,
+            output,
+            g,
+        } => {
+            commands::ci::logs(
+                &g,
+                uuid.as_deref(),
+                step.as_deref(),
+                failed,
+                latest,
+                output.as_deref(),
+            )
+            .await
+        }
+        CiAction::List { branch, limit, g } => {
+            commands::ci::list(&g, branch.as_deref(), limit).await
+        }
+        CiAction::Rerun { branch, g } => commands::ci::rerun(&g, branch.as_deref()).await,
+        CiAction::Trigger { branch, g } => commands::ci::trigger(&g, branch.as_deref()).await,
+        CiAction::Stop { uuid, branch, g } => {
+            commands::ci::stop(&g, uuid.as_deref(), branch.as_deref()).await
+        }
+        CiAction::Steps { uuid, g } => commands::ci::steps(&g, uuid.as_deref()).await,
+        CiAction::Tests {
+            uuid,
+            step,
+            limit,
+            g,
+        } => commands::ci::tests(&g, uuid.as_deref(), step.as_deref(), limit).await,
+        CiAction::Compare { a, b, g } => commands::ci_compare::compare(&g, &a, &b).await,
+        CiAction::Vars { action } => match action {
+            CiVarsAction::List { g } => commands::ci_vars::list(&g).await,
+            CiVarsAction::Set {
+                key,
+                value,
+                secured,
+                g,
+            } => commands::ci_vars::set(&g, &key, &value, secured).await,
+            CiVarsAction::Delete { key, g } => commands::ci_vars::delete(&g, &key).await,
+        },
+    }
+}
+
+async fn dispatch_repo(action: RepoAction) -> Result<()> {
+    match action {
+        RepoAction::Info { g } => commands::repo::info(&g).await,
+        RepoAction::Branches { limit, g } => commands::repo::list_branches(&g, limit).await,
+        RepoAction::Tags { limit, g } => commands::repo::list_tags(&g, limit).await,
+        RepoAction::Commits { branch, limit, g } => {
+            commands::repo::list_commits(&g, branch.as_deref(), limit).await
+        }
+        RepoAction::Create {
+            slug,
+            private,
+            description,
+            language,
+            g,
+        } => {
+            commands::repo::create(
+                &g,
+                &slug,
+                private,
+                description.as_deref(),
+                language.as_deref(),
+            )
+            .await
+        }
+        RepoAction::Audit { slug, g } => commands::audit::run_audit(&g, slug.as_deref()).await,
+    }
+}
+
+async fn dispatch_batch(g: &GlobalArgs, action: BatchAction) -> Result<()> {
+    match action {
+        BatchAction::MergeApproved {
+            repo,
+            dry_run,
+            strategy,
+            yes,
+        } => {
+            commands::batch::merge_approved(g, repo.as_deref(), dry_run, strategy.as_deref(), yes)
+                .await
+        }
+        BatchAction::RerunFailed {
+            branch,
+            repo,
+            dry_run,
+            yes,
+        } => {
+            commands::batch::rerun_failed(g, branch.as_deref(), repo.as_deref(), dry_run, yes).await
+        }
+        BatchAction::CleanupMergedBranches {
+            repo,
+            remote,
+            dry_run,
+            yes,
+        } => {
+            commands::batch::cleanup_merged_branches(g, repo.as_deref(), remote, dry_run, yes).await
+        }
+    }
+}
+
+fn dispatch_auth(action: AuthAction) -> Result<()> {
+    match action {
+        AuthAction::Setup { username, token } => commands::auth::setup(username, token),
+        AuthAction::Status { g } => {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(commands::auth::status(&g))
+        }
+        AuthAction::Logout { g } => commands::auth::logout(&g),
+        AuthAction::Test { g } => {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(commands::auth::test(&g))
+        }
+    }
+}
+
+async fn dispatch_webhook(action: WebhookAction) -> Result<()> {
+    match action {
+        WebhookAction::List { g } => commands::webhook::list(&g).await,
+        WebhookAction::View { uid, g } => commands::webhook::view(&g, &uid).await,
+        WebhookAction::Create {
+            url,
+            events,
+            description,
+            active,
+            secret,
+            g,
+        } => {
+            commands::webhook::create(
+                &g,
+                &url,
+                &events,
+                description.as_deref(),
+                active,
+                secret.as_deref(),
+            )
+            .await
+        }
+        WebhookAction::Update {
+            uid,
+            url,
+            events,
+            description,
+            active,
+            g,
+        } => {
+            commands::webhook::update(
+                &g,
+                &uid,
+                url.as_deref(),
+                events.as_deref(),
+                description.as_deref(),
+                active,
+            )
+            .await
+        }
+        WebhookAction::Delete { uid, yes, g } => commands::webhook::delete(&g, &uid, yes).await,
+    }
+}
+
+async fn dispatch_deploy(action: DeployAction) -> Result<()> {
+    match action {
+        DeployAction::List { limit, g } => commands::deploy::list_deployments(&g, limit).await,
+        DeployAction::Env { action } => match action {
+            DeployEnvAction::List { g } => commands::deploy::list_environments(&g).await,
+            DeployEnvAction::Vars { action } => match action {
+                DeployEnvVarsAction::List { env_uuid, g } => {
+                    commands::deploy::list_env_vars(&g, &env_uuid).await
+                }
+                DeployEnvVarsAction::Set {
+                    env_uuid,
+                    key,
+                    value,
+                    secured,
+                    g,
+                } => commands::deploy::set_env_var(&g, &env_uuid, &key, &value, secured).await,
+                DeployEnvVarsAction::Delete { env_uuid, key, g } => {
+                    commands::deploy::delete_env_var(&g, &env_uuid, &key).await
+                }
+            },
+        },
+    }
+}
+
+async fn dispatch_issue(action: IssueAction) -> Result<()> {
+    match action {
+        IssueAction::List {
+            limit,
+            status,
+            kind,
+            priority,
+            assignee,
+            query,
+            g,
+        } => {
+            commands::issue::list(
+                &g,
+                limit,
+                status.as_deref(),
+                kind.as_deref(),
+                priority.as_deref(),
+                assignee.as_deref(),
+                query.as_deref(),
+            )
+            .await
+        }
+        IssueAction::View { id, comments, g } => commands::issue::view(&g, id, comments).await,
+        IssueAction::Create {
+            title,
+            body,
+            kind,
+            priority,
+            assignee,
+            g,
+        } => {
+            commands::issue::create(&g, &title, &body, &kind, &priority, assignee.as_deref()).await
+        }
+        IssueAction::Update {
+            id,
+            title,
+            body,
+            status,
+            kind,
+            priority,
+            assignee,
+            g,
+        } => {
+            commands::issue::update(
+                &g,
+                id,
+                title.as_deref(),
+                body.as_deref(),
+                status.as_deref(),
+                kind.as_deref(),
+                priority.as_deref(),
+                assignee.as_deref(),
+            )
+            .await
+        }
+        IssueAction::Comment { id, body, g } => commands::issue::comment(&g, id, &body).await,
+        IssueAction::Comments { id, limit, g } => {
+            commands::issue::list_comments(&g, id, limit).await
+        }
     }
 }
 
