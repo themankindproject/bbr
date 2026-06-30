@@ -398,12 +398,13 @@ impl BitbucketClient {
                 }
             }
             Err(_) => {
-                // Fallback: retry without fields= parameter
+                // Fallback: retry without fields= and with smaller pagelen
+                let safe_pagelen = pagelen.min(50);
                 let path_no_fields = format!(
                     "/repositories/{workspace}/{slug}/pullrequests?\
-                     pagelen={pagelen}&sort={sort_prefix}{sort_field}{q_param}"
+                     pagelen={safe_pagelen}&sort={sort_prefix}{sort_field}{q_param}"
                 );
-                if limit > 100 {
+                if limit > safe_pagelen {
                     self.fetch_all_pages(&path_no_fields, limit as usize).await
                 } else {
                     let page: super::Paginated<PullRequest> = self
