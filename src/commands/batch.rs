@@ -67,7 +67,17 @@ pub async fn merge_approved(
     spinner.set_message("Fetching open pull requests...");
 
     let prs = client
-        .list_prs(&repo.workspace, slug, PrState::Open, 100, None, None, None)
+        .list_prs(
+            &repo.workspace,
+            slug,
+            PrState::Open,
+            100,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
         .await?;
 
     let mut approved_actions = Vec::new();

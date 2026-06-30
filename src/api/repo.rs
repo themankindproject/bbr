@@ -187,6 +187,64 @@ impl BitbucketClient {
         Ok(())
     }
 
+    /// `DELETE /repositories/{workspace}/{slug}` — delete a repository.
+    pub async fn delete_repo(&self, workspace: &str, slug: &str) -> Result<()> {
+        let path = format!("/repositories/{workspace}/{slug}");
+        self.send_empty(reqwest::Method::DELETE, &path, None).await
+    }
+
+    /// `POST /repositories/{workspace}/{slug}/forks` — fork a repository.
+    pub async fn fork_repo(
+        &self,
+        workspace: &str,
+        slug: &str,
+        name: Option<&str>,
+        target_workspace: Option<&str>,
+    ) -> Result<Repository> {
+        let path = format!("/repositories/{workspace}/{slug}/forks");
+        let mut body = json!({});
+        if let Some(n) = name {
+            body["name"] = json!(n);
+        }
+        if let Some(tw) = target_workspace {
+            body["workspace"] = json!({"slug": tw});
+        }
+        let raw = serde_json::to_string(&body)?;
+        self.send(reqwest::Method::POST, &path, Some(&raw)).await
+    }
+
+    /// `POST /repositories/{ws}/{slug}/refs/branches` — create a branch.
+    pub async fn create_branch(
+        &self,
+        workspace: &str,
+        slug: &str,
+        name: &str,
+        target_hash: &str,
+    ) -> Result<Branch> {
+        let path = format!("/repositories/{workspace}/{slug}/refs/branches");
+        let body = json!({"name": name, "target": {"hash": target_hash}});
+        let raw = serde_json::to_string(&body)?;
+        self.send(reqwest::Method::POST, &path, Some(&raw)).await
+    }
+
+    /// `POST /repositories/{ws}/{slug}/refs/tags` — create a tag.
+    pub async fn create_tag(
+        &self,
+        workspace: &str,
+        slug: &str,
+        name: &str,
+        target_hash: &str,
+        message: Option<&str>,
+    ) -> Result<Tag> {
+        let path = format!("/repositories/{workspace}/{slug}/refs/tags");
+        let mut body = json!({"name": name, "target": {"hash": target_hash}});
+        if let Some(m) = message {
+            body["message"] = json!(m);
+        }
+        let raw = serde_json::to_string(&body)?;
+        self.send(reqwest::Method::POST, &path, Some(&raw)).await
+    }
+
     /// `GET /repositories/{workspace}` — list repositories in a workspace.
     pub async fn list_repos(&self, workspace: &str, limit: u32) -> Result<Vec<Repository>> {
         let pagelen = limit.min(100);

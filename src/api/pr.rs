@@ -311,6 +311,7 @@ impl BitbucketClient {
     ///
     /// When `limit > 100` (Bitbucket's max page size), this follows `next`
     /// links across multiple pages automatically.
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_prs(
         &self,
         workspace: &str,
@@ -320,8 +321,12 @@ impl BitbucketClient {
         author: Option<&str>,
         source_branch: Option<&str>,
         reviewer: Option<&str>,
+        sort: Option<&str>,
+        order: Option<&str>,
     ) -> Result<Vec<PullRequest>> {
         let pagelen = limit.min(100);
+        let sort_field = sort.unwrap_or("updated_on");
+        let sort_prefix = if order == Some("asc") { "" } else { "-" };
         let mut path = format!(
             "/repositories/{workspace}/{slug}/pullrequests?\
              fields=values.id,values.state,values.title,\
@@ -329,7 +334,7 @@ impl BitbucketClient {
              values.author.display_name,values.links.html.href,\
              values.comment_count,values.task_count,values.close_source_branch,\
              values.updated_on&\
-             pagelen={pagelen}&sort=-updated_on"
+             pagelen={pagelen}&sort={sort_prefix}{sort_field}"
         );
         let mut q_parts: Vec<String> = Vec::new();
         if let Some(s) = state.as_query() {
@@ -510,6 +515,37 @@ impl BitbucketClient {
         let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}/diff");
         self.send_raw(reqwest::Method::GET, &path, "text/plain")
             .await
+    }
+
+    /// `GET /repositories/{ws}/{slug}/pullrequests/{id}/diffstat`
+    pub async fn pr_diffstat(
+        &self,
+        workspace: &str,
+        slug: &str,
+        id: u64,
+    ) -> Result<serde_json::Value> {
+        let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}/diffstat");
+        self.send(reqwest::Method::GET, &path, None).await
+    }
+
+    /// `GET /repositories/{ws}/{slug}/pullrequests/{id}/patch`
+    pub async fn pr_patch(&self, workspace: &str, slug: &str, id: u64) -> Result<String> {
+        let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}/patch");
+        self.send_raw(reqwest::Method::GET, &path, "text/plain")
+            .await
+    }
+
+    /// `POST /repositories/{ws}/{slug}/pullrequests/{id}/approve`
+    pub async fn approve_pr_with_comment(
+        &self,
+        workspace: &str,
+        slug: &str,
+        id: u64,
+        message: &str,
+    ) -> Result<()> {
+        self.comment_pr(workspace, slug, id, message, None).await?;
+        self.approve_pr(workspace, slug, id).await?;
+        Ok(())
     }
 
     /// `GET /repositories/{ws}/{slug}/pullrequests/{id}/comments`

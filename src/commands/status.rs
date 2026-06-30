@@ -171,6 +171,8 @@ pub async fn run_overview(g: &GlobalArgs) -> Result<()> {
             5,
             None,
             None,
+            None,
+            None,
             None
         ),
         client.list_pipelines(&repo.workspace, &repo.slug, None, 5),

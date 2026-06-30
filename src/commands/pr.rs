@@ -173,6 +173,8 @@ pub async fn list(
     author: Option<&str>,
     source_branch: Option<&str>,
     reviewer: Option<&str>,
+    sort: &str,
+    order: &str,
 ) -> Result<()> {
     let state = PrState::parse(state)?;
     let repo = resolve_repo(g)?;
@@ -188,6 +190,8 @@ pub async fn list(
             author,
             source_branch,
             reviewer,
+            Some(sort),
+            Some(order),
         )
         .await?;
     spinner.finish_and_clear();
@@ -513,12 +517,18 @@ pub async fn unrequest_changes(g: &GlobalArgs, id: u64) -> Result<()> {
     )
 }
 
-pub async fn approve(g: &GlobalArgs, id: u64) -> Result<()> {
+pub async fn approve(g: &GlobalArgs, id: u64, message: Option<&str>) -> Result<()> {
     let repo = resolve_repo(g)?;
     let client = client(g)?;
     let spinner = make_spinner(g.json);
     spinner.set_message("Approving...");
-    client.approve_pr(&repo.workspace, &repo.slug, id).await?;
+    if let Some(msg) = message {
+        client
+            .approve_pr_with_comment(&repo.workspace, &repo.slug, id, msg)
+            .await?;
+    } else {
+        client.approve_pr(&repo.workspace, &repo.slug, id).await?;
+    }
     spinner.finish_and_clear();
     let fmt = Formatter::from_json_flag(g.json);
     fmt.print(
@@ -702,6 +712,54 @@ pub async fn diff(g: &GlobalArgs, id: u64) -> Result<()> {
 
     let fmt = Formatter::from_json_flag(g.json);
     fmt.print_diff(&serde_json::json!({ "id": id, "diff": body }), &body)
+}
+
+pub async fn diffstat(g: &GlobalArgs, id: Option<u64>) -> Result<()> {
+    let repo = resolve_repo(g)?;
+    let client = client(g)?;
+    let id = match id {
+        Some(i) => i,
+        None => resolve_pr_id(&client, &repo.workspace, &repo.slug, None).await?,
+    };
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Fetching diffstat...");
+    let stat = client.pr_diffstat(&repo.workspace, &repo.slug, id).await?;
+    spinner.finish_and_clear();
+
+    let fmt = Formatter::from_json_flag(g.json);
+    let human = format!(
+        "Diffstat for PR #{}\n{}",
+        id,
+        serde_json::to_string_pretty(&stat).unwrap_or_default()
+    );
+    fmt.print(&stat, &human)
+}
+
+pub async fn patch(g: &GlobalArgs, id: Option<u64>, output: Option<&str>) -> Result<()> {
+    let repo = resolve_repo(g)?;
+    let client = client(g)?;
+    let id = match id {
+        Some(i) => i,
+        None => resolve_pr_id(&client, &repo.workspace, &repo.slug, None).await?,
+    };
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Fetching patch...");
+    let body = client.pr_patch(&repo.workspace, &repo.slug, id).await?;
+    spinner.finish_and_clear();
+
+    if let Some(path) = output {
+        std::fs::write(path, &body)
+            .map_err(|e| crate::error::BitbucketError::Other(format!("writing {path}: {e}")))?;
+        let out = serde_json::json!({ "id": id, "file": path, "bytes": body.len() });
+        let human = format!("Wrote patch to {path}");
+        Formatter::from_json_flag(g.json).print(&out, &human)
+    } else {
+        let out = serde_json::json!({ "id": id, "patch": body });
+        let fmt = Formatter::from_json_flag(g.json);
+        fmt.print_diff(&out, &body)
+    }
 }
 
 // ---- helpers --------------------------------------------------------------

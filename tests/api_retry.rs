@@ -63,7 +63,17 @@ async fn retries_on_rate_limit_then_succeeds() {
 
     let c = client(&server.uri()).await;
     let prs = c
-        .list_prs("ws", "slug", PrState::Open, 25, None, None, None)
+        .list_prs(
+            "ws",
+            "slug",
+            PrState::Open,
+            25,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(prs.len(), 1);
@@ -89,7 +99,17 @@ async fn returns_error_after_max_retries_exhausted() {
 
     let c = client(&server.uri()).await;
     let err = c
-        .list_prs("ws", "slug", PrState::Open, 25, None, None, None)
+        .list_prs(
+            "ws",
+            "slug",
+            PrState::Open,
+            25,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
         .await
         .expect_err("should fail after retries");
     assert_eq!(err.exit_code(), ExitCode::RateLimit);

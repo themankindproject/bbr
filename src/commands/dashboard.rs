@@ -125,11 +125,31 @@ pub async fn run_dashboard(
         let client_ref = &client;
         futures.push(async move {
             let open_prs = client_ref
-                .list_prs(&ws_clone, &slug_clone, PrState::Open, 20, None, None, None)
+                .list_prs(
+                    &ws_clone,
+                    &slug_clone,
+                    PrState::Open,
+                    20,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                 .await
                 .unwrap_or_default();
             let merged_prs = client_ref
-                .list_prs(&ws_clone, &slug_clone, PrState::Merged, 5, None, None, None)
+                .list_prs(
+                    &ws_clone,
+                    &slug_clone,
+                    PrState::Merged,
+                    5,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                 .await
                 .unwrap_or_default();
             (slug_clone, open_prs, merged_prs)

@@ -216,6 +216,123 @@ pub async fn create(
     fmt.print(&out, &human)
 }
 
+pub async fn delete(g: &GlobalArgs, slug: &str, yes: bool) -> Result<()> {
+    let ws = resolve_repo(g)?.workspace;
+    let client = client(g)?;
+
+    if !yes
+        && !crate::commands::confirm(&format!("Delete {ws}/{slug}? This is permanent. (y/n): "))?
+    {
+        return Ok(());
+    }
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message(format!("Deleting {ws}/{slug}..."));
+    client.delete_repo(&ws, slug).await?;
+    spinner.finish_and_clear();
+
+    let out = serde_json::json!({"deleted": true, "workspace": ws, "slug": slug});
+    let human = format!("Deleted {ws}/{slug}");
+    Formatter::from_json_flag(g.json).print(&out, &human)
+}
+
+pub async fn fork(
+    g: &GlobalArgs,
+    slug: Option<&str>,
+    name: Option<&str>,
+    workspace: Option<&str>,
+) -> Result<()> {
+    let repo = resolve_repo(g)?;
+    let slug = slug.unwrap_or(&repo.slug);
+    let client = client(g)?;
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message(format!("Forking {slug}..."));
+    let forked = client
+        .fork_repo(&repo.workspace, slug, name, workspace)
+        .await?;
+    spinner.finish_and_clear();
+
+    let out = serde_json::json!({
+        "workspace": forked.full_name.split('/').next().unwrap_or(""),
+        "slug": forked.slug,
+        "full_name": forked.full_name,
+        "url": forked.links.html.href,
+    });
+    let human = format!(
+        "Forked to {} ({})",
+        forked.full_name,
+        forked.links.html.href.as_deref().unwrap_or("-")
+    );
+    Formatter::from_json_flag(g.json).print(&out, &human)
+}
+
+pub async fn create_branch(g: &GlobalArgs, name: &str, from: Option<&str>) -> Result<()> {
+    let repo = resolve_repo(g)?;
+    let client = client(g)?;
+
+    let target_hash = match from {
+        Some(h) => h.to_string(),
+        None => crate::git::current_commit()?,
+    };
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message(format!("Creating branch {name}..."));
+    let branch = client
+        .create_branch(&repo.workspace, &repo.slug, name, &target_hash)
+        .await?;
+    spinner.finish_and_clear();
+
+    let out = serde_json::json!({
+        "name": branch.name,
+        "target": branch.target.as_ref().map(|t| &t.hash),
+    });
+    let human = format!(
+        "Created branch {} at {}",
+        branch.name,
+        branch
+            .target
+            .as_ref()
+            .map(|t| t.hash.as_str())
+            .unwrap_or("?")
+    );
+    Formatter::from_json_flag(g.json).print(&out, &human)
+}
+
+pub async fn create_tag(
+    g: &GlobalArgs,
+    name: &str,
+    target: Option<&str>,
+    message: Option<&str>,
+) -> Result<()> {
+    let repo = resolve_repo(g)?;
+    let client = client(g)?;
+
+    let target_hash = match target {
+        Some(h) => h.to_string(),
+        None => crate::git::current_commit()?,
+    };
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message(format!("Creating tag {name}..."));
+    let tag = client
+        .create_tag(&repo.workspace, &repo.slug, name, &target_hash, message)
+        .await?;
+    spinner.finish_and_clear();
+
+    let out = serde_json::json!({
+        "name": tag.name,
+        "target": tag.target.as_ref().map(|t| &t.hash),
+        "message": tag.message,
+    });
+    let human = format!(
+        "Created tag {} at {}",
+        tag.name,
+        tag.target.as_ref().map(|t| t.hash.as_str()).unwrap_or("?")
+    );
+    Formatter::from_json_flag(g.json).print(&out, &human)
+}
+
 fn first_line(s: &str) -> String {
     s.lines().next().unwrap_or("").to_string()
 }

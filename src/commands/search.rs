@@ -63,24 +63,31 @@ impl BitbucketClient {
         &self,
         workspace: &str,
         query: &str,
+        repo: Option<&str>,
         limit: u32,
     ) -> Result<SearchApiResponse> {
+        let q = match repo {
+            Some(r) => format!("{query} repo:{r}"),
+            None => query.to_string(),
+        };
         let path = format!(
             "/workspaces/{workspace}/search/code?search_query={}&pagelen={}",
-            crate::api::url_encode(query),
+            crate::api::url_encode(&q),
             limit.min(100),
         );
         self.send(reqwest::Method::GET, &path, None).await
     }
 }
 
-pub async fn run(g: &GlobalArgs, query: &str, limit: u32) -> Result<()> {
+pub async fn run(g: &GlobalArgs, query: &str, repo_filter: Option<&str>, limit: u32) -> Result<()> {
     let repo = resolve_repo(g)?;
     let client = client(g)?;
 
     let spinner = make_spinner(g.json);
     spinner.set_message(format!("Searching for '{query}'..."));
-    let api_resp = client.search_code(&repo.workspace, query, limit).await?;
+    let api_resp = client
+        .search_code(&repo.workspace, query, repo_filter, limit)
+        .await?;
     spinner.finish_and_clear();
 
     let mut results = Vec::new();

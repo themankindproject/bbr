@@ -174,6 +174,9 @@ pub enum Command {
     Search {
         /// Search query.
         query: String,
+        /// Limit search to a specific repository.
+        #[arg(long)]
+        repo: Option<String>,
         /// Max results.
         #[arg(long, default_value_t = 20)]
         limit: u32,
@@ -215,6 +218,14 @@ pub enum PrAction {
         source_branch: Option<String>,
         #[arg(long, help = "filter by reviewer display name")]
         reviewer: Option<String>,
+        #[arg(
+            long,
+            help = "sort field (created_on|updated_on|title)",
+            default_value = "updated_on"
+        )]
+        sort: String,
+        #[arg(long, help = "sort direction (asc|desc)", default_value = "desc")]
+        order: String,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -341,6 +352,9 @@ pub enum PrAction {
     /// Approve a pull request.
     Approve {
         id: u64,
+        /// Comment to post before approving.
+        #[arg(long)]
+        message: Option<String>,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -365,6 +379,20 @@ pub enum PrAction {
     /// Show the diff for a pull request.
     Diff {
         id: u64,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Show diffstat (file change summary) for a pull request.
+    Diffstat {
+        id: Option<u64>,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Download the unified patch for a pull request.
+    Patch {
+        id: Option<u64>,
+        #[arg(long, help = "write patch to file instead of stdout")]
+        output: Option<String>,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -593,6 +621,52 @@ pub enum RepoAction {
     Audit {
         /// Specific repo slug to audit (default: all repos in workspace).
         slug: Option<String>,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Delete a repository (permanent).
+    Delete {
+        /// Repository slug to delete.
+        slug: String,
+        /// Skip confirmation prompt.
+        #[arg(long, short)]
+        yes: bool,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Fork a repository.
+    Fork {
+        /// Repository to fork (default: current repo from git remote).
+        slug: Option<String>,
+        /// Fork name (default: original slug).
+        #[arg(long)]
+        name: Option<String>,
+        /// Target workspace for the fork.
+        #[arg(long = "target-workspace")]
+        target_workspace: Option<String>,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Create a remote branch.
+    CreateBranch {
+        /// Branch name to create.
+        name: String,
+        /// Commit hash or branch to create from (default: current HEAD).
+        #[arg(long)]
+        from: Option<String>,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Create a remote tag.
+    CreateTag {
+        /// Tag name to create.
+        name: String,
+        /// Commit hash to tag (default: current HEAD).
+        #[arg(long)]
+        target: Option<String>,
+        /// Tag message (for annotated tags).
+        #[arg(long)]
+        message: Option<String>,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -1123,7 +1197,12 @@ async fn dispatch(cli: Cli) -> Result<()> {
         },
         Some(Command::Deploy { action }) => dispatch_deploy(action).await,
         Some(Command::Issue { action }) => dispatch_issue(action).await,
-        Some(Command::Search { query, limit, g }) => commands::search::run(&g, &query, limit).await,
+        Some(Command::Search {
+            query,
+            repo,
+            limit,
+            g,
+        }) => commands::search::run(&g, &query, repo.as_deref(), limit).await,
         Some(Command::Schema { model, g }) => commands::schema::run(&g, model.as_deref()),
         Some(Command::Update { check, g }) => commands::update::run(&g, check).await,
     }
@@ -1162,6 +1241,8 @@ async fn dispatch_pr(g: &GlobalArgs, action: PrAction) -> Result<()> {
             author,
             source_branch,
             reviewer,
+            sort,
+            order,
             g,
         } => {
             commands::pr::list(
@@ -1171,6 +1252,8 @@ async fn dispatch_pr(g: &GlobalArgs, action: PrAction) -> Result<()> {
                 author.as_deref(),
                 source_branch.as_deref(),
                 reviewer.as_deref(),
+                &sort,
+                &order,
             )
             .await
         }
@@ -1247,11 +1330,15 @@ async fn dispatch_pr(g: &GlobalArgs, action: PrAction) -> Result<()> {
             )
             .await
         }
-        PrAction::Approve { id, g } => commands::pr::approve(&g, id).await,
+        PrAction::Approve { id, message, g } => {
+            commands::pr::approve(&g, id, message.as_deref()).await
+        }
         PrAction::Unapprove { id, g } => commands::pr::unapprove(&g, id).await,
         PrAction::Decline { id, g } => commands::pr::decline(&g, id).await,
         PrAction::Checkout { id, g } => commands::pr::checkout(&g, id).await,
         PrAction::Diff { id, g } => commands::pr::diff(&g, id).await,
+        PrAction::Diffstat { id, g } => commands::pr::diffstat(&g, id).await,
+        PrAction::Patch { id, output, g } => commands::pr::patch(&g, id, output.as_deref()).await,
         PrAction::Update {
             id,
             title,
@@ -1357,6 +1444,30 @@ async fn dispatch_repo(action: RepoAction) -> Result<()> {
             .await
         }
         RepoAction::Audit { slug, g } => commands::audit::run_audit(&g, slug.as_deref()).await,
+        RepoAction::Delete { slug, yes, g } => commands::repo::delete(&g, &slug, yes).await,
+        RepoAction::Fork {
+            slug,
+            name,
+            target_workspace,
+            g,
+        } => {
+            commands::repo::fork(
+                &g,
+                slug.as_deref(),
+                name.as_deref(),
+                target_workspace.as_deref(),
+            )
+            .await
+        }
+        RepoAction::CreateBranch { name, from, g } => {
+            commands::repo::create_branch(&g, &name, from.as_deref()).await
+        }
+        RepoAction::CreateTag {
+            name,
+            target,
+            message,
+            g,
+        } => commands::repo::create_tag(&g, &name, target.as_deref(), message.as_deref()).await,
     }
 }
 
