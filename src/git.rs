@@ -2,8 +2,15 @@
 //! by shelling out to `git` (kept lean to avoid a libgit2 dependency).
 
 use std::process::Command;
+use std::time::Duration;
 
 use crate::error::{BitbucketError, Result};
+
+/// Default timeout for git read operations (30 seconds).
+const GIT_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Default timeout for git write operations (120 seconds).
+const GIT_WRITE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// `{workspace}/{repo-slug}` parsed from the `bitbucket.org` remote URL.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,17 +26,38 @@ pub struct Head {
     pub commit: String,
 }
 
-/// Run a `git` command in `cwd`, returning trimmed stdout.
+/// Run a `git` command with a timeout, returning trimmed stdout.
 fn git(args: &[&str]) -> Result<String> {
-    let out = Command::new("git")
-        .args(args)
-        .output()
-        .map_err(|e| BitbucketError::Git(format!("failed to run git: {e}")))?;
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        return Err(BitbucketError::Git(stderr));
+    git_with_timeout(args, GIT_READ_TIMEOUT)
+}
+
+/// Run a `git` command with a specific timeout, returning trimmed stdout.
+fn git_with_timeout(args: &[&str], timeout: Duration) -> Result<String> {
+    let args_owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let out = Command::new("git").args(&args_owned).output();
+
+        let _ = tx.send(out);
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(out)) => {
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                return Err(BitbucketError::Git(stderr));
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        }
+        Ok(Err(e)) => Err(BitbucketError::Git(format!("failed to run git: {e}"))),
+        Err(_) => Err(BitbucketError::Git(format!(
+            "git command timed out after {}s: git {}",
+            timeout.as_secs(),
+            args.join(" ")
+        ))),
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 /// Current branch name. Errors with a friendly message if HEAD is detached.
@@ -119,7 +147,7 @@ pub fn detect_repo() -> Result<RepoIdentity> {
 
 /// Fetch a branch from origin.
 pub fn fetch_branch(branch: &str) -> Result<()> {
-    git(&["fetch", "origin", branch])?;
+    git_with_timeout(&["fetch", "origin", branch], GIT_WRITE_TIMEOUT)?;
     Ok(())
 }
 
@@ -164,13 +192,16 @@ pub fn is_working_tree_clean() -> Result<bool> {
 
 /// Git push a branch to origin.
 pub fn push_branch(branch: &str) -> Result<()> {
-    git(&["push", "origin", branch])?;
+    git_with_timeout(&["push", "origin", branch], GIT_WRITE_TIMEOUT)?;
     Ok(())
 }
 
 /// Git push --force-with-lease to origin.
 pub fn push_force_with_lease(branch: &str) -> Result<()> {
-    git(&["push", "--force-with-lease", "origin", branch])?;
+    git_with_timeout(
+        &["push", "--force-with-lease", "origin", branch],
+        GIT_WRITE_TIMEOUT,
+    )?;
     Ok(())
 }
 
@@ -182,7 +213,7 @@ pub fn delete_branch_local(branch: &str) -> Result<()> {
 
 /// Delete a remote branch on origin.
 pub fn delete_branch_remote(branch: &str) -> Result<()> {
-    git(&["push", "origin", "--delete", branch])?;
+    git_with_timeout(&["push", "origin", "--delete", branch], GIT_WRITE_TIMEOUT)?;
     Ok(())
 }
 
@@ -190,7 +221,7 @@ pub fn delete_branch_remote(branch: &str) -> Result<()> {
 pub fn rebase_branch(branch: &str, onto: &str) -> Result<()> {
     // switch to the target branch first, then rebase onto the parent
     git(&["switch", branch])?;
-    git(&["rebase", onto])?;
+    git_with_timeout(&["rebase", onto], GIT_WRITE_TIMEOUT)?;
     Ok(())
 }
 
