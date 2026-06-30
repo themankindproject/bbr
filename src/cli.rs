@@ -31,6 +31,10 @@ pub struct GlobalArgs {
     #[arg(long, global = true, env = "BB_WORKSPACE")]
     pub workspace: Option<String>,
 
+    /// Override the repo slug inferred from git remote.
+    #[arg(long = "slug", global = true, env = "BB_SLUG")]
+    pub repo_slug: Option<String>,
+
     /// Disable output paging (no less).
     #[arg(long, global = true, action = ArgAction::SetTrue)]
     pub no_pager: bool,
@@ -614,6 +618,9 @@ pub enum RepoAction {
         /// Primary language.
         #[arg(long)]
         language: Option<String>,
+        /// Enable the issue tracker.
+        #[arg(long)]
+        enable_issues: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -923,6 +930,16 @@ pub enum DeployAction {
 pub enum DeployEnvAction {
     /// List environments.
     List {
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Create a new environment.
+    Create {
+        /// Environment name.
+        name: String,
+        /// Environment type (test|staging|production).
+        #[arg(long, default_value = "test")]
+        env_type: String,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -1432,6 +1449,7 @@ async fn dispatch_repo(action: RepoAction) -> Result<()> {
             private,
             description,
             language,
+            enable_issues,
             g,
         } => {
             commands::repo::create(
@@ -1440,6 +1458,7 @@ async fn dispatch_repo(action: RepoAction) -> Result<()> {
                 private,
                 description.as_deref(),
                 language.as_deref(),
+                enable_issues,
             )
             .await
         }
@@ -1559,6 +1578,9 @@ async fn dispatch_deploy(action: DeployAction) -> Result<()> {
         DeployAction::List { limit, g } => commands::deploy::list_deployments(&g, limit).await,
         DeployAction::Env { action } => match action {
             DeployEnvAction::List { g } => commands::deploy::list_environments(&g).await,
+            DeployEnvAction::Create { name, env_type, g } => {
+                commands::deploy::create_environment(&g, &name, &env_type).await
+            }
             DeployEnvAction::Vars { action } => match action {
                 DeployEnvVarsAction::List { env_uuid, g } => {
                     commands::deploy::list_env_vars(&g, &env_uuid).await

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`bbr deploy env create`** — create deployment environments via CLI.
+- **`--slug` global flag** — override repo slug inferred from git remote (env: `BB_SLUG`).
+  Enables `bbr status --workspace ws --slug repo` without a matching local git repo.
+- **`--enable-issues` flag on `bbr repo create`** — enable issue tracker on repository creation.
+
+### Fixed
+
+- **`bbr batch merge-approved` failed with "Invalid pagelen"** — the `fields=` query parameter
+  conflicted with `pagelen=100` on some Bitbucket account types. Now falls back to no `fields=`
+  on 400 error.
+
 ## [0.1.2] - 2026-06-30
 
 ### Added

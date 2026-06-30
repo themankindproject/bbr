@@ -108,6 +108,22 @@ impl BitbucketClient {
         Ok(page.values)
     }
 
+    pub async fn create_environment(
+        &self,
+        workspace: &str,
+        slug: &str,
+        name: &str,
+        env_type: &str,
+    ) -> Result<DeploymentEnvironment> {
+        let path = format!("/repositories/{workspace}/{slug}/environments");
+        let body = serde_json::json!({
+            "name": name,
+            "environment_type": {"name": env_type},
+        });
+        let raw = serde_json::to_string(&body)?;
+        self.send(reqwest::Method::POST, &path, Some(&raw)).await
+    }
+
     pub async fn list_env_variables(
         &self,
         workspace: &str,

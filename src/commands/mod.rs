@@ -45,16 +45,29 @@ pub fn client(g: &GlobalArgs) -> Result<BitbucketClient> {
 static CACHED_REPO: OnceLock<RepoIdentity> = OnceLock::new();
 static CACHED_HEAD: OnceLock<Head> = OnceLock::new();
 
-/// Detect the current repo identity respecting `--workspace` override.
+/// Detect the current repo identity respecting `--workspace` and `--slug` overrides.
 pub fn resolve_repo(g: &GlobalArgs) -> Result<RepoIdentity> {
-    if let Some(ws) = &g.workspace {
-        let slug = current_repo()?.slug;
-        return Ok(RepoIdentity {
+    match (&g.workspace, &g.repo_slug) {
+        (Some(ws), Some(slug)) => Ok(RepoIdentity {
             workspace: ws.clone(),
-            slug,
-        });
+            slug: slug.clone(),
+        }),
+        (Some(ws), None) => {
+            let slug = current_repo()?.slug;
+            Ok(RepoIdentity {
+                workspace: ws.clone(),
+                slug,
+            })
+        }
+        (None, Some(slug)) => {
+            let ws = current_repo()?.workspace;
+            Ok(RepoIdentity {
+                workspace: ws,
+                slug: slug.clone(),
+            })
+        }
+        (None, None) => current_repo(),
     }
-    current_repo()
 }
 
 /// Detect the current repo identity from git (cached per process).

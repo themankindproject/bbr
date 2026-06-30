@@ -327,15 +327,8 @@ impl BitbucketClient {
         let pagelen = limit.min(100);
         let sort_field = sort.unwrap_or("updated_on");
         let sort_prefix = if order == Some("asc") { "" } else { "-" };
-        let mut path = format!(
-            "/repositories/{workspace}/{slug}/pullrequests?\
-             fields=values.id,values.state,values.title,\
-             values.source.branch.name,values.destination.branch.name,\
-             values.author.display_name,values.links.html.href,\
-             values.comment_count,values.task_count,values.close_source_branch,\
-             values.updated_on&\
-             pagelen={pagelen}&sort={sort_prefix}{sort_field}"
-        );
+
+        // Build query params
         let mut q_parts: Vec<String> = Vec::new();
         if let Some(s) = state.as_query() {
             q_parts.push(format!("state%3D%22{s}%22"));
@@ -358,16 +351,67 @@ impl BitbucketClient {
                 super::url_encode(r)
             ));
         }
-        if !q_parts.is_empty() {
-            path.push_str(&format!("&q={}", q_parts.join("+AND+")));
-        }
 
-        if limit > 100 {
-            self.fetch_all_pages(&path, limit as usize).await
+        let q_param = if q_parts.is_empty() {
+            String::new()
         } else {
-            let page: super::Paginated<PullRequest> =
-                self.send(reqwest::Method::GET, &path, None).await?;
-            Ok(page.values)
+            format!("&q={}", q_parts.join("+AND+"))
+        };
+
+        // Try with fields= first for smaller payloads, fallback without if it fails
+        let fields = "values.id,values.state,values.title,\
+             values.source.branch.name,values.destination.branch.name,\
+             values.author.display_name,values.links.html.href,\
+             values.comment_count,values.task_count,values.close_source_branch,\
+             values.updated_on";
+
+        let path_with_fields = format!(
+            "/repositories/{workspace}/{slug}/pullrequests?\
+             fields={fields}&pagelen={pagelen}&sort={sort_prefix}{sort_field}{q_param}"
+        );
+
+        let result: Result<super::Paginated<PullRequest>> = self
+            .send(reqwest::Method::GET, &path_with_fields, None)
+            .await;
+
+        match result {
+            Ok(page) => {
+                if limit > 100 {
+                    let mut all = page.values;
+                    let mut next = page.next;
+                    while all.len() < limit as usize {
+                        if let Some(ref url) = next {
+                            let next_path =
+                                url.strip_prefix(&self.base_url).unwrap_or(url).to_string();
+                            let next_page: super::Paginated<PullRequest> =
+                                self.send(reqwest::Method::GET, &next_path, None).await?;
+                            let remaining = limit as usize - all.len();
+                            all.extend(next_page.values.into_iter().take(remaining));
+                            next = next_page.next;
+                        } else {
+                            break;
+                        }
+                    }
+                    Ok(all)
+                } else {
+                    Ok(page.values)
+                }
+            }
+            Err(_) => {
+                // Fallback: retry without fields= parameter
+                let path_no_fields = format!(
+                    "/repositories/{workspace}/{slug}/pullrequests?\
+                     pagelen={pagelen}&sort={sort_prefix}{sort_field}{q_param}"
+                );
+                if limit > 100 {
+                    self.fetch_all_pages(&path_no_fields, limit as usize).await
+                } else {
+                    let page: super::Paginated<PullRequest> = self
+                        .send(reqwest::Method::GET, &path_no_fields, None)
+                        .await?;
+                    Ok(page.values)
+                }
+            }
         }
     }
 

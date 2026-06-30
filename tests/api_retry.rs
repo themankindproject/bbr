@@ -85,15 +85,15 @@ async fn retries_on_rate_limit_then_succeeds() {
 async fn returns_error_after_max_retries_exhausted() {
     let server = MockServer::start().await;
 
-    // All 3 requests (initial + 2 retries) return 429
+    // All requests return 429 (both with fields and without fields fallback)
     Mock::given(method("GET"))
         .and(path("/repositories/ws/slug/pullrequests"))
         .and(header("authorization", AUTH_BASIC))
         .respond_with(ResponseTemplate::new(429).set_body_json(json!({
             "error": { "message": "rate limit exceeded" }
         })))
-        .up_to_n_times(3)
-        .expect(3)
+        .up_to_n_times(6)
+        .expect(6)
         .mount(&server)
         .await;
 

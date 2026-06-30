@@ -163,11 +163,13 @@ impl BitbucketClient {
         is_private: bool,
         description: Option<&str>,
         language: Option<&str>,
+        has_issues: bool,
     ) -> Result<Repository> {
         let path = format!("/repositories/{workspace}/{slug}");
         let mut body = json!({
             "scm": "git",
             "is_private": is_private,
+            "has_issues": has_issues,
         });
         if let Some(d) = description {
             body["description"] = json!(d);

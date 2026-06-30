@@ -122,6 +122,31 @@ pub async fn list_environments(g: &GlobalArgs) -> Result<()> {
     fmt.print(&out, &human)
 }
 
+pub async fn create_environment(g: &GlobalArgs, name: &str, env_type: &str) -> Result<()> {
+    let repo = resolve_repo(g)?;
+    let api = client(g)?;
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message(format!("Creating environment '{name}'..."));
+    let env = api
+        .create_environment(&repo.workspace, &repo.slug, name, env_type)
+        .await?;
+    spinner.finish_and_clear();
+
+    let out = EnvironmentOut {
+        uuid: env.uuid,
+        name: env.name,
+        env_type: env.environment_type.name,
+        rank: env.rank,
+    };
+    let fmt = Formatter::from_json_flag(g.json);
+    let human = format!(
+        "Created environment '{}' (type: {}, rank: {})",
+        out.name, out.env_type, out.rank
+    );
+    fmt.print(&out, &human)
+}
+
 pub async fn list_env_vars(g: &GlobalArgs, env_uuid: &str) -> Result<()> {
     let repo = resolve_repo(g)?;
     let api = client(g)?;

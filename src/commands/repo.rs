@@ -181,6 +181,7 @@ pub async fn create(
     is_private: bool,
     description: Option<&str>,
     language: Option<&str>,
+    enable_issues: bool,
 ) -> Result<()> {
     let ws = resolve_repo(g)?.workspace;
     let client = client(g)?;
@@ -188,7 +189,7 @@ pub async fn create(
     let spinner = make_spinner(g.json);
     spinner.set_message("Creating repository...");
     let repo = client
-        .create_repo(&ws, slug, is_private, description, language)
+        .create_repo(&ws, slug, is_private, description, language, enable_issues)
         .await?;
     spinner.finish_and_clear();
 
