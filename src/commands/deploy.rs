@@ -264,7 +264,9 @@ pub async fn trigger_deployment(g: &GlobalArgs, env_uuid: &str, commit: &str) ->
     let api = client(g)?;
 
     let spinner = make_spinner(g.json);
-    spinner.set_message(format!("Triggering deployment to environment {env_uuid}..."));
+    spinner.set_message(format!(
+        "Triggering deployment to environment {env_uuid}..."
+    ));
     let deployment = api
         .trigger_deployment(&repo.workspace, &repo.slug, env_uuid, commit)
         .await?;

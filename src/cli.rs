@@ -594,10 +594,16 @@ pub enum CiAction {
         #[arg(long, help = "branch name (default: current branch)")]
         branch: Option<String>,
         /// Set a pipeline variable (repeatable). Format: KEY=VALUE.
-        #[arg(long = "var", help = "set a pipeline variable (repeatable, format: KEY=VALUE)")]
+        #[arg(
+            long = "var",
+            help = "set a pipeline variable (repeatable, format: KEY=VALUE)"
+        )]
         vars: Vec<String>,
         /// Mark a variable as secured/encrypted (repeatable).
-        #[arg(long = "secured", help = "mark variable as secured/encrypted (repeatable)")]
+        #[arg(
+            long = "secured",
+            help = "mark variable as secured/encrypted (repeatable)"
+        )]
         secured: Vec<String>,
         #[command(flatten)]
         g: GlobalArgs,
@@ -1474,9 +1480,12 @@ async fn dispatch_ci(action: CiAction) -> Result<()> {
             commands::ci::list(&g, branch.as_deref(), limit).await
         }
         CiAction::Rerun { branch, g } => commands::ci::rerun(&g, branch.as_deref()).await,
-        CiAction::Trigger { branch, vars, secured, g } => {
-            commands::ci::trigger(&g, branch.as_deref(), &vars, &secured).await
-        }
+        CiAction::Trigger {
+            branch,
+            vars,
+            secured,
+            g,
+        } => commands::ci::trigger(&g, branch.as_deref(), &vars, &secured).await,
         CiAction::Stop { uuid, branch, g } => {
             commands::ci::stop(&g, uuid.as_deref(), branch.as_deref()).await
         }
@@ -1642,9 +1651,11 @@ async fn dispatch_webhook(action: WebhookAction) -> Result<()> {
 async fn dispatch_deploy(action: DeployAction) -> Result<()> {
     match action {
         DeployAction::List { limit, g } => commands::deploy::list_deployments(&g, limit).await,
-        DeployAction::Trigger { env_uuid, commit, g } => {
-            commands::deploy::trigger_deployment(&g, &env_uuid, &commit).await
-        }
+        DeployAction::Trigger {
+            env_uuid,
+            commit,
+            g,
+        } => commands::deploy::trigger_deployment(&g, &env_uuid, &commit).await,
         DeployAction::Env { action } => match action {
             DeployEnvAction::List { g } => commands::deploy::list_environments(&g).await,
             DeployEnvAction::Create { name, env_type, g } => {

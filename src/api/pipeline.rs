@@ -321,7 +321,8 @@ impl BitbucketClient {
         slug: &str,
         branch: &str,
     ) -> Result<Pipeline> {
-        self.trigger_pipeline_with_variables(workspace, slug, branch, None).await
+        self.trigger_pipeline_with_variables(workspace, slug, branch, None)
+            .await
     }
 
     /// `POST /repositories/{ws}/{slug}/pipelines/` — trigger a new pipeline with optional variables.

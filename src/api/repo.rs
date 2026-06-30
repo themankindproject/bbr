@@ -302,7 +302,8 @@ impl BitbucketClient {
         workspace: &str,
         slug: &str,
     ) -> Result<Vec<PermissionEntry>> {
-        let path = format!("/repositories/{workspace}/{slug}/permissions-config/groups?pagelen=100");
+        let path =
+            format!("/repositories/{workspace}/{slug}/permissions-config/groups?pagelen=100");
         let page: super::Paginated<PermissionEntry> =
             self.send(reqwest::Method::GET, &path, None).await?;
         Ok(page.values)

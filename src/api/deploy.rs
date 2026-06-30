@@ -186,7 +186,9 @@ impl BitbucketClient {
         env_uuid: &str,
         commit: &str,
     ) -> Result<Deployment> {
-        let path = format!("/repositories/{workspace}/{slug}/deployments_config/environments/{env_uuid}/changes");
+        let path = format!(
+            "/repositories/{workspace}/{slug}/deployments_config/environments/{env_uuid}/changes"
+        );
         let body = serde_json::json!({
             "commit": {
                 "hash": commit

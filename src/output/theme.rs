@@ -139,12 +139,20 @@ impl Theme {
 
     /// Standardized checkmark for success indicators.
     pub fn checkmark(&self) -> &'static str {
-        if self.unicode { "✓" } else { "OK" }
+        if self.unicode {
+            "✓"
+        } else {
+            "OK"
+        }
     }
 
     /// Standardized cross for failure indicators.
     pub fn cross(&self) -> &'static str {
-        if self.unicode { "✗" } else { "X" }
+        if self.unicode {
+            "✗"
+        } else {
+            "X"
+        }
     }
 
     /// Status glyph that is safe in plain (no-color) output.

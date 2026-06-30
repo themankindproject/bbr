@@ -593,7 +593,12 @@ pub async fn rerun(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
     }
 }
 
-pub async fn trigger(g: &GlobalArgs, branch: Option<&str>, vars: &[String], secured: &[String]) -> Result<()> {
+pub async fn trigger(
+    g: &GlobalArgs,
+    branch: Option<&str>,
+    vars: &[String],
+    secured: &[String],
+) -> Result<()> {
     let repo = resolve_repo(g)?;
     let branch = match branch {
         Some(b) => b.to_string(),
@@ -632,7 +637,12 @@ pub async fn trigger(g: &GlobalArgs, branch: Option<&str>, vars: &[String], secu
     let spinner = make_spinner(g.json);
     spinner.set_message(format!("Triggering pipeline for '{branch}'..."));
     let pipeline = client
-        .trigger_pipeline_with_variables(&repo.workspace, &repo.slug, &branch, variables_payload.as_deref())
+        .trigger_pipeline_with_variables(
+            &repo.workspace,
+            &repo.slug,
+            &branch,
+            variables_payload.as_deref(),
+        )
         .await?;
     spinner.finish_and_clear();
 

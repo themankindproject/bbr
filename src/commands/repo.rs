@@ -357,16 +357,29 @@ pub async fn permissions(g: &GlobalArgs) -> Result<()> {
 
     let theme = crate::output::theme::Theme::current();
     let mut human = String::new();
-    human.push_str(&format!("{} {}/{}\n", theme.bullet(), repo.workspace, repo.slug));
+    human.push_str(&format!(
+        "{} {}/{}\n",
+        theme.bullet(),
+        repo.workspace,
+        repo.slug
+    ));
     human.push_str(&format!("{}\n", theme.separator()));
 
     let mut table = Table::new().headers(["Type", "Name", "Permission"]);
     for u in &users {
-        let name = u.display_name.as_deref().or_else(|| u.user.as_ref().map(|u| u.display_name.as_str())).unwrap_or("unknown");
+        let name = u
+            .display_name
+            .as_deref()
+            .or_else(|| u.user.as_ref().map(|u| u.display_name.as_str()))
+            .unwrap_or("unknown");
         table = table.add_row(["User".into(), name.to_string(), u.permission.clone()]);
     }
     for g in &groups {
-        let name = g.display_name.as_deref().or_else(|| g.group.as_ref().and_then(|grp| grp.display_name.as_deref())).unwrap_or("unknown");
+        let name = g
+            .display_name
+            .as_deref()
+            .or_else(|| g.group.as_ref().and_then(|grp| grp.display_name.as_deref()))
+            .unwrap_or("unknown");
         table = table.add_row(["Group".into(), name.to_string(), g.permission.clone()]);
     }
     human.push_str(&table.render());

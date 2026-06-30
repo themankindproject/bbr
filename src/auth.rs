@@ -97,7 +97,11 @@ impl Credentials {
     }
 
     /// Build a `reqwest` client pre-configured with Basic auth and a specific timeout.
-    pub fn into_client_with_timeout(self, base_url: &str, timeout_secs: u64) -> Result<crate::api::BitbucketClient> {
+    pub fn into_client_with_timeout(
+        self,
+        base_url: &str,
+        timeout_secs: u64,
+    ) -> Result<crate::api::BitbucketClient> {
         crate::api::BitbucketClient::with_timeout(base_url, self, timeout_secs)
     }
 }
