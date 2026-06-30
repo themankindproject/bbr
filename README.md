@@ -7,6 +7,24 @@
 
 A fast, single-binary Bitbucket Cloud CLI. Agent-first (`--json` everywhere, zero-config env auth) with pretty human output.
 
+## Why bbr Exists
+
+Bitbucket Cloud had no good CLI. Developers were stuck between:
+
+- **`curl`** — verbose, error-prone, no auth management, no pretty output
+- **Web UI** — context-switching away from the terminal, not scriptable
+- **GitHub's `gh`** — excellent tool, but doesn't work with Bitbucket
+
+The breaking point: **coding agents** (like Claude, Cursor, Copilot) needed a reliable, scriptable way to interact with Bitbucket — create PRs, check CI status, merge approved PRs — without human intervention. `curl` in a loop doesn't cut it.
+
+`bbr` was built to solve three problems:
+
+1. **Agent-first** — `--json` on every command, stable schemas, exit codes for CI, zero-config env auth. An agent can run `bbr status --json` and parse the result without guessing.
+
+2. **Developer UX** — `bbr` with no arguments shows PR + CI + commit statuses + suggested next commands. No more `bbr ci status`, `bbr pr list`, `bbr commit status` separately.
+
+3. **Power features** — stacked PRs, pipeline comparison, batch operations, SOC2 audit, cross-repo dashboard. Things that require 20 clicks in the web UI become one command.
+
 ## Install
 
 ```bash
