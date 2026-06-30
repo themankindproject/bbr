@@ -196,6 +196,9 @@ impl BitbucketClient {
         priority: Option<&str>,
         assignee: Option<&str>,
     ) -> Result<Issue> {
+        // NOTE: GET-then-PUT pattern has an inherent race condition.
+        // Bitbucket API does not support ETags or PATCH for issues.
+        tracing::debug!("updating issue {id} (GET-then-PUT, no ETag support)");
         let current = self.get_issue(workspace, slug, id).await?;
         let path = format!("/repositories/{workspace}/{slug}/issues/{id}");
         let body = serde_json::json!({

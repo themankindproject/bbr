@@ -69,7 +69,10 @@ impl BitbucketClient {
         events: Option<&[String]>,
         active: Option<bool>,
     ) -> Result<Webhook> {
-        // Fetch current, merge overrides, PUT back.
+        // NOTE: GET-then-PUT pattern has an inherent race condition.
+        // Bitbucket API does not support ETags or PATCH for webhooks.
+        // Concurrent modifications between GET and PUT will be lost.
+        tracing::debug!("updating webhook {uid} (GET-then-PUT, no ETag support)");
         let current = self.get_webhook(workspace, slug, uid).await?;
         let path = format!("/repositories/{workspace}/{slug}/hooks/{uid}");
         let body = serde_json::json!({
