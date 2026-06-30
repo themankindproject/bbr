@@ -1,10 +1,24 @@
-//! `bbr issue` — repository issue tracker.
+//! `bbr issue` — repository issue tracker (deprecated).
+//!
+//! Bitbucket's issue tracker is not available on workspaces created after ~2024.
+//! Consider using Jira for issue tracking. These commands will work on older
+//! workspaces that have the issue tracker enabled.
+
 use crate::cli::GlobalArgs;
 use crate::commands::{client, make_spinner, resolve_repo, truncate};
 use crate::error::Result;
 use crate::output::table::Table;
 use crate::output::Formatter;
 use serde::Serialize;
+
+fn warn_deprecated() {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| {
+        eprintln!("warning: bbr issue is deprecated — Bitbucket's issue tracker is not available on newer workspaces.");
+        eprintln!("         Consider using Jira for issue tracking. See: https://support.atlassian.com/bitbucket-cloud/docs/what-is-the-issue-tracker/");
+        eprintln!();
+    });
+}
 
 #[derive(Debug, Serialize)]
 pub struct IssueOut {
@@ -75,6 +89,7 @@ pub async fn list(
     assignee: Option<&str>,
     query: Option<&str>,
 ) -> Result<()> {
+    warn_deprecated();
     let repo = resolve_repo(g)?;
     let client = client(g)?;
     let spinner = make_spinner(g.json);
@@ -119,6 +134,7 @@ pub async fn list(
 }
 
 pub async fn view(g: &GlobalArgs, id: u64, show_comments: bool) -> Result<()> {
+    warn_deprecated();
     let repo = resolve_repo(g)?;
     let client = client(g)?;
     let spinner = make_spinner(g.json);
@@ -238,6 +254,7 @@ pub async fn create(
     priority: &str,
     assignee: Option<&str>,
 ) -> Result<()> {
+    warn_deprecated();
     let repo = resolve_repo(g)?;
     let client = client(g)?;
     let spinner = make_spinner(g.json);
@@ -274,6 +291,7 @@ pub async fn update(
     priority: Option<&str>,
     assignee: Option<&str>,
 ) -> Result<()> {
+    warn_deprecated();
     let repo = resolve_repo(g)?;
     let client = client(g)?;
     let spinner = make_spinner(g.json);
@@ -299,6 +317,7 @@ pub async fn update(
 }
 
 pub async fn comment(g: &GlobalArgs, id: u64, body: &str) -> Result<()> {
+    warn_deprecated();
     let repo = resolve_repo(g)?;
     let client = client(g)?;
     let spinner = make_spinner(g.json);
@@ -323,6 +342,7 @@ pub async fn comment(g: &GlobalArgs, id: u64, body: &str) -> Result<()> {
 }
 
 pub async fn list_comments(g: &GlobalArgs, id: u64, limit: u32) -> Result<()> {
+    warn_deprecated();
     let repo = resolve_repo(g)?;
     let client = client(g)?;
     let spinner = make_spinner(g.json);

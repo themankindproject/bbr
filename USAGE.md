@@ -557,6 +557,22 @@ Output:
 
 ---
 
+### `bbr issue`
+
+> **Deprecated:** Bitbucket's issue tracker is not available on workspaces created after ~2024. Consider using [Jira](https://www.atlassian.com/software/jira) for issue tracking. These commands will work on older workspaces that have the issue tracker enabled.
+
+```bash
+bbr issue list                          # list issues (--status, --kind, --priority, --assignee, --query)
+bbr issue view 1                        # view issue details
+bbr issue view 1 --comments             # view with comments
+bbr issue create --title "Bug" --body "Description" --kind bug --priority major
+bbr issue update 1 --status resolved    # update issue
+bbr issue comment 1 --body "Working on it"
+bbr issue comments 1                    # list comments
+```
+
+---
+
 ### `bbr repo`
 
 Repository metadata.

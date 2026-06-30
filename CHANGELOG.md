@@ -18,7 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`bbr batch merge-approved` failed with "Invalid pagelen"** — the `fields=` query parameter
   conflicted with `pagelen=100` on some Bitbucket account types. Now falls back to no `fields=`
-  on 400 error.
+  and `pagelen=50` on 400 error.
+- **`bbr batch merge-approved` missed self-approvals** — only checked `role=REVIEWER`, but
+  self-approvals have `role=PARTICIPANT`. Now checks `approved=true` regardless of role.
+
+### Deprecated
+
+- **`bbr issue`** — Bitbucket's issue tracker is not available on workspaces created after ~2024.
+  All `bbr issue` commands now print a deprecation warning. Consider using Jira.
 
 ## [0.1.2] - 2026-06-30
 
