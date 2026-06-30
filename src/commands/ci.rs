@@ -282,7 +282,10 @@ pub async fn watch(
     fmt.print(&out, &human)?;
 
     if !success {
-        return Err(BitbucketError::PipelineFailed);
+        return Err(BitbucketError::PipelineFailed {
+            build_number: Some(current.build_number),
+            branch: Some(branch),
+        });
     }
     Ok(())
 }

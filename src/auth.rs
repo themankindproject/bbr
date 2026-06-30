@@ -17,11 +17,21 @@ pub const ENV_USERNAME: &str = "BITBUCKET_USERNAME";
 pub const ENV_TOKEN: &str = "BITBUCKET_TOKEN";
 
 /// Resolved credentials ready to attach to HTTP requests.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Credentials {
     pub username: String,
     pub secret: String,
     pub kind: CredentialKind,
+}
+
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credentials")
+            .field("username", &self.username)
+            .field("secret", &"[REDACTED]")
+            .field("kind", &self.kind)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,6 +56,13 @@ fn from_env() -> Option<Credentials> {
     let username = std::env::var(ENV_USERNAME).ok()?;
     let token = std::env::var(ENV_TOKEN).ok()?;
     if token.is_empty() {
+        return None;
+    }
+    if username.is_empty() {
+        tracing::warn!(
+            "{ENV_USERNAME} is set but empty; ignoring environment credentials. \
+             Set both {ENV_USERNAME} and {ENV_TOKEN} for env-based auth."
+        );
         return None;
     }
     Some(Credentials {

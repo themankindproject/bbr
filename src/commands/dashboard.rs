@@ -144,8 +144,8 @@ pub async fn run_dashboard(
 
     for (slug, open, merged) in results {
         for pr in open {
-            let approvals = pr.participants.iter().filter(|p| p.approved).count()
-                + pr.reviewers.iter().filter(|r| r.approved).count();
+            // Count approvals from participants only (reviewers are a subset)
+            let approvals = pr.participants.iter().filter(|p| p.approved).count();
 
             let matches_me = |p: &Participant| {
                 if let (Some(u1), Some(u2)) = (&p.uuid, &user.uuid) {
@@ -295,9 +295,8 @@ fn render_dashboard(out: &DashboardOut) -> String {
                 theme.error(&act.event)
             };
             s.push_str(&format!(
-                "  {}  #{:<3}  {:<14}  {}\n",
+                "  {}  {:<14}  {}\n",
                 event_colored,
-                "", // space alignment
                 truncate(&act.repo, 14),
                 act.description
             ));

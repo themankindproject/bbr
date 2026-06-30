@@ -124,6 +124,21 @@ fn build_issue_query(
     parts.join(" AND ")
 }
 
+/// Percent-encode a string for use in URL query parameters.
+fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for byte in s.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char);
+            }
+            b' ' => out.push_str("%20"),
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
 impl BitbucketClient {
     #[allow(clippy::too_many_arguments)]
     pub async fn list_issues(
@@ -145,7 +160,7 @@ impl BitbucketClient {
             format!("/repositories/{workspace}/{slug}/issues?pagelen={pagelen}&sort=-updated_on")
         } else {
             // Basic URL-encoding for double quotes and spaces
-            let encoded_q = q.replace(' ', "%20").replace('"', "%22");
+            let encoded_q = url_encode(&q);
             format!(
                 "/repositories/{workspace}/{slug}/issues?pagelen={pagelen}&sort=-updated_on&q={encoded_q}"
             )
@@ -198,7 +213,6 @@ impl BitbucketClient {
     ) -> Result<Issue> {
         let current = self.get_issue(workspace, slug, id).await?;
         let path = format!("/repositories/{workspace}/{slug}/issues/{id}");
-        let empty = String::new();
         let body = serde_json::json!({
             "title": title.unwrap_or(&current.title),
             "content": {
@@ -210,8 +224,6 @@ impl BitbucketClient {
             "kind": kind.unwrap_or(&current.kind),
             "priority": priority.unwrap_or(&current.priority),
         });
-        // suppress unused-variable warning for `empty`
-        let _ = &empty;
         if let Some(a) = assignee {
             let mut b = body;
             b["assignee"] = serde_json::json!({"nickname": a});

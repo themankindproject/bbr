@@ -55,7 +55,10 @@ pub enum BitbucketError {
     Io(#[from] std::io::Error),
 
     #[error("pipeline failed")]
-    PipelineFailed,
+    PipelineFailed {
+        build_number: Option<u64>,
+        branch: Option<String>,
+    },
 
     #[error("{0}")]
     Other(String),
@@ -68,7 +71,7 @@ impl BitbucketError {
             BitbucketError::NoCredentials | BitbucketError::AuthFailed(_) => ExitCode::Auth,
             BitbucketError::NotFound(_) => ExitCode::NotFound,
             BitbucketError::RateLimit(_) => ExitCode::RateLimit,
-            BitbucketError::PipelineFailed => ExitCode::PipelineFailed,
+            BitbucketError::PipelineFailed { .. } => ExitCode::PipelineFailed,
             _ => ExitCode::Generic,
         }
     }
@@ -93,6 +96,23 @@ pub fn report(e: &BitbucketError) -> std::process::ExitCode {
         }
         BitbucketError::RateLimit(_) => {
             eprintln!("  hint: wait a few minutes or lower your request frequency.");
+        }
+        BitbucketError::Http(e) if e.is_timeout() => {
+            eprintln!(
+                "  hint: the request timed out (default: 30s). Try again or check your network."
+            );
+        }
+        BitbucketError::PipelineFailed {
+            build_number,
+            branch,
+        } => {
+            if let Some(bn) = build_number {
+                eprintln!("  hint: pipeline build #{bn} failed.");
+            }
+            if let Some(br) = branch {
+                eprintln!("  hint: branch: {br}");
+            }
+            eprintln!("  hint: run `bbr ci logs` to see the failure output.");
         }
         _ => {}
     }
@@ -138,7 +158,10 @@ mod tests {
 
     #[test]
     fn pipeline_failed_maps_correctly() {
-        let e = BitbucketError::PipelineFailed;
+        let e = BitbucketError::PipelineFailed {
+            build_number: Some(42),
+            branch: Some("main".into()),
+        };
         assert_eq!(e.exit_code(), ExitCode::PipelineFailed);
     }
 

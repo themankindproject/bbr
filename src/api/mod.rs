@@ -36,12 +36,21 @@ pub struct Paginated<T> {
 }
 
 /// Bitbucket Cloud REST API v2 wrapper.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BitbucketClient {
     base_url: String,
     inner: Client,
     creds: Credentials,
     auth_header: String,
+}
+
+impl std::fmt::Debug for BitbucketClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BitbucketClient")
+            .field("base_url", &self.base_url)
+            .field("creds", &self.creds)
+            .finish()
+    }
 }
 
 impl BitbucketClient {
@@ -107,12 +116,8 @@ impl BitbucketClient {
                 Err(BitbucketError::RateLimit(_msg)) if attempt < MAX_RETRIES => {
                     attempt += 1;
                     let base = u64::from(attempt) * 5;
-                    let jitter = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .subsec_nanos()
-                        % 3;
-                    let wait = std::time::Duration::from_secs(base + u64::from(jitter));
+                    let jitter = rand_jitter();
+                    let wait = std::time::Duration::from_secs(base + jitter);
                     tracing::warn!("rate limited, retrying in {:?} (attempt {attempt})", wait);
                     tokio::time::sleep(wait).await;
                 }
@@ -182,12 +187,8 @@ impl BitbucketClient {
                     BitbucketError::RateLimit(_msg) if attempt < MAX_RETRIES => {
                         attempt += 1;
                         let base = u64::from(attempt) * 5;
-                        let jitter = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .subsec_nanos()
-                            % 3;
-                        let wait = std::time::Duration::from_secs(base + u64::from(jitter));
+                        let jitter = rand_jitter();
+                        let wait = std::time::Duration::from_secs(base + jitter);
                         tracing::warn!("rate limited, retrying in {:?} (attempt {attempt})", wait);
                         tokio::time::sleep(wait).await;
                         continue;
@@ -351,6 +352,16 @@ fn strip_base(url: &str, base: &str) -> Result<String> {
 
 fn one_line(s: &str) -> String {
     s.trim().replace('\n', " ").chars().take(300).collect()
+}
+
+/// Simple jitter based on process ID and monotonic counter to avoid thundering herd.
+fn rand_jitter() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    // Spread across 0-4 seconds using a simple hash
+    let pid = std::process::id() as u64;
+    (pid.wrapping_add(n).wrapping_mul(6364136223846793005) >> 33) % 5
 }
 
 /// Minimal base64 encoder (RFC 4648) — avoids pulling in a base64 crate just
