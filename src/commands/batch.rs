@@ -109,17 +109,17 @@ pub async fn merge_approved(
     };
 
     if approved_actions.is_empty() {
-        if !g.json {
-            println!("No approved pull requests found to merge.");
-        } else {
+        if g.json {
             Formatter::from_json_flag(g.json).print(&plan, "")?;
+        } else {
+            eprintln!("No approved pull requests found to merge.");
         }
         return Ok(());
     }
 
     if !g.json {
         let theme = Theme::current();
-        println!("{}", theme.bold("Proposed Merge Plan:"));
+        eprintln!("{}", theme.bold("Proposed Merge Plan:"));
         let mut table =
             Table::new().headers(["PR ID", "Title", "Source", "Destination", "Approvals"]);
         for act in &approved_actions {
@@ -131,7 +131,7 @@ pub async fn merge_approved(
                 act.approvals.to_string(),
             ]);
         }
-        println!("{}", table.render());
+        eprintln!("{}", table.render());
     }
 
     if dry_run {
@@ -233,17 +233,17 @@ pub async fn rerun_failed(
     };
 
     if failed_actions.is_empty() {
-        if !g.json {
-            println!("No failed pipelines found to rerun.");
-        } else {
+        if g.json {
             Formatter::from_json_flag(g.json).print(&plan, "")?;
+        } else {
+            eprintln!("No failed pipelines found to rerun.");
         }
         return Ok(());
     }
 
     if !g.json {
         let theme = Theme::current();
-        println!("{}", theme.bold("Proposed Rerun Plan:"));
+        eprintln!("{}", theme.bold("Proposed Rerun Plan:"));
         let mut table = Table::new().headers(["Build #", "Branch", "State", "Pipeline UUID"]);
         for act in &failed_actions {
             table = table.add_row([
@@ -253,7 +253,7 @@ pub async fn rerun_failed(
                 act.pipeline_uuid.clone(),
             ]);
         }
-        println!("{}", table.render());
+        eprintln!("{}", table.render());
     }
 
     if dry_run {
@@ -354,23 +354,23 @@ pub async fn cleanup_merged_branches(
     };
 
     if cleanup_actions.is_empty() {
-        if !g.json {
-            println!("No merged branches found to clean up.");
-        } else {
+        if g.json {
             Formatter::from_json_flag(g.json).print(&plan, "")?;
+        } else {
+            eprintln!("No merged branches found to clean up.");
         }
         return Ok(());
     }
 
     if !g.json {
         let theme = Theme::current();
-        println!("{}", theme.bold("Proposed Cleanup Plan:"));
+        eprintln!("{}", theme.bold("Proposed Cleanup Plan:"));
         let mut table = Table::new().headers(["Branch Name", "Scope"]);
         for act in &cleanup_actions {
             let scope = if act.is_remote { "Remote" } else { "Local" };
             table = table.add_row([act.branch_name.clone(), scope.to_string()]);
         }
-        println!("{}", table.render());
+        eprintln!("{}", table.render());
     }
 
     if dry_run {
@@ -459,14 +459,17 @@ fn render_results(res: &BatchResult) -> String {
     if !res.succeeded.is_empty() {
         s.push_str(&format!("{}\n", theme.success("Succeeded Actions:")));
         for act in &res.succeeded {
-            s.push_str(&format!("  ✓ {}\n", act.description));
+            s.push_str(&format!("  [ok] {}\n", act.description));
         }
     }
     if !res.failed.is_empty() {
         s.push_str(&format!("\n{}\n", theme.error("Failed Actions:")));
         for act in &res.failed {
             let err_part = act.error.as_deref().unwrap_or("unknown error");
-            s.push_str(&format!("  ✗ {} (Error: {})\n", act.description, err_part));
+            s.push_str(&format!(
+                "  [X] {} (Error: {})\n",
+                act.description, err_part
+            ));
         }
     }
     s

@@ -173,6 +173,9 @@ pub enum Command {
     },
     /// Check for and install updates.
     Update {
+        /// Check only, don't install.
+        #[arg(long)]
+        check: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -1483,7 +1486,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
         },
         Some(Command::Search { query, limit, g }) => commands::search::run(&g, &query, limit).await,
         Some(Command::Schema { model, g }) => commands::schema::run(&g, model.as_deref()),
-        Some(Command::Update { g }) => commands::update::run(&g).await,
+        Some(Command::Update { check, g }) => commands::update::run(&g, check).await,
     }
 }
 

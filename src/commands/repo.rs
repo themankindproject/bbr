@@ -57,18 +57,26 @@ pub async fn info(g: &GlobalArgs) -> Result<()> {
     };
 
     let fmt = Formatter::from_json_flag(g.json);
+    let theme = crate::output::theme::Theme::current();
     let mut human = format!(
-        "workspace: {}\nslug:      {}\nfull name: {}\nscm:       {}\nprivate:   {}\nlanguage:  {}\nurl:       {}",
+        "{}{}\n{}{}\n{}{}\n{}{}\n{}{}\n{}{}\n{}{}",
+        theme.label("workspace:"),
         out.workspace,
+        theme.label("slug:     "),
         out.slug,
+        theme.label("full name:"),
         out.full_name,
+        theme.label("scm:      "),
         out.scm,
+        theme.label("private:  "),
         out.private,
+        theme.label("language: "),
         out.language,
+        theme.label("url:      "),
         out.web_url.as_deref().unwrap_or("-"),
     );
     if let Some(desc) = &out.description {
-        human.push_str(&format!("\ndesc:      {desc}"));
+        human.push_str(&format!("\n{}{desc}", theme.label("desc:     ")));
     }
     fmt.print(&out, &human)
 }
@@ -154,11 +162,12 @@ pub async fn list_commits(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> R
     spinner.finish_and_clear();
 
     let fmt = Formatter::from_json_flag(g.json);
-    let mut table = Table::new().headers(["Hash", "Date", "Message"]);
+    let mut table = Table::new().headers(["Hash", "Date", "Author", "Message"]);
     for c in &commits {
         table = table.add_row([
             truncate(&c.hash, 10),
             c.date.as_deref().unwrap_or("-").to_string(),
+            c.author.as_deref().unwrap_or("-").to_string(),
             c.message.clone(),
         ]);
     }

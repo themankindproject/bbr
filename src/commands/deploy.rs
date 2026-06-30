@@ -174,6 +174,7 @@ pub async fn set_env_var(
         .await?;
     spinner.finish_and_clear();
 
+    let fmt = Formatter::from_json_flag(g.json);
     if let Some(existing) = vars.iter().find(|v| v.key == key) {
         let spinner2 = make_spinner(g.json);
         spinner2.set_message(format!("Updating {key}..."));
@@ -188,18 +189,18 @@ pub async fn set_env_var(
         )
         .await?;
         spinner2.finish_and_clear();
-        if !g.json {
-            println!("Updated {key}");
-        }
+        let out = serde_json::json!({"action": "updated", "key": key});
+        let human = format!("Updated {key}");
+        fmt.print(&out, &human)?;
     } else {
         let spinner2 = make_spinner(g.json);
         spinner2.set_message(format!("Creating {key}..."));
         api.create_env_variable(&repo.workspace, &repo.slug, env_uuid, key, value, secured)
             .await?;
         spinner2.finish_and_clear();
-        if !g.json {
-            println!("Created {key}");
-        }
+        let out = serde_json::json!({"action": "created", "key": key});
+        let human = format!("Created {key}");
+        fmt.print(&out, &human)?;
     }
 
     Ok(())
@@ -227,9 +228,8 @@ pub async fn delete_env_var(g: &GlobalArgs, env_uuid: &str, key: &str) -> Result
         .await?;
     spinner2.finish_and_clear();
 
-    if !g.json {
-        println!("Deleted {key}");
-    }
-
-    Ok(())
+    let fmt = Formatter::from_json_flag(g.json);
+    let out = serde_json::json!({"action": "deleted", "key": key});
+    let human = format!("Deleted {key}");
+    fmt.print(&out, &human)
 }

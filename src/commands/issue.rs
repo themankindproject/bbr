@@ -189,8 +189,29 @@ pub async fn view(g: &GlobalArgs, id: u64, show_comments: bool) -> Result<()> {
         let comments = client
             .list_issue_comments(&repo.workspace, &repo.slug, id, 50)
             .await?;
-        println!("\nComments ({})", comments.len());
-        println!("{}", "─".repeat(50));
+        if g.json {
+            let comment_outs: Vec<IssueCommentOut> = comments
+                .iter()
+                .map(|c| IssueCommentOut {
+                    id: c.id,
+                    author: c.author.as_ref().map(|u| u.display_name.clone()),
+                    body: c
+                        .content
+                        .as_ref()
+                        .map(|ct| ct.raw.clone())
+                        .unwrap_or_default(),
+                    created_on: c.created_on.as_ref().map(|d| d.chars().take(10).collect()),
+                })
+                .collect();
+            let combined = serde_json::json!({
+                "issue": out,
+                "comments": comment_outs,
+            });
+            let human = String::new();
+            return Formatter::from_json_flag(true).print(&combined, &human);
+        }
+        eprintln!("\nComments ({})", comments.len());
+        eprintln!("{}", "─".repeat(50));
         for c in &comments {
             let author = c
                 .author
@@ -203,7 +224,7 @@ pub async fn view(g: &GlobalArgs, id: u64, show_comments: bool) -> Result<()> {
                 .map(|d| d.chars().take(10).collect())
                 .unwrap_or_else(|| "-".into());
             let body = c.content.as_ref().map(|ct| ct.raw.as_str()).unwrap_or("");
-            println!("  @{author} on {date}\n  {body}\n");
+            eprintln!("  @{author} on {date}\n  {body}\n");
         }
     }
     Ok(())

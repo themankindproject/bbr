@@ -65,10 +65,16 @@ pub fn setup(username: Option<String>, token: Option<String>) -> Result<()> {
         }
     };
 
+    let existing_workspace = if let Ok(Some(file)) = config::load_credentials() {
+        file.default.workspace.clone()
+    } else {
+        None
+    };
+
     let profile = CredentialProfile {
         username,
         token: Some(secret),
-        workspace: None,
+        workspace: existing_workspace,
     };
 
     let creds = CredentialsFile {
