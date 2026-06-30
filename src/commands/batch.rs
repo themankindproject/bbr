@@ -72,31 +72,46 @@ pub async fn merge_approved(
 
     let mut approved_actions = Vec::new();
 
-    for pr in prs {
-        spinner.set_message(format!("Checking approvals for PR #{}...", pr.id));
-        if let Ok(full_pr) = client.get_pr(&repo.workspace, slug, pr.id).await {
-            let reviewers = if full_pr.reviewers.is_empty() {
-                full_pr
-                    .participants
-                    .iter()
-                    .filter(|p| p.role.eq_ignore_ascii_case("REVIEWER"))
-                    .collect::<Vec<_>>()
-            } else {
-                full_pr.reviewers.iter().collect::<Vec<_>>()
-            };
-
-            let approval_count = reviewers.iter().filter(|r| r.approved).count();
-            let is_approved = !reviewers.is_empty() && reviewers.iter().all(|r| r.approved);
-
-            if is_approved {
-                approved_actions.push(MergeAction {
-                    pr_id: full_pr.id,
-                    title: full_pr.title.clone(),
-                    source: full_pr.source_branch().to_string(),
-                    destination: full_pr.destination_branch().to_string(),
-                    approvals: approval_count,
-                });
+    // Parallelize per-PR fetches with bounded concurrency
+    use futures::stream::{self, StreamExt};
+    let ws = repo.workspace.clone();
+    let slug_owned = slug.to_string();
+    let fetch_results: Vec<_> = stream::iter(prs)
+        .map(|pr| {
+            let ws = ws.clone();
+            let slug = slug_owned.clone();
+            let c = &client;
+            async move {
+                let full_pr = c.get_pr(&ws, &slug, pr.id).await;
+                full_pr.ok()
             }
+        })
+        .buffer_unordered(10)
+        .collect()
+        .await;
+
+    for full_pr in fetch_results.into_iter().flatten() {
+        let reviewers = if full_pr.reviewers.is_empty() {
+            full_pr
+                .participants
+                .iter()
+                .filter(|p| p.role.eq_ignore_ascii_case("REVIEWER"))
+                .collect::<Vec<_>>()
+        } else {
+            full_pr.reviewers.iter().collect::<Vec<_>>()
+        };
+
+        let approval_count = reviewers.iter().filter(|r| r.approved).count();
+        let is_approved = !reviewers.is_empty() && reviewers.iter().all(|r| r.approved);
+
+        if is_approved {
+            approved_actions.push(MergeAction {
+                pr_id: full_pr.id,
+                title: full_pr.title.clone(),
+                source: full_pr.source_branch().to_string(),
+                destination: full_pr.destination_branch().to_string(),
+                approvals: approval_count,
+            });
         }
     }
 
