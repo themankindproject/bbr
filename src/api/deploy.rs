@@ -178,4 +178,20 @@ impl BitbucketClient {
         let path = format!("/repositories/{workspace}/{slug}/deployments_config/environments/{env_uuid}/variables/{var_uuid}");
         self.send_empty(reqwest::Method::DELETE, &path, None).await
     }
+
+    pub async fn trigger_deployment(
+        &self,
+        workspace: &str,
+        slug: &str,
+        env_uuid: &str,
+        commit: &str,
+    ) -> Result<Deployment> {
+        let path = format!("/repositories/{workspace}/{slug}/deployments_config/environments/{env_uuid}/changes");
+        let body = serde_json::json!({
+            "commit": {
+                "hash": commit
+            }
+        });
+        self.post(&path, &body).await
+    }
 }

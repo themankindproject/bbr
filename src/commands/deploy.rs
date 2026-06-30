@@ -258,3 +258,41 @@ pub async fn delete_env_var(g: &GlobalArgs, env_uuid: &str, key: &str) -> Result
     let human = format!("Deleted {key}");
     fmt.print(&out, &human)
 }
+
+pub async fn trigger_deployment(g: &GlobalArgs, env_uuid: &str, commit: &str) -> Result<()> {
+    let repo = resolve_repo(g)?;
+    let api = client(g)?;
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message(format!("Triggering deployment to environment {env_uuid}..."));
+    let deployment = api
+        .trigger_deployment(&repo.workspace, &repo.slug, env_uuid, commit)
+        .await?;
+    spinner.finish_and_clear();
+
+    let out = DeploymentOut {
+        uuid: deployment.uuid.clone(),
+        environment: deployment.environment.map(|e| e.name),
+        state: deployment.state.name.clone(),
+        pipeline_build: deployment
+            .deployable
+            .as_ref()
+            .and_then(|dep| dep.pipeline.as_ref())
+            .map(|p| p.build_number),
+        commit_hash: deployment
+            .deployable
+            .as_ref()
+            .and_then(|dep| dep.commit.as_ref())
+            .map(|c| c.hash.clone()),
+        last_update: deployment.last_update_time,
+    };
+
+    let fmt = Formatter::from_json_flag(g.json);
+    let human = format!(
+        "Triggered deployment {} to environment {} (commit: {})",
+        out.uuid,
+        out.environment.as_deref().unwrap_or("unknown"),
+        commit
+    );
+    fmt.print(&out, &human)
+}

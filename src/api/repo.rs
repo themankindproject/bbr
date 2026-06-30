@@ -283,6 +283,30 @@ impl BitbucketClient {
             self.send(reqwest::Method::GET, &path, None).await?;
         Ok(page.values)
     }
+
+    /// `GET /repositories/{ws}/{slug}/permissions-config/users` — list user permissions.
+    pub async fn list_user_permissions(
+        &self,
+        workspace: &str,
+        slug: &str,
+    ) -> Result<Vec<PermissionEntry>> {
+        let path = format!("/repositories/{workspace}/{slug}/permissions-config/users?pagelen=100");
+        let page: super::Paginated<PermissionEntry> =
+            self.send(reqwest::Method::GET, &path, None).await?;
+        Ok(page.values)
+    }
+
+    /// `GET /repositories/{ws}/{slug}/permissions-config/groups` — list group permissions.
+    pub async fn list_group_permissions(
+        &self,
+        workspace: &str,
+        slug: &str,
+    ) -> Result<Vec<PermissionEntry>> {
+        let path = format!("/repositories/{workspace}/{slug}/permissions-config/groups?pagelen=100");
+        let page: super::Paginated<PermissionEntry> =
+            self.send(reqwest::Method::GET, &path, None).await?;
+        Ok(page.values)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -305,6 +329,30 @@ pub struct DefaultReviewer {
     pub id: u64,
     #[serde(default)]
     pub user: Option<super::pr::User>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionEntry {
+    #[serde(default)]
+    pub r#type: String,
+    #[serde(default)]
+    pub permission: String,
+    #[serde(default)]
+    pub user: Option<super::pr::User>,
+    #[serde(default)]
+    pub group: Option<GroupInfo>,
+    #[serde(default)]
+    pub slug: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupInfo {
+    #[serde(default)]
+    pub slug: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
 }
 
 #[cfg(test)]

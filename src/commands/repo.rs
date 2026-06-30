@@ -334,6 +334,46 @@ pub async fn create_tag(
     Formatter::from_json_flag(g.json).print(&out, &human)
 }
 
+pub async fn permissions(g: &GlobalArgs) -> Result<()> {
+    let repo = resolve_repo(g)?;
+    let client = client(g)?;
+
+    let spinner = make_spinner(g.json);
+    spinner.set_message("Fetching permissions...");
+    let (users, groups) = tokio::join!(
+        client.list_user_permissions(&repo.workspace, &repo.slug),
+        client.list_group_permissions(&repo.workspace, &repo.slug),
+    );
+    let users = users.unwrap_or_default();
+    let groups = groups.unwrap_or_default();
+    spinner.finish_and_clear();
+
+    let out = serde_json::json!({
+        "workspace": repo.workspace,
+        "slug": repo.slug,
+        "users": users,
+        "groups": groups,
+    });
+
+    let theme = crate::output::theme::Theme::current();
+    let mut human = String::new();
+    human.push_str(&format!("{} {}/{}\n", theme.bullet(), repo.workspace, repo.slug));
+    human.push_str(&format!("{}\n", theme.separator()));
+
+    let mut table = Table::new().headers(["Type", "Name", "Permission"]);
+    for u in &users {
+        let name = u.display_name.as_deref().or_else(|| u.user.as_ref().map(|u| u.display_name.as_str())).unwrap_or("unknown");
+        table = table.add_row(["User".into(), name.to_string(), u.permission.clone()]);
+    }
+    for g in &groups {
+        let name = g.display_name.as_deref().or_else(|| g.group.as_ref().and_then(|grp| grp.display_name.as_deref())).unwrap_or("unknown");
+        table = table.add_row(["Group".into(), name.to_string(), g.permission.clone()]);
+    }
+    human.push_str(&table.render());
+
+    Formatter::from_json_flag(g.json).print(&out, &human)
+}
+
 fn first_line(s: &str) -> String {
     s.lines().next().unwrap_or("").to_string()
 }

@@ -321,14 +321,30 @@ impl BitbucketClient {
         slug: &str,
         branch: &str,
     ) -> Result<Pipeline> {
+        self.trigger_pipeline_with_variables(workspace, slug, branch, None).await
+    }
+
+    /// `POST /repositories/{ws}/{slug}/pipelines/` — trigger a new pipeline with optional variables.
+    pub async fn trigger_pipeline_with_variables(
+        &self,
+        workspace: &str,
+        slug: &str,
+        branch: &str,
+        variables: Option<&[serde_json::Value]>,
+    ) -> Result<Pipeline> {
         let path = format!("/repositories/{workspace}/{slug}/pipelines/");
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "target": {
                 "ref_type": "branch",
                 "type": "pipeline_ref_target",
                 "ref_name": branch,
             }
         });
+        if let Some(vars) = variables {
+            if !vars.is_empty() {
+                body["variables"] = serde_json::json!(vars);
+            }
+        }
         self.send::<Pipeline>(reqwest::Method::POST, &path, Some(&body.to_string()))
             .await
     }
