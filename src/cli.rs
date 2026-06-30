@@ -50,6 +50,14 @@ pub struct GlobalArgs {
     /// Disable ANSI color output.
     #[arg(long, global = true, action = ArgAction::SetTrue)]
     pub no_color: bool,
+
+    /// Use ASCII characters instead of Unicode (for terminals that don't support UTF-8).
+    #[arg(long, global = true, action = ArgAction::SetTrue)]
+    pub no_unicode: bool,
+
+    /// HTTP request timeout in seconds (default: 30).
+    #[arg(long, global = true, env = "BBR_TIMEOUT")]
+    pub timeout: Option<u64>,
 }
 
 /// `bbr` — a Bitbucket Cloud CLI.
@@ -199,6 +207,26 @@ pub enum Command {
         /// Check only, don't install.
         #[arg(long)]
         check: bool,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Workspace operations.
+    Workspace {
+        #[command(subcommand)]
+        action: WorkspaceAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum WorkspaceAction {
+    /// List workspaces you have access to.
+    List {
+        /// Filter by role (member, contributor, admin).
+        #[arg(long)]
+        role: Option<String>,
+        /// Max results.
+        #[arg(long, default_value_t = 25)]
+        limit: u32,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -565,6 +593,12 @@ pub enum CiAction {
     Trigger {
         #[arg(long, help = "branch name (default: current branch)")]
         branch: Option<String>,
+        /// Set a pipeline variable (repeatable). Format: KEY=VALUE.
+        #[arg(long = "var", help = "set a pipeline variable (repeatable, format: KEY=VALUE)")]
+        vars: Vec<String>,
+        /// Mark a variable as secured/encrypted (repeatable).
+        #[arg(long = "secured", help = "mark variable as secured/encrypted (repeatable)")]
+        secured: Vec<String>,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -674,6 +708,11 @@ pub enum RepoAction {
         /// Tag message (for annotated tags).
         #[arg(long)]
         message: Option<String>,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// List user and group permissions for the repository.
+    Permissions {
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -919,6 +958,16 @@ pub enum DeployAction {
         #[command(flatten)]
         g: GlobalArgs,
     },
+    /// Trigger a deployment.
+    Trigger {
+        /// The environment UUID.
+        env_uuid: String,
+        /// The commit hash to deploy.
+        #[arg(long)]
+        commit: String,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
     /// Manage environments.
     Env {
         #[command(subcommand)]
@@ -1131,6 +1180,11 @@ pub async fn run() -> ExitCode {
         crate::output::theme::Theme::set_color_override(true);
     }
 
+    // Set unicode override before any Theme access
+    if cli.global.no_unicode {
+        crate::output::theme::Theme::set_unicode_override(false);
+    }
+
     let result: Result<()> = dispatch(cli).await;
 
     match result {
@@ -1222,6 +1276,15 @@ async fn dispatch(cli: Cli) -> Result<()> {
         }) => commands::search::run(&g, &query, repo.as_deref(), limit).await,
         Some(Command::Schema { model, g }) => commands::schema::run(&g, model.as_deref()),
         Some(Command::Update { check, g }) => commands::update::run(&g, check).await,
+        Some(Command::Workspace { action }) => dispatch_workspace(action).await,
+    }
+}
+
+async fn dispatch_workspace(action: WorkspaceAction) -> Result<()> {
+    match action {
+        WorkspaceAction::List { role, limit, g } => {
+            commands::workspace::list(&g, role.as_deref(), limit).await
+        }
     }
 }
 
@@ -1411,7 +1474,9 @@ async fn dispatch_ci(action: CiAction) -> Result<()> {
             commands::ci::list(&g, branch.as_deref(), limit).await
         }
         CiAction::Rerun { branch, g } => commands::ci::rerun(&g, branch.as_deref()).await,
-        CiAction::Trigger { branch, g } => commands::ci::trigger(&g, branch.as_deref()).await,
+        CiAction::Trigger { branch, vars, secured, g } => {
+            commands::ci::trigger(&g, branch.as_deref(), &vars, &secured).await
+        }
         CiAction::Stop { uuid, branch, g } => {
             commands::ci::stop(&g, uuid.as_deref(), branch.as_deref()).await
         }
@@ -1487,6 +1552,7 @@ async fn dispatch_repo(action: RepoAction) -> Result<()> {
             message,
             g,
         } => commands::repo::create_tag(&g, &name, target.as_deref(), message.as_deref()).await,
+        RepoAction::Permissions { g } => commands::repo::permissions(&g).await,
     }
 }
 
@@ -1576,6 +1642,9 @@ async fn dispatch_webhook(action: WebhookAction) -> Result<()> {
 async fn dispatch_deploy(action: DeployAction) -> Result<()> {
     match action {
         DeployAction::List { limit, g } => commands::deploy::list_deployments(&g, limit).await,
+        DeployAction::Trigger { env_uuid, commit, g } => {
+            commands::deploy::trigger_deployment(&g, &env_uuid, &commit).await
+        }
         DeployAction::Env { action } => match action {
             DeployEnvAction::List { g } => commands::deploy::list_environments(&g).await,
             DeployEnvAction::Create { name, env_type, g } => {
