@@ -64,6 +64,7 @@ These flags are available on **every** subcommand:
 | `--json` | | Emit stable JSON instead of human output |
 | `--verbose` | `-v` | Increase verbosity (`-v` = info, `-vv` = debug) |
 | `--workspace <WS>` | | Override workspace inferred from git remote (env: `BB_WORKSPACE`) |
+| `--slug <SLUG>` | | Override repo slug inferred from git remote (env: `BB_SLUG`) |
 | `--api-base <URL>` | | Override the Bitbucket API base URL (env: `BITBUCKET_API_BASE`) |
 | `--no-pager` | | Disable output paging (don't pipe through `less`) |
 | `--quiet` | `-q` | Suppress spinners and non-essential output (env: `BBR_QUIET`) |
@@ -161,8 +162,11 @@ bbr pr list --state all --limit 50           # all states, more results
 bbr pr list --author "John"                  # filter by author display name
 bbr pr list --reviewer "Jane"                # filter by reviewer display name
 bbr pr list --source-branch "feat/x"         # filter by source branch
+bbr pr list --sort created_on --order asc    # sort by creation date, ascending
 bbr pr list --json                           # JSON array
 ```
+
+Sort fields: `created_on`, `updated_on` (default), `title`. Order: `desc` (default), `asc`.
 
 Output: table with columns `ID  State  Title  Source  Destination  Author  URL`.
 
@@ -213,6 +217,7 @@ bbr pr comment 467 --reply-to 123 --body "Agreed"   # reply to a comment
 
 ```bash
 bbr pr approve 467                               # approve
+bbr pr approve 467 --message "LGTM!"             # approve with comment
 bbr pr unapprove 467                             # remove approval
 bbr pr decline 467                               # decline (close without merging)
 bbr pr merge 467                                 # merge with confirmation prompt
@@ -235,6 +240,26 @@ Print the diff for a PR with syntax highlighting and paging. Uses `bat` if insta
 
 ```bash
 bbr pr diff 467
+```
+
+#### `bbr pr diffstat`
+
+Show a JSON summary of file changes (files changed, insertions, deletions).
+
+```bash
+bbr pr diffstat 467                            # by ID
+bbr pr diffstat                                # current branch's open PR
+bbr pr diffstat 467 --json                     # machine-readable
+```
+
+#### `bbr pr patch`
+
+Download the unified patch for a PR. Uses `bat` for syntax highlighting when available.
+
+```bash
+bbr pr patch 467                               # print to stdout
+bbr pr patch 467 --output fix.patch            # write to file
+bbr pr patch                                   # current branch's open PR
 ```
 
 #### Review data subcommands
@@ -544,6 +569,7 @@ Search code across all repos in the workspace via the Bitbucket code search API.
 bbr search "TODO:"                     # search for TODOs
 bbr search "fn main" --limit 50        # max results (default 20)
 bbr search "class Repository" --json   # machine-readable
+bbr search "error" --repo my-service   # search within specific repo
 ```
 
 Output:
@@ -594,7 +620,46 @@ Create a new repository in the current workspace:
 bbr repo create my-new-repo
 bbr repo create my-new-repo --private
 bbr repo create my-new-repo --description "A new service" --language rust
+bbr repo create my-new-repo --enable-issues    # enable issue tracker
 bbr repo create my-new-repo --json
+```
+
+#### `bbr repo delete`
+
+Delete a repository (permanent, requires confirmation):
+
+```bash
+bbr repo delete my-old-repo                    # with confirmation prompt
+bbr repo delete my-old-repo --yes              # skip confirmation
+```
+
+#### `bbr repo fork`
+
+Fork a repository:
+
+```bash
+bbr repo fork                                  # fork current repo
+bbr repo fork --name my-fork                   # custom fork name
+bbr repo fork --target-workspace other-ws      # fork to different workspace
+```
+
+#### `bbr repo create-branch`
+
+Create a remote branch:
+
+```bash
+bbr repo create-branch feature/new             # from current HEAD
+bbr repo create-branch feature/new --from abc123  # from specific commit
+```
+
+#### `bbr repo create-tag`
+
+Create a remote tag:
+
+```bash
+bbr repo create-tag v1.0.0                     # lightweight tag on current HEAD
+bbr repo create-tag v1.0.0 --message "Release" # annotated tag
+bbr repo create-tag v1.0.0 --target abc123     # tag specific commit
 ```
 
 #### `bbr repo audit`
@@ -662,6 +727,30 @@ bbr commit status set [<commit>] \
 ```
 
 Accepted states: `successful`, `failed`, `inprogress`, `stopped`.
+
+---
+
+### `bbr deploy`
+
+Deployment and environment management.
+
+```bash
+bbr deploy list                            # list deployments
+bbr deploy env list                        # list environments
+bbr deploy env create staging --env-type staging   # create environment
+bbr deploy env create prod --env-type production
+```
+
+Environment types: `test`, `staging`, `production`.
+
+#### Environment variables
+
+```bash
+bbr deploy env vars list <env-uuid>        # list env variables
+bbr deploy env vars set <env-uuid> KEY value   # set variable
+bbr deploy env vars set <env-uuid> KEY value --secured  # encrypted
+bbr deploy env vars delete <env-uuid> KEY  # delete variable
+```
 
 ---
 
@@ -915,6 +1004,7 @@ Exit codes are stable — scripts can branch on `$?`.
 | `BITBUCKET_TOKEN` | Atlassian API token | — |
 | `BITBUCKET_API_BASE` | API base URL | `https://api.bitbucket.org/2.0` |
 | `BB_WORKSPACE` | Default workspace override | — |
+| `BB_SLUG` | Default repo slug override | — |
 | `BBR_QUIET` | Suppress spinners and non-essential output | — |
 | `NO_COLOR` | Disable color output | — |
 | `XDG_CONFIG_HOME` | Config directory (Linux) | `~/.config` |
