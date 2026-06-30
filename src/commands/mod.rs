@@ -104,9 +104,19 @@ pub fn resolve_body(
     ))
 }
 
-/// Create a spinner if stdout is a TTY and we're not in JSON mode.
+/// Create a Formatter respecting --json and --no-pager flags.
+pub fn make_formatter(g: &GlobalArgs) -> crate::output::Formatter {
+    crate::output::Formatter::from_args(g.json, g.no_pager)
+}
+
+/// Check if quiet mode is enabled (via --quiet flag or BBR_QUIET env).
+fn is_quiet() -> bool {
+    std::env::var_os("BBR_QUIET").is_some()
+}
+
+/// Create a spinner if stdout is a TTY and we're not in JSON or quiet mode.
 pub fn make_spinner(json: bool) -> ProgressBar {
-    if json {
+    if json || is_quiet() {
         ProgressBar::hidden()
     } else {
         let pb = ProgressBar::new_spinner();

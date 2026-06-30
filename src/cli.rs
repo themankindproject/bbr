@@ -30,6 +30,22 @@ pub struct GlobalArgs {
     /// Override the workspace inferred from git remote.
     #[arg(long, global = true, env = "BB_WORKSPACE")]
     pub workspace: Option<String>,
+
+    /// Disable output paging (no less).
+    #[arg(long, global = true, action = ArgAction::SetTrue)]
+    pub no_pager: bool,
+
+    /// Suppress non-essential output (for scripting).
+    #[arg(short, long, global = true, action = ArgAction::SetTrue)]
+    pub quiet: bool,
+
+    /// Force ANSI color output.
+    #[arg(long, global = true, action = ArgAction::SetTrue)]
+    pub color: bool,
+
+    /// Disable ANSI color output.
+    #[arg(long, global = true, action = ArgAction::SetTrue)]
+    pub no_color: bool,
 }
 
 /// `bbr` — a Bitbucket Cloud CLI.
@@ -1016,6 +1032,13 @@ pub async fn run() -> ExitCode {
     };
 
     init_tracing(cli.global.verbose);
+
+    // Set color override before any Theme access
+    if cli.global.no_color {
+        crate::output::theme::Theme::set_color_override(false);
+    } else if cli.global.color {
+        crate::output::theme::Theme::set_color_override(true);
+    }
 
     let result: Result<()> = dispatch(cli).await;
 

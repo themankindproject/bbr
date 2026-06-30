@@ -8,6 +8,7 @@ use colored::Colorize;
 
 /// Global theme singleton (cheap to compute once).
 static THEME: OnceLock<Theme> = OnceLock::new();
+static COLOR_OVERRIDE: OnceLock<bool> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy)]
 pub struct Theme {
@@ -16,15 +17,22 @@ pub struct Theme {
 
 impl Theme {
     pub fn current() -> &'static Theme {
-        THEME.get_or_init(Theme::detect)
+        THEME.get_or_init(|| {
+            let colors = if let Some(&forced) = COLOR_OVERRIDE.get() {
+                forced
+            } else {
+                let no_color = std::env::var_os("NO_COLOR").is_some();
+                let is_tty = io::stdout().is_terminal();
+                !no_color && is_tty
+            };
+            Theme { colors }
+        })
     }
 
-    fn detect() -> Theme {
-        let no_color = std::env::var_os("NO_COLOR").is_some();
-        let is_tty = io::stdout().is_terminal();
-        Theme {
-            colors: !no_color && is_tty,
-        }
+    /// Set a color override. Must be called before the first `Theme::current()` access.
+    /// Returns `Err` if the theme was already initialized.
+    pub fn set_color_override(force_color: bool) {
+        let _ = COLOR_OVERRIDE.set(force_color);
     }
 
     pub fn colors_enabled(&self) -> bool {
@@ -156,10 +164,8 @@ mod tests {
 
     #[test]
     fn no_color_disables() {
-        std::env::set_var("NO_COLOR", "1");
-        let t = Theme::detect();
+        let t = Theme { colors: false };
         assert!(!t.colors_enabled());
-        std::env::remove_var("NO_COLOR");
     }
 
     #[test]

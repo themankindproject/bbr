@@ -14,7 +14,7 @@ use crate::error::Result;
 /// `Human` formatters take already-rendered strings (tables / blocks);
 /// `Json` formatters take any `Serialize` value.
 pub enum Formatter {
-    Human,
+    Human { no_pager: bool },
     Json,
 }
 
@@ -24,7 +24,16 @@ impl Formatter {
         if json {
             Formatter::Json
         } else {
-            Formatter::Human
+            Formatter::Human { no_pager: false }
+        }
+    }
+
+    /// Pick a formatter with pager control.
+    pub fn from_args(json: bool, no_pager: bool) -> Self {
+        if json {
+            Formatter::Json
+        } else {
+            Formatter::Human { no_pager }
         }
     }
 
@@ -33,7 +42,7 @@ impl Formatter {
     pub fn print<T: serde::Serialize>(&self, value: &T, human: &str) -> Result<()> {
         match self {
             Formatter::Json => json::print_json(value),
-            Formatter::Human => print_block(human),
+            Formatter::Human { .. } => print_block(human),
         }
     }
 
@@ -41,7 +50,13 @@ impl Formatter {
     pub fn print_paginated<T: serde::Serialize>(&self, value: &T, human: &str) -> Result<()> {
         match self {
             Formatter::Json => json::print_json(value),
-            Formatter::Human => print_paginated(human),
+            Formatter::Human { no_pager } => {
+                if *no_pager {
+                    print_block(human)
+                } else {
+                    print_paginated(human)
+                }
+            }
         }
     }
 
@@ -49,7 +64,13 @@ impl Formatter {
     pub fn print_diff<T: serde::Serialize>(&self, value: &T, human: &str) -> Result<()> {
         match self {
             Formatter::Json => json::print_json(value),
-            Formatter::Human => print_diff(human),
+            Formatter::Human { no_pager } => {
+                if *no_pager {
+                    print_block(human)
+                } else {
+                    print_diff(human)
+                }
+            }
         }
     }
 }

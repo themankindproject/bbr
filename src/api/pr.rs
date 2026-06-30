@@ -336,13 +336,22 @@ impl BitbucketClient {
             q_parts.push(format!("state%3D%22{s}%22"));
         }
         if let Some(a) = author {
-            q_parts.push(format!("author.display_name%3D%22{}%22", super::url_encode(a)));
+            q_parts.push(format!(
+                "author.display_name%3D%22{}%22",
+                super::url_encode(a)
+            ));
         }
         if let Some(b) = source_branch {
-            q_parts.push(format!("source.branch.name%3D%22{}%22", super::url_encode(b)));
+            q_parts.push(format!(
+                "source.branch.name%3D%22{}%22",
+                super::url_encode(b)
+            ));
         }
         if let Some(r) = reviewer {
-            q_parts.push(format!("reviewers.display_name%3D%22{}%22", super::url_encode(r)));
+            q_parts.push(format!(
+                "reviewers.display_name%3D%22{}%22",
+                super::url_encode(r)
+            ));
         }
         if !q_parts.is_empty() {
             path.push_str(&format!("&q={}", q_parts.join("+AND+")));
