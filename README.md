@@ -1,7 +1,7 @@
 # bbr — BitBucket Remote CLI
 
 [![CI](https://img.shields.io/github/actions/workflow/status/themankindproject/bbr/ci.yml?branch=main&label=CI)](https://github.com/themankindproject/bbr/actions/workflows/ci.yml)
-![Rust Version](https://img.shields.io/badge/rust-1.74%2B-blue)
+![Rust Version](https://img.shields.io/badge/rust-1.75%2B-blue)
 [![License](https://img.shields.io/crates/l/bbr)](LICENSE)
 
 A fast, single-binary Bitbucket Cloud CLI. Agent-first (`--json` everywhere, zero-config env auth) with pretty human output.

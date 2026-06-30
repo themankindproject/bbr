@@ -1,10 +1,10 @@
-# `bb` JSON output schema (v0.1)
+# `bbr` JSON output schema (v0.1)
 
-All `bb <cmd> --json` output is stable JSON, printed pretty to stdout. The
+All `bbr <cmd> --json` output is stable JSON, printed pretty to stdout. The
 shape for each command is documented below. Field names are `snake_case` and
 stable across v0.1.x (breaking changes are reserved for v0.2+).
 
-## `bb status --json`
+## `bbr status --json`
 
 ```json
 {
@@ -34,7 +34,7 @@ stable across v0.1.x (breaking changes are reserved for v0.2+).
 
 `pr` and `pipeline` are `null` when absent.
 
-## `bb pr list --json`
+## `bbr pr list --json`
 
 ```json
 {
@@ -56,7 +56,7 @@ stable across v0.1.x (breaking changes are reserved for v0.2+).
 }
 ```
 
-## `bb pr view --json`
+## `bbr pr view --json`
 
 ```json
 {
@@ -74,19 +74,19 @@ stable across v0.1.x (breaking changes are reserved for v0.2+).
 }
 ```
 
-## `bb pr create --json`
+## `bbr pr create --json`
 
 ```json
 { "id": 468, "url": "https://...", "state": "OPEN" }
 ```
 
-## `bb pr comment --json`
+## `bbr pr comment --json`
 
 ```json
 { "pr_id": 467, "posted": true }
 ```
 
-## `bb pr comments --json`
+## `bbr pr comments --json`
 
 ```json
 {
@@ -105,7 +105,7 @@ stable across v0.1.x (breaking changes are reserved for v0.2+).
 }
 ```
 
-## `bb pr tasks --json`
+## `bbr pr tasks --json`
 
 ```json
 {
@@ -124,7 +124,7 @@ stable across v0.1.x (breaking changes are reserved for v0.2+).
 }
 ```
 
-## `bb pr commits --json`
+## `bbr pr commits --json`
 
 ```json
 {
@@ -140,7 +140,7 @@ stable across v0.1.x (breaking changes are reserved for v0.2+).
 }
 ```
 
-## `bb pr statuses --json`
+## `bbr pr statuses --json`
 
 ```json
 {
@@ -158,7 +158,7 @@ stable across v0.1.x (breaking changes are reserved for v0.2+).
 }
 ```
 
-## `bb pr conflicts --json`
+## `bbr pr conflicts --json`
 
 ```json
 {
@@ -173,16 +173,16 @@ stable across v0.1.x (breaking changes are reserved for v0.2+).
 }
 ```
 
-## `bb pr request-changes --json`
+## `bbr pr request-changes --json`
 
 ```json
 { "id": 467, "changes_requested": true }
 ```
 
-`bb pr unrequest-changes --json` uses the same shape with
+`bbr pr unrequest-changes --json` uses the same shape with
 `"changes_requested": false`.
 
-## `bb ci status --json`
+## `bbr ci status --json`
 
 ```json
 {
@@ -201,7 +201,7 @@ stable across v0.1.x (breaking changes are reserved for v0.2+).
 }
 ```
 
-## `bb ci watch --json`
+## `bbr ci watch --json`
 
 Emits a single JSON object when the pipeline reaches a terminal state:
 
@@ -216,7 +216,7 @@ Emits a single JSON object when the pipeline reaches a terminal state:
 
 On failure, `success` is `false` and the process exits with code `5`.
 
-## `bb ci logs --json`
+## `bbr ci logs --json`
 
 ```json
 {
@@ -226,7 +226,7 @@ On failure, `success` is `false` and the process exits with code `5`.
 }
 ```
 
-## `bb auth status --json`
+## `bbr auth status --json`
 
 ```json
 {
@@ -242,7 +242,7 @@ On failure, `success` is `false` and the process exits with code `5`.
 `credential_kind` is `"atlassian_api_token"` or `null` when not authenticated.
 `source` is `"environment"`, `"config-file"`, or `"none"`.
 
-## `bb repo info --json`
+## `bbr repo info --json`
 
 ```json
 {
@@ -257,7 +257,7 @@ On failure, `success` is `false` and the process exits with code `5`.
 }
 ```
 
-## `bb repo tags --json`
+## `bbr repo tags --json`
 
 ```json
 [
@@ -269,7 +269,7 @@ On failure, `success` is `false` and the process exits with code `5`.
 ]
 ```
 
-## `bb commit status set --json`
+## `bbr commit status set --json`
 
 ```json
 {
@@ -292,4 +292,4 @@ On failure, `success` is `false` and the process exits with code `5`.
 | 2 | auth error |
 | 3 | not found |
 | 4 | rate limited |
-| 5 | pipeline failed (`bb ci watch`) |
+| 5 | pipeline failed (`bbr ci watch`) |

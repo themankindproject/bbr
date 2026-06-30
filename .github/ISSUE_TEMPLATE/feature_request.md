@@ -11,7 +11,7 @@ labels: enhancement
 ## Proposed command / output
 
 ```
-bb ...
+bbr ...
 ```
 
 ## Alternatives considered

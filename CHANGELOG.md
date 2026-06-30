@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   releases from GitHub. If a newer version exists, it downloads, extracts, and
   replaces the current binary in one step. Version check results are cached in
   `~/.config/bbr/update-check.json` (24h TTL).
+- **`bbr update --check`** — check for updates without installing.
 - **Auto-update notification** — running `bbr` (no subcommand) or `bbr status` now
   performs a lightweight background check against GitHub and prints a hint if a
   newer version is available.
@@ -22,7 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `write:pullrequest:bitbucket`, `read:pipeline:bitbucket`, `write:pipeline:bitbucket`,
   plus optional issue/webhook scopes) instead of the old OAuth-style scope names.
 - **Better error hints** — `bbr` now shows scoped guidance on auth failures
-  (API token URL, minimum required scopes) and rate-limit hints.
+  (API token URL, minimum required scopes), rate-limit hints, and timeout hints.
+- `bbr repo commits` table now includes an Author column.
 
 ### Performance
 
@@ -32,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `stack::init`, `stack::rebase`) — eliminates unnecessary future/task overhead.
 - Eliminated unnecessary `.clone()` on `Option<String>` render fields in
   `pr.rs` and `status.rs` (6 call sites) — uses `as_deref().unwrap_or("-").to_string()` instead.
+- Rate-limit jitter improved from 0–2s (`subsec_nanos % 3`) to 0–4s counter-based spread.
 
 ### Fixed
 
@@ -42,6 +45,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unnecessary raw-string hashes in `commands/completion.rs:79` (`r#"..."#` → `r"..."`).
 - `map(|h| h.branch).unwrap_or_else(|| "main".to_string())` replaced with
   `map_or_else` in `ci_compare.rs`.
+- **JSON output corruption** — `deploy set-env-var`, `deploy delete-env-var`, `ci vars set`,
+  `ci vars delete`, `batch`, and `issue view --comments` all used `println!` directly,
+  which corrupted `--json` output. All now route through `Formatter` or `eprintln!`.
+- **Schema definitions** — `bbr schema status`, `bbr schema pr`, and `bbr schema ci` were
+  out of sync with actual output structs. Rewritten to match.
+- **Dashboard double-counted approvals** — counted both `participants` and `reviewers`,
+  but reviewers appear in both arrays. Now counts `participants` only.
+- **`bbr auth setup` lost workspace override** — re-running setup set `workspace: None`,
+  discarding a previously saved workspace. Now preserves existing value.
+- **Issue URL encoding** — `bbr issue list --query` only encoded spaces and double quotes.
+  Now uses proper percent-encoding for all special characters.
+- **`git checkout_branch` swallowed errors** — retried `git switch -c` for any failure
+  (including dirty tree, merge conflicts). Now only retries when branch doesn't exist.
+- **Config directory permissions** — `~/.config/bbr/` created with `0700` on Unix
+  (was `0755`, leaking metadata).
+- **`Debug` leaked credentials** — `Credentials` and `BitbucketClient` derived `Debug`,
+  printing raw tokens in trace output. Now uses `[REDACTED]`.
+- **`PipelineFailed` error** now carries `build_number` and `branch` context.
+- **Timeout errors** now show a hint about the 30s default and suggest checking the network.
+- `bbr batch` results use ASCII-safe `[ok]`/`[X]` glyphs (was using Unicode `✓`/`✗`).
+- `bbr repo info` now uses themed labels for field names.
+- `bbr issue view --comments` in JSON mode now includes comments in the JSON object
+  instead of dumping raw text after it.
+- Removed dead `empty` variable in `api/issue.rs` `update_issue`.
+- Dashboard activity format removed spurious `#{:<3}` alignment.
+- All `bb` references in docs (`output-schema.md`, `USAGE.md`, issue templates, `README.md`
+  MSRV badge) corrected to `bbr`.
+- `Cargo.toml` repository/homepage URLs updated to `themankindproject/bbr`.
 
 ## [0.1.1] - 2026-06-29
 

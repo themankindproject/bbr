@@ -694,7 +694,7 @@ bbr config set workspace my-ws     # persist a default workspace
 `bbr config show` output:
 ```
 config_path:      /home/user/.config/bbr/config.toml
-credentials_path: /home/user/.config/bb/credentials.toml
+credentials_path: /home/user/.config/bbr/credentials.toml
 workspace:        my-workspace
 username:         alice@example.com
 has_token:        true
@@ -768,16 +768,16 @@ export BITBUCKET_TOKEN="..."            # Atlassian API token
 Created by `bbr auth setup`:
 
 ```toml
-# ~/.config/bb/credentials.toml
+# ~/.config/bbr/credentials.toml
 [default]
 username = "you@example.com"
 token = "..."
 ```
 
 Platform paths:
-- **Linux**: `~/.config/bb/credentials.toml`
-- **macOS**: `~/Library/Application Support/bb/credentials.toml`
-- **Windows**: `%APPDATA%\bb\credentials.toml`
+- **Linux**: `~/.config/bbr/credentials.toml`
+- **macOS**: `~/Library/Application Support/bbr/credentials.toml`
+- **Windows**: `%APPDATA%\bbr\credentials.toml`
 
 ### Required scopes
 

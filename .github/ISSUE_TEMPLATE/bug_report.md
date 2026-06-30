@@ -15,16 +15,16 @@ labels: bug
 ## Reproduction
 
 ```bash
-bb <command> ...
+bbr <command> ...
 ```
 
 ## Environment
 
-- `bb --version`:
+- `bbr --version`:
 - OS:
 - How `bbr` was installed:
 
-## Output of `bb <cmd> --json` (if relevant)
+## Output of `bbr <cmd> --json` (if relevant)
 
 ```json
 
