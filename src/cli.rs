@@ -1168,7 +1168,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
         },
         Some(Command::Batch { action }) => dispatch_batch(&cli.global, action).await,
         Some(Command::Open { action, g }) => commands::open::run(&g, action).await,
-        Some(Command::Auth { action }) => dispatch_auth(action),
+        Some(Command::Auth { action }) => dispatch_auth(action).await,
         Some(Command::Completion { shell, install }) => {
             if install {
                 commands::completion::install(shell)?;
@@ -1501,18 +1501,12 @@ async fn dispatch_batch(g: &GlobalArgs, action: BatchAction) -> Result<()> {
     }
 }
 
-fn dispatch_auth(action: AuthAction) -> Result<()> {
+async fn dispatch_auth(action: AuthAction) -> Result<()> {
     match action {
         AuthAction::Setup { username, token } => commands::auth::setup(username, token),
-        AuthAction::Status { g } => {
-            let rt = tokio::runtime::Handle::current();
-            rt.block_on(commands::auth::status(&g))
-        }
+        AuthAction::Status { g } => commands::auth::status(&g).await,
         AuthAction::Logout { g } => commands::auth::logout(&g),
-        AuthAction::Test { g } => {
-            let rt = tokio::runtime::Handle::current();
-            rt.block_on(commands::auth::test(&g))
-        }
+        AuthAction::Test { g } => commands::auth::test(&g).await,
     }
 }
 
