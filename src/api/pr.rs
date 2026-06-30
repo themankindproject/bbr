@@ -492,9 +492,10 @@ impl BitbucketClient {
     }
 
     /// `POST /repositories/{ws}/{slug}/pullrequests/{id}/approve`
-    pub async fn approve_pr(&self, workspace: &str, slug: &str, id: u64) -> Result<PullRequest> {
+    pub async fn approve_pr(&self, workspace: &str, slug: &str, id: u64) -> Result<()> {
         let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}/approve");
-        self.send(reqwest::Method::POST, &path, Some("{}")).await
+        let _: serde_json::Value = self.send(reqwest::Method::POST, &path, Some("{}")).await?;
+        Ok(())
     }
 
     /// `DELETE /repositories/{ws}/{slug}/pullrequests/{id}/approve`
