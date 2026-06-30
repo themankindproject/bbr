@@ -20,6 +20,7 @@
   - [`bbr api`](#bbr-api)
   - [`bbr completion`](#bbr-completion)
   - [`bbr update`](#bbr-update)
+  - [`bbr workspace`](#bbr-workspace)
 - [Authentication](#authentication)
 - [Exit Codes](#exit-codes)
 - [JSON Schema](#json-schema)
@@ -70,6 +71,8 @@ These flags are available on **every** subcommand:
 | `--quiet` | `-q` | Suppress spinners and non-essential output (env: `BBR_QUIET`) |
 | `--color` | | Force ANSI color output |
 | `--no-color` | | Disable ANSI color output |
+| `--no-unicode` | | Use ASCII instead of Unicode (for terminals without UTF-8 support) |
+| `--timeout <SECS>` | | HTTP request timeout in seconds (env: `BBR_TIMEOUT`, default: 30) |
 
 ---
 
@@ -457,11 +460,15 @@ bbr ci watch --interval-secs 10      # poll interval (default 5)
 
 #### `bbr ci trigger`
 
-Trigger a new pipeline for a branch.
+Trigger a new pipeline for a branch. Supports custom pipeline variables via `--var`.
 
 ```bash
 bbr ci trigger                       # current branch
 bbr ci trigger --branch main
+bbr ci trigger --var DEPLOY_ENV=staging                # set a variable
+bbr ci trigger --var DEPLOY_ENV=prod --var REGION=us-east-1  # multiple variables
+bbr ci trigger --var SECRET_TOKEN=abc --secured SECRET_TOKEN  # encrypted variable
+bbr ci trigger --branch main --var DEPLOY_ENV=staging --json
 ```
 
 #### `bbr ci rerun`
@@ -612,6 +619,25 @@ bbr repo commits [--branch main] [--limit 50]  # commits (table)
 
 All support `--json`.
 
+#### `bbr repo permissions`
+
+List user and group permissions for the repository:
+
+```bash
+bbr repo permissions                       # table of users and groups
+bbr repo permissions --json                # machine-readable
+```
+
+Output:
+```
+● ws/repo
+────────────────────
+Type    Name              Permission
+User    alice@example.com  admin
+User    bob@example.com    write
+Group   developers         write
+```
+
 #### `bbr repo create`
 
 Create a new repository in the current workspace:
@@ -739,6 +765,7 @@ bbr deploy list                            # list deployments
 bbr deploy env list                        # list environments
 bbr deploy env create staging --env-type staging   # create environment
 bbr deploy env create prod --env-type production
+bbr deploy trigger <env-uuid> --commit <hash>  # trigger a deployment
 ```
 
 Environment types: `test`, `staging`, `production`.
@@ -858,6 +885,27 @@ bbr update --json                     # machine-readable version info
 ```
 
 Background version check: running `bbr status` (or bare `bbr`) automatically checks for updates once per 24 hours and prints a notice if a newer version is available. The check is silently skipped in CI environments.
+
+---
+
+### `bbr workspace`
+
+Manage Bitbucket workspaces.
+
+```bash
+bbr workspace list                           # list accessible workspaces
+bbr workspace list --role admin              # filter by role (member|contributor|admin)
+bbr workspace list --limit 50                # max results (default 25)
+bbr workspace list --json                    # machine-readable
+```
+
+Output:
+```
+Workspaces
+────────────────────
+  myteam          My Team
+  opensource      Open Source Project
+```
 
 ---
 
@@ -1006,6 +1054,7 @@ Exit codes are stable — scripts can branch on `$?`.
 | `BB_WORKSPACE` | Default workspace override | — |
 | `BB_SLUG` | Default repo slug override | — |
 | `BBR_QUIET` | Suppress spinners and non-essential output | — |
+| `BBR_TIMEOUT` | HTTP request timeout in seconds | 30 |
 | `NO_COLOR` | Disable color output | — |
 | `XDG_CONFIG_HOME` | Config directory (Linux) | `~/.config` |
 | `RUST_LOG` | Tracing log filter (overrides `--verbose`) | — |

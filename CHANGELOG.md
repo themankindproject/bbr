@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`bbr workspace list`** — list workspaces with `--role` filter and `--limit`.
+- **`bbr deploy trigger <env_uuid> --commit <hash>`** — trigger a deployment.
+- **`bbr repo permissions`** — list user and group permissions for the repository.
+- **`--no-unicode` global flag** — use ASCII characters instead of Unicode for terminals that don't support UTF-8.
+- **`--timeout` global flag** — configurable HTTP request timeout (env: `BBR_TIMEOUT`).
+- **`--var` and `--secured` flags on `bbr ci trigger`** — pass pipeline variables (repeatable `--var KEY=VALUE`).
+- **Git subprocess timeouts** — all `git` commands now time out (30s reads, 120s writes) via thread-safe `recv_timeout`.
+- **`Theme::empty()`, `Theme::checkmark()`, `Theme::cross()`** — standardized empty state and indicator helpers.
+- **`with_timeout()` constructor on `BitbucketClient`** — programmatic timeout configuration.
+
+### Performance
+
+- **Parallelized N+1 API calls in `ci_compare`** — four sequential HTTP loops merged into two concurrent batches, reducing wall-clock time for multi-step pipelines.
+- **Parallelized repo audit loop** — `bbr repo audit` now audits all repos concurrently instead of sequentially.
+- **Parallelized per-repo PR fetches in dashboard** — open and merged PR fetches now run concurrently via `tokio::join!`.
+- **Reused HTTP client for update checks** — `fetch_latest_release()` now uses a `OnceLock`-cached `reqwest::Client` instead of creating a new one per call.
+- **ASCII fast-path in `truncate()`** — avoids O(n) Unicode char scan for ASCII strings.
+
+### Changed
+
+- **Improved HTTP error messages** — 401, 403, and 404 errors now show human-readable descriptions when the API response lacks detail.
+- **Body serialization optimized** — `.to_string()` replaced with `.to_owned()` in `send()` to avoid unnecessary allocation.
+- `Theme` now tracks `unicode` field alongside `colors`.
+
+### Testing
+
+- All 202 tests pass. Clippy clean with `-D warnings`.
+
 ## [0.1.3] - 2026-06-30
 
 ### Added
