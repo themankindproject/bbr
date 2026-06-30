@@ -245,7 +245,7 @@ impl BitbucketClient {
         if let Some(b) = branch {
             path.push_str(&format!(
                 "&q=target.ref_name%3D%22{}%22",
-                super::pr::url_encode(b)
+                super::url_encode(b)
             ));
         }
         if limit > 100 {
@@ -272,7 +272,7 @@ impl BitbucketClient {
         if let Some(b) = branch {
             path.push_str(&format!(
                 "&q=target.ref_name%3D%22{}%22",
-                super::pr::url_encode(b)
+                super::url_encode(b)
             ));
         }
         let page: super::Paginated<Pipeline> = self.send(reqwest::Method::GET, &path, None).await?;

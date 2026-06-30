@@ -124,21 +124,6 @@ fn build_issue_query(
     parts.join(" AND ")
 }
 
-/// Percent-encode a string for use in URL query parameters.
-fn url_encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for byte in s.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char);
-            }
-            b' ' => out.push_str("%20"),
-            _ => out.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    out
-}
-
 impl BitbucketClient {
     #[allow(clippy::too_many_arguments)]
     pub async fn list_issues(
@@ -160,7 +145,7 @@ impl BitbucketClient {
             format!("/repositories/{workspace}/{slug}/issues?pagelen={pagelen}&sort=-updated_on")
         } else {
             // Basic URL-encoding for double quotes and spaces
-            let encoded_q = url_encode(&q);
+            let encoded_q = super::url_encode(&q);
             format!(
                 "/repositories/{workspace}/{slug}/issues?pagelen={pagelen}&sort=-updated_on&q={encoded_q}"
             )

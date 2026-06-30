@@ -336,13 +336,13 @@ impl BitbucketClient {
             q_parts.push(format!("state%3D%22{s}%22"));
         }
         if let Some(a) = author {
-            q_parts.push(format!("author.display_name%3D%22{}%22", url_encode(a)));
+            q_parts.push(format!("author.display_name%3D%22{}%22", super::url_encode(a)));
         }
         if let Some(b) = source_branch {
-            q_parts.push(format!("source.branch.name%3D%22{}%22", url_encode(b)));
+            q_parts.push(format!("source.branch.name%3D%22{}%22", super::url_encode(b)));
         }
         if let Some(r) = reviewer {
-            q_parts.push(format!("reviewers.display_name%3D%22{}%22", url_encode(r)));
+            q_parts.push(format!("reviewers.display_name%3D%22{}%22", super::url_encode(r)));
         }
         if !q_parts.is_empty() {
             path.push_str(&format!("&q={}", q_parts.join("+AND+")));
@@ -388,7 +388,7 @@ impl BitbucketClient {
              values.comment_count,values.task_count,values.close_source_branch,\
              values.updated_on&\
              pagelen=1&sort=-updated_on&q=source.branch.name%3D%22{}%22+AND+state%3D%22OPEN%22",
-            url_encode(branch),
+            super::url_encode(branch),
         );
         let page: super::Paginated<PullRequest> =
             self.send(reqwest::Method::GET, &path, None).await?;
@@ -412,7 +412,7 @@ impl BitbucketClient {
              values.participants.display_name,values.participants.role,values.participants.approved,\
              values.reviewers.display_name,values.reviewers.role,values.reviewers.approved&\
              pagelen=1&sort=-updated_on&q=source.branch.name%3D%22{}%22+AND+state%3D%22OPEN%22",
-            url_encode(branch),
+            super::url_encode(branch),
         );
         let page: super::Paginated<PullRequest> =
             self.send(reqwest::Method::GET, &path, None).await?;
@@ -621,20 +621,6 @@ impl BitbucketClient {
     }
 }
 
-/// Minimal percent-encoder for the few query values we build by hand.
-pub(crate) fn url_encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for &b in s.as_bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -671,20 +657,20 @@ mod tests {
 
     #[test]
     fn url_encode_does_not_change_alphanumeric() {
-        assert_eq!(url_encode("hello123"), "hello123");
+        assert_eq!(crate::api::url_encode("hello123"), "hello123");
     }
 
     #[test]
     fn url_encode_encodes_special_chars() {
-        assert_eq!(url_encode("a b"), "a%20b");
-        assert_eq!(url_encode("feature/test"), "feature%2Ftest");
-        assert_eq!(url_encode("a.b"), "a.b");
-        assert_eq!(url_encode("a~b"), "a~b");
+        assert_eq!(crate::api::url_encode("a b"), "a%20b");
+        assert_eq!(crate::api::url_encode("feature/test"), "feature%2Ftest");
+        assert_eq!(crate::api::url_encode("a.b"), "a.b");
+        assert_eq!(crate::api::url_encode("a~b"), "a~b");
     }
 
     #[test]
     fn url_encode_encodes_quotes() {
-        assert_eq!(url_encode("a\"b"), "a%22b");
+        assert_eq!(crate::api::url_encode("a\"b"), "a%22b");
     }
 
     #[test]

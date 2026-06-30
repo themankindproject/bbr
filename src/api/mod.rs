@@ -354,6 +354,21 @@ fn one_line(s: &str) -> String {
     s.trim().replace('\n', " ").chars().take(300).collect()
 }
 
+/// Percent-encode a string for use in URL query parameters.
+pub(crate) fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for byte in s.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char);
+            }
+            b' ' => out.push_str("%20"),
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
 /// Simple jitter based on process ID and monotonic counter to avoid thundering herd.
 fn rand_jitter() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};

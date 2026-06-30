@@ -139,7 +139,7 @@ impl BitbucketClient {
         let pagelen = limit.min(100);
         let mut path = format!("/repositories/{workspace}/{slug}/commits?pagelen={pagelen}");
         if let Some(b) = branch {
-            path.push_str(&format!("&include={}", super::pr::url_encode(b)));
+            path.push_str(&format!("&include={}", super::url_encode(b)));
         }
         if limit > 100 {
             self.fetch_all_pages(&path, limit as usize).await
@@ -181,7 +181,7 @@ impl BitbucketClient {
 
     /// `DELETE /repositories/{ws}/{slug}/refs/branches/{name}` — delete a remote branch.
     pub async fn delete_branch(&self, workspace: &str, slug: &str, name: &str) -> Result<()> {
-        let encoded = super::pr::url_encode(name);
+        let encoded = super::url_encode(name);
         let path = format!("/repositories/{workspace}/{slug}/refs/branches/{encoded}");
         let _: serde_json::Value = self.send(reqwest::Method::DELETE, &path, None).await?;
         Ok(())

@@ -414,19 +414,8 @@ fn render_short(out: &StatusOut) -> String {
     )
 }
 
-fn render_human(out: &StatusOut) -> String {
-    let theme = Theme::current();
-    let mut s = String::new();
-    s.push_str(&format!("{}\n", theme.bold(&out.repo.full_name)));
-    s.push_str(&format!("{}\n", theme.separator()));
-    s.push_str(&format!(
-        "{} {}\n",
-        theme.label("Branch:"),
-        theme.bold(&out.branch)
-    ));
-    s.push_str(&format!("{} {}\n", theme.label("Commit:"), &out.commit));
-
-    match &out.pr {
+fn render_pr_section(s: &mut String, theme: &Theme, pr: &Option<PrSummary>) {
+    match pr {
         Some(pr) => {
             s.push_str(&format!(
                 "\n{} PR #{} — {}\n",
@@ -476,8 +465,10 @@ fn render_human(out: &StatusOut) -> String {
             theme.dim("(no open PR for this branch)")
         )),
     }
+}
 
-    match &out.pipeline {
+fn render_pipeline_section(s: &mut String, theme: &Theme, pipeline: &Option<PipelineSummary>) {
+    match pipeline {
         Some(p) => {
             let dur_str = human_duration(p.duration_seconds);
             s.push_str(&format!("\n{} Pipeline\n", theme.bullet(),));
@@ -529,22 +520,44 @@ fn render_human(out: &StatusOut) -> String {
             theme.dim("(no pipeline for this branch)")
         )),
     }
+}
 
-    if !out.commit_statuses.is_empty() {
+fn render_build_statuses(s: &mut String, theme: &Theme, statuses: &[BuildStatusSummary]) {
+    if !statuses.is_empty() {
         s.push_str(&format!("\n{} Build Statuses\n", theme.bullet()));
         let mut table = Table::new().headers(["State", "Key"]);
-        for cs in &out.commit_statuses {
+        for cs in statuses {
             table = table.add_row([theme.status_glyph(&cs.state), cs.key.clone()]);
         }
         s.push_str(&table.render());
     }
+}
 
-    if !out.suggested_commands.is_empty() {
+fn render_suggested_commands(s: &mut String, theme: &Theme, cmds: &[String]) {
+    if !cmds.is_empty() {
         s.push_str(&format!("\n{}\n", theme.label("Next:")));
-        for cmd in &out.suggested_commands {
+        for cmd in cmds {
             s.push_str(&format!("  {cmd}\n"));
         }
     }
+}
+
+fn render_human(out: &StatusOut) -> String {
+    let theme = Theme::current();
+    let mut s = String::new();
+    s.push_str(&format!("{}\n", theme.bold(&out.repo.full_name)));
+    s.push_str(&format!("{}\n", theme.separator()));
+    s.push_str(&format!(
+        "{} {}\n",
+        theme.label("Branch:"),
+        theme.bold(&out.branch)
+    ));
+    s.push_str(&format!("{} {}\n", theme.label("Commit:"), &out.commit));
+
+    render_pr_section(&mut s, theme, &out.pr);
+    render_pipeline_section(&mut s, theme, &out.pipeline);
+    render_build_statuses(&mut s, theme, &out.commit_statuses);
+    render_suggested_commands(&mut s, theme, &out.suggested_commands);
 
     s
 }
@@ -560,109 +573,8 @@ fn render_overview_human(out: &OverviewOut) -> String {
     ));
     s.push_str(&format!("{}\n", theme.separator()));
 
-    match &out.pr {
-        Some(pr) => {
-            s.push_str(&format!(
-                "\n{} PR #{} — {}\n",
-                theme.bullet(),
-                pr.id,
-                pr.state.to_lowercase()
-            ));
-            s.push_str(&format!("{}\n", theme.separator()));
-            s.push_str(&format!(
-                "  {} {} → {}\n",
-                theme.label("Branches:"),
-                pr.source,
-                pr.destination
-            ));
-            s.push_str(&format!("  {}{}\n", theme.label("Title:"), pr.title));
-            if let Some(a) = &pr.author {
-                s.push_str(&format!("  {}{a}\n", theme.label("Author:")));
-            }
-            if !pr.reviewers.is_empty() {
-                let reviewers = pr
-                    .reviewers
-                    .iter()
-                    .map(|r| {
-                        format!(
-                            "{}{}",
-                            r.display_name,
-                            if r.approved { " (approved)" } else { "" }
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                s.push_str(&format!("  {}{reviewers}\n", theme.label("Reviewers:")));
-            }
-            s.push_str(&format!(
-                "  {} {}  |  {} {}\n",
-                theme.label("Comments:"),
-                pr.comment_count,
-                theme.label("Tasks:"),
-                pr.task_count
-            ));
-            if let Some(u) = &pr.url {
-                s.push_str(&format!("  {}{u}\n", theme.label("URL:")));
-            }
-        }
-        None => s.push_str(&format!(
-            "\n  {} PR: none\n",
-            theme.dim("(no open PR for this branch)")
-        )),
-    }
-
-    match &out.pipeline {
-        Some(p) => {
-            let dur_str = human_duration(p.duration_seconds);
-            s.push_str(&format!("\n{} Pipeline\n", theme.bullet(),));
-            s.push_str(&format!("{}\n", theme.separator()));
-            s.push_str(&format!(
-                "  {}  {}  ({dur_str})\n",
-                theme.status_glyph(&p.state),
-                p.state,
-            ));
-            if let Some(b) = &p.branch {
-                s.push_str(&format!("  {}{b}\n", theme.label("Branch:")));
-            }
-            s.push_str(&format!(
-                "  {}{}\n",
-                theme.label("Commit:"),
-                p.commit.as_deref().unwrap_or("-")
-            ));
-            if !p.failing_steps.is_empty() {
-                s.push_str(&format!(
-                    "  {}{}\n",
-                    theme.label("Failing:"),
-                    p.failing_steps.join(", ")
-                ));
-            }
-            if let Some(u) = &p.url {
-                s.push_str(&format!("  {}{u}\n", theme.label("URL:")));
-            }
-            if !p.steps.is_empty() {
-                let max_width = p
-                    .steps
-                    .iter()
-                    .map(|s| s.name.chars().count())
-                    .max()
-                    .unwrap_or(0)
-                    .max(18);
-                for st in &p.steps {
-                    s.push_str(&format!(
-                        "  {} {:<width$}  {}\n",
-                        theme.status_glyph(&st.state),
-                        st.name,
-                        human_duration(st.duration_seconds),
-                        width = max_width
-                    ));
-                }
-            }
-        }
-        None => s.push_str(&format!(
-            "\n  {} CI: none\n",
-            theme.dim("(no pipeline for this branch)")
-        )),
-    }
+    render_pr_section(&mut s, theme, &out.pr);
+    render_pipeline_section(&mut s, theme, &out.pipeline);
 
     if !out.recent_prs.is_empty() {
         s.push_str(&format!("\n{} Recent PRs\n", theme.bullet()));
@@ -706,21 +618,8 @@ fn render_overview_human(out: &OverviewOut) -> String {
         s.push_str(&table.render());
     }
 
-    if !out.commit_statuses.is_empty() {
-        s.push_str(&format!("\n{} Build Statuses\n", theme.bullet()));
-        let mut table = Table::new().headers(["State", "Key"]);
-        for cs in &out.commit_statuses {
-            table = table.add_row([theme.status_glyph(&cs.state), cs.key.clone()]);
-        }
-        s.push_str(&table.render());
-    }
-
-    if !out.suggested_commands.is_empty() {
-        s.push_str(&format!("\n{}\n", theme.label("Next:")));
-        for cmd in &out.suggested_commands {
-            s.push_str(&format!("  {cmd}\n"));
-        }
-    }
+    render_build_statuses(&mut s, theme, &out.commit_statuses);
+    render_suggested_commands(&mut s, theme, &out.suggested_commands);
 
     s
 }

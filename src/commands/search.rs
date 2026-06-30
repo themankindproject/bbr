@@ -67,21 +67,11 @@ impl BitbucketClient {
     ) -> Result<SearchApiResponse> {
         let path = format!(
             "/workspaces/{workspace}/search/code?search_query={}&pagelen={}",
-            url_encode(query),
+            crate::api::url_encode(query),
             limit.min(100),
         );
         self.send(reqwest::Method::GET, &path, None).await
     }
-}
-
-fn url_encode(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
-            ' ' => "%20".to_string(),
-            _ => format!("%{:02X}", c as u8),
-        })
-        .collect()
 }
 
 pub async fn run(g: &GlobalArgs, query: &str, limit: u32) -> Result<()> {
