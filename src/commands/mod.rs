@@ -24,6 +24,7 @@ pub mod stack;
 pub mod status;
 pub mod update;
 pub mod webhook;
+pub mod workspace;
 
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -39,7 +40,11 @@ use crate::git::{self, Head, RepoIdentity};
 pub fn client(g: &GlobalArgs) -> Result<BitbucketClient> {
     let creds = crate::auth::resolve()?;
     let base = resolve_api_base(g);
-    creds.into_client(base)
+    if let Some(timeout) = g.timeout {
+        creds.into_client_with_timeout(base, timeout)
+    } else {
+        creds.into_client(base)
+    }
 }
 
 static CACHED_REPO: OnceLock<RepoIdentity> = OnceLock::new();
@@ -158,6 +163,18 @@ pub fn human_duration(secs: u64) -> String {
 
 /// Truncate a string to `n` characters, appending an ellipsis if truncated.
 pub fn truncate(s: &str, n: usize) -> String {
+    // Fast path: if the string is ASCII and fits, return as-is
+    if s.is_ascii() {
+        return if s.len() <= n {
+            s.to_string()
+        } else {
+            let mut out = String::with_capacity(n + 4);
+            out.push_str(&s[..n]);
+            out.push('…');
+            out
+        };
+    }
+    // Slow path: Unicode-aware character counting
     if s.chars().count() <= n {
         s.to_string()
     } else {

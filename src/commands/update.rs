@@ -7,6 +7,7 @@
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
@@ -163,14 +164,20 @@ fn install_dir() -> Option<PathBuf> {
 const GITHUB_API: &str = "https://api.github.com/repos/themankindproject/bbr/releases/latest";
 const USER_AGENT: &str = concat!("bbr-update/", env!("CARGO_PKG_VERSION"));
 
-async fn fetch_latest_release() -> Result<GithubRelease> {
-    let client = reqwest::Client::builder()
-        .user_agent(USER_AGENT)
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(BitbucketError::Http)?;
+/// Shared HTTP client for update checks (reused across calls).
+fn update_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .user_agent(USER_AGENT)
+            .timeout(Duration::from_secs(10))
+            .build()
+            .expect("failed to build update HTTP client")
+    })
+}
 
-    let resp = client
+async fn fetch_latest_release() -> Result<GithubRelease> {
+    let resp = update_client()
         .get(GITHUB_API)
         .header("Accept", "application/json")
         .send()

@@ -54,9 +54,14 @@ impl std::fmt::Debug for BitbucketClient {
 }
 
 impl BitbucketClient {
-    /// Construct a new client. Uses rustls and a 30s timeout.
+    /// Construct a new client. Uses rustls and a configurable timeout (default 30s).
     /// Auth is always HTTP Basic for Atlassian API tokens.
     pub fn new(base_url: &str, creds: Credentials) -> Result<Self> {
+        Self::with_timeout(base_url, creds, 30)
+    }
+
+    /// Construct a new client with a specific timeout in seconds.
+    pub fn with_timeout(base_url: &str, creds: Credentials, timeout_secs: u64) -> Result<Self> {
         let auth_header = match creds.kind {
             CredentialKind::ApiToken => {
                 let raw = format!("{}:{}", creds.username, creds.secret);
@@ -66,7 +71,7 @@ impl BitbucketClient {
         };
         let inner = Client::builder()
             .user_agent(concat!("bbr/", env!("CARGO_PKG_VERSION")))
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(timeout_secs))
             .build()
             .map_err(BitbucketError::Http)?;
         Ok(Self {
@@ -109,7 +114,7 @@ impl BitbucketClient {
             if let Some(b) = body {
                 req = req
                     .header(reqwest::header::CONTENT_TYPE, "application/json")
-                    .body(b.to_string());
+                    .body(b.to_owned());
             }
             let resp = req.send().await.map_err(BitbucketError::Http)?;
             match self.decode(resp).await {
@@ -334,8 +339,30 @@ pub fn map_error(status: StatusCode, body: &str) -> BitbucketError {
     }
 
     match status {
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => BitbucketError::AuthFailed(full),
-        StatusCode::NOT_FOUND => BitbucketError::NotFound(full),
+        StatusCode::UNAUTHORIZED => {
+            let msg = if full.is_empty() || full.starts_with("HTTP ") {
+                "HTTP 401: Unauthorized. Check your credentials are valid.".to_string()
+            } else {
+                format!("HTTP 401 Unauthorized: {full}")
+            };
+            BitbucketError::AuthFailed(msg)
+        }
+        StatusCode::FORBIDDEN => {
+            let msg = if full.is_empty() || full.starts_with("HTTP ") {
+                "HTTP 403: Permission denied. Your token may lack the required scopes.".to_string()
+            } else {
+                format!("HTTP 403 Forbidden: {full}")
+            };
+            BitbucketError::AuthFailed(msg)
+        }
+        StatusCode::NOT_FOUND => {
+            let msg = if full.is_empty() || full.starts_with("HTTP ") {
+                "HTTP 404: Not found. The resource or endpoint does not exist.".to_string()
+            } else {
+                format!("HTTP 404 Not Found: {full}")
+            };
+            BitbucketError::NotFound(msg)
+        }
         StatusCode::TOO_MANY_REQUESTS => {
             BitbucketError::RateLimit(format!("HTTP {status}: {full}"))
         }
