@@ -189,76 +189,85 @@ async fn compute_test_deltas(
     steps_a: &[PipelineStep],
     steps_b: &[PipelineStep],
 ) -> Result<Option<TestDelta>> {
-    let mut total_a = 0;
-    let mut passed_a = 0;
-    let mut failed_a = 0;
-    let mut skipped_a = 0;
+    // Fetch test reports for both pipelines concurrently
+    let reports_a_futs: Vec<_> = steps_a
+        .iter()
+        .map(|step| client.test_report(workspace, slug, &pipe_a.uuid, &step.uuid))
+        .collect();
+    let reports_b_futs: Vec<_> = steps_b
+        .iter()
+        .map(|step| client.test_report(workspace, slug, &pipe_b.uuid, &step.uuid))
+        .collect();
+
+    let (reports_a, reports_b): (Vec<_>, Vec<_>) = tokio::join!(
+        futures::future::join_all(reports_a_futs),
+        futures::future::join_all(reports_b_futs)
+    );
+
+    let mut total_a = 0u64;
+    let mut passed_a = 0u64;
+    let mut failed_a = 0u64;
+    let mut skipped_a = 0u64;
     let mut has_tests_a = false;
 
-    for step in steps_a {
-        if let Ok(report) = client
-            .test_report(workspace, slug, &pipe_a.uuid, &step.uuid)
-            .await
-        {
-            total_a += report.total;
-            passed_a += report.successful;
-            failed_a += report.failed + report.errors;
-            skipped_a += report.skipped;
-            has_tests_a = true;
-        }
+    for report in reports_a.into_iter().flatten() {
+        total_a += report.total;
+        passed_a += report.successful;
+        failed_a += report.failed + report.errors;
+        skipped_a += report.skipped;
+        has_tests_a = true;
     }
 
-    let mut total_b = 0;
-    let mut passed_b = 0;
-    let mut failed_b = 0;
-    let mut skipped_b = 0;
+    let mut total_b = 0u64;
+    let mut passed_b = 0u64;
+    let mut failed_b = 0u64;
+    let mut skipped_b = 0u64;
     let mut has_tests_b = false;
 
-    for step in steps_b {
-        if let Ok(report) = client
-            .test_report(workspace, slug, &pipe_b.uuid, &step.uuid)
-            .await
-        {
-            total_b += report.total;
-            passed_b += report.successful;
-            failed_b += report.failed + report.errors;
-            skipped_b += report.skipped;
-            has_tests_b = true;
-        }
+    for report in reports_b.into_iter().flatten() {
+        total_b += report.total;
+        passed_b += report.successful;
+        failed_b += report.failed + report.errors;
+        skipped_b += report.skipped;
+        has_tests_b = true;
     }
 
     if !has_tests_a && !has_tests_b {
         return Ok(None);
     }
 
-    // Now gather failed cases to compute new failures and fixed failures
+    // Fetch test cases for both pipelines concurrently
+    let cases_a_futs: Vec<_> = steps_a
+        .iter()
+        .map(|step| client.test_cases(workspace, slug, &pipe_a.uuid, &step.uuid, 100))
+        .collect();
+    let cases_b_futs: Vec<_> = steps_b
+        .iter()
+        .map(|step| client.test_cases(workspace, slug, &pipe_b.uuid, &step.uuid, 100))
+        .collect();
+
+    let (cases_a, cases_b): (Vec<_>, Vec<_>) = tokio::join!(
+        futures::future::join_all(cases_a_futs),
+        futures::future::join_all(cases_b_futs)
+    );
+
     let mut failed_cases_a = Vec::new();
-    for step in steps_a {
-        if let Ok(cases) = client
-            .test_cases(workspace, slug, &pipe_a.uuid, &step.uuid, 100)
-            .await
-        {
-            for c in cases {
-                if c.status == "FAILED" || c.status == "ERROR" || c.status == "FAILURE" {
-                    if let Some(name) = c.test_name {
-                        failed_cases_a.push(name);
-                    }
+    for cases in cases_a.into_iter().flatten() {
+        for c in cases {
+            if c.status == "FAILED" || c.status == "ERROR" || c.status == "FAILURE" {
+                if let Some(name) = c.test_name {
+                    failed_cases_a.push(name);
                 }
             }
         }
     }
 
     let mut failed_cases_b = Vec::new();
-    for step in steps_b {
-        if let Ok(cases) = client
-            .test_cases(workspace, slug, &pipe_b.uuid, &step.uuid, 100)
-            .await
-        {
-            for c in cases {
-                if c.status == "FAILED" || c.status == "ERROR" || c.status == "FAILURE" {
-                    if let Some(name) = c.test_name {
-                        failed_cases_b.push(name);
-                    }
+    for cases in cases_b.into_iter().flatten() {
+        for c in cases {
+            if c.status == "FAILED" || c.status == "ERROR" || c.status == "FAILURE" {
+                if let Some(name) = c.test_name {
+                    failed_cases_b.push(name);
                 }
             }
         }

@@ -124,8 +124,8 @@ pub async fn run_dashboard(
         let slug_clone = r.slug.clone();
         let client_ref = &client;
         futures.push(async move {
-            let open_prs = client_ref
-                .list_prs(
+            let (open_prs, merged_prs) = tokio::join!(
+                client_ref.list_prs(
                     &ws_clone,
                     &slug_clone,
                     PrState::Open,
@@ -135,11 +135,8 @@ pub async fn run_dashboard(
                     None,
                     None,
                     None,
-                )
-                .await
-                .unwrap_or_default();
-            let merged_prs = client_ref
-                .list_prs(
+                ),
+                client_ref.list_prs(
                     &ws_clone,
                     &slug_clone,
                     PrState::Merged,
@@ -150,9 +147,12 @@ pub async fn run_dashboard(
                     None,
                     None,
                 )
-                .await
-                .unwrap_or_default();
-            (slug_clone, open_prs, merged_prs)
+            );
+            (
+                slug_clone,
+                open_prs.unwrap_or_default(),
+                merged_prs.unwrap_or_default(),
+            )
         });
     }
 

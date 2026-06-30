@@ -6,6 +6,7 @@ use crate::commands::{client, make_spinner, resolve_repo};
 use crate::error::Result;
 use crate::output::theme::Theme;
 use crate::output::Formatter;
+use futures::future::join_all;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -56,22 +57,33 @@ pub async fn run_audit(g: &GlobalArgs, slug_arg: Option<&str>) -> Result<()> {
         client.list_repos(ws, 100).await?
     };
 
-    let mut audits = Vec::new();
+    spinner.set_message(format!(
+        "Auditing {} repositories concurrently...",
+        repos.len()
+    ));
 
-    for r in &repos {
-        spinner.set_message(format!("Auditing repository {}...", r.slug));
+    // Fetch branch restrictions and default reviewers for all repos concurrently
+    let audit_futures: Vec<_> = repos
+        .iter()
+        .map(|r| {
+            let ws = ws.clone();
+            let slug = r.slug.clone();
+            let client = &client;
+            async move {
+                let (restrictions_res, reviewers_res) = tokio::join!(
+                    client.list_branch_restrictions(&ws, &slug),
+                    client.list_default_reviewers(&ws, &slug)
+                );
 
-        let (restrictions_res, reviewers_res) = tokio::join!(
-            client.list_branch_restrictions(ws, &r.slug),
-            client.list_default_reviewers(ws, &r.slug)
-        );
+                let restrictions = restrictions_res.unwrap_or_default();
+                let reviewers = reviewers_res.unwrap_or_default();
 
-        let restrictions = restrictions_res.unwrap_or_default();
-        let reviewers = reviewers_res.unwrap_or_default();
+                audit_repo(&slug, &restrictions, &reviewers)
+            }
+        })
+        .collect();
 
-        let audit_entry = audit_repo(&r.slug, &restrictions, &reviewers);
-        audits.push(audit_entry);
-    }
+    let audits = join_all(audit_futures).await;
 
     spinner.finish_and_clear();
 
