@@ -1,6 +1,7 @@
 # bbr — BitBucket Remote CLI
 
 [![CI](https://img.shields.io/github/actions/workflow/status/themankindproject/bbr/ci.yml?branch=main&label=CI)](https://github.com/themankindproject/bbr/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/github/v/release/themankindproject/bbr)](https://github.com/themankindproject/bbr/releases/latest)
 ![Rust Version](https://img.shields.io/badge/rust-1.75%2B-blue)
 [![License](https://img.shields.io/crates/l/bbr)](LICENSE)
 
