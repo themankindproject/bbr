@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Better error hints** — `bbr` now shows scoped guidance on auth failures
   (API token URL, minimum required scopes), rate-limit hints, and timeout hints.
 - `bbr repo commits` table now includes an Author column.
+- **`--no-pager` global flag** — disables output paging through `less`.
+- **`--quiet` global flag** — suppresses spinners and non-essential output for scripting.
+  Also respects `BBR_QUIET` env var.
+- **`--color` / `--no-color` global flags** — force ANSI color output on or off.
+- `Formatter::from_args()` constructor accepts `no_pager` flag.
+- `make_formatter()` helper in `commands/mod.rs` for consistent flag propagation.
 
 ### Performance
 
@@ -35,6 +41,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Eliminated unnecessary `.clone()` on `Option<String>` render fields in
   `pr.rs` and `status.rs` (6 call sites) — uses `as_deref().unwrap_or("-").to_string()` instead.
 - Rate-limit jitter improved from 0–2s (`subsec_nanos % 3`) to 0–4s counter-based spread.
+- **`bbr batch merge-approved`** — per-PR fetches parallelized with bounded concurrency
+  (`buffer_unordered(10)`). Reduces wall-clock time from ~100 sequential calls to ~10 batches.
+
+### Changed
+
+- **`dispatch()` refactored** — the 463-line function is now a thin routing table calling
+  `dispatch_status`, `dispatch_pr`, `dispatch_ci`, `dispatch_repo`, `dispatch_batch`,
+  `dispatch_auth`, `dispatch_webhook`, `dispatch_deploy`, `dispatch_issue`.
+- **`url_encode` consolidated** — single implementation in `api/mod.rs`, removed duplicates
+  from `api/pr.rs`, `api/issue.rs`, and `commands/search.rs`.
+- **Status rendering deduplicated** — `render_human` and `render_overview_human` now share
+  `render_pr_section`, `render_pipeline_section`, `render_build_statuses`,
+  `render_suggested_commands` helpers.
+- **Race condition documented** — `update_webhook` and `update_issue` now log
+  `tracing::debug` noting the inherent GET-then-PUT pattern (Bitbucket has no ETag/PATCH).
+- `Theme::set_color_override()` for CLI flag integration (must be called before first
+  `Theme::current()` access).
 
 ### Fixed
 
@@ -73,6 +96,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - All `bb` references in docs (`output-schema.md`, `USAGE.md`, issue templates, `README.md`
   MSRV badge) corrected to `bbr`.
 - `Cargo.toml` repository/homepage URLs updated to `themankindproject/bbr`.
+- `from_env()` now warns when `BITBUCKET_USERNAME` is empty but `BITBUCKET_TOKEN` is set.
+
+### Testing
+
+- **18 new unit tests** for `update.rs` (parse_version, is_newer, render_update),
+  `ci_compare.rs` (compute_step_deltas, render_compare), and `export.rs`
+  (format_slack, format_markdown).
+- **9 new integration tests** (`tests/api_retry.rs`) covering:
+  - Rate-limit retry: 429→200 success, exhaustion after 3×429, send_raw retry.
+  - Pagination: multi-page follow, limit enforcement, single-page.
+  - send_raw: success body, error mapping.
+  - Error envelope: scope table parsing.
+- Total test count: 153 → 203 (across unit, integration, and smoke suites).
 
 ## [0.1.1] - 2026-06-29
 

@@ -65,6 +65,10 @@ These flags are available on **every** subcommand:
 | `--verbose` | `-v` | Increase verbosity (`-v` = info, `-vv` = debug) |
 | `--workspace <WS>` | | Override workspace inferred from git remote (env: `BB_WORKSPACE`) |
 | `--api-base <URL>` | | Override the Bitbucket API base URL (env: `BITBUCKET_API_BASE`) |
+| `--no-pager` | | Disable output paging (don't pipe through `less`) |
+| `--quiet` | `-q` | Suppress spinners and non-essential output (env: `BBR_QUIET`) |
+| `--color` | | Force ANSI color output |
+| `--no-color` | | Disable ANSI color output |
 
 ---
 
@@ -895,6 +899,7 @@ Exit codes are stable — scripts can branch on `$?`.
 | `BITBUCKET_TOKEN` | Atlassian API token | — |
 | `BITBUCKET_API_BASE` | API base URL | `https://api.bitbucket.org/2.0` |
 | `BB_WORKSPACE` | Default workspace override | — |
+| `BBR_QUIET` | Suppress spinners and non-essential output | — |
 | `NO_COLOR` | Disable color output | — |
 | `XDG_CONFIG_HOME` | Config directory (Linux) | `~/.config` |
 | `RUST_LOG` | Tracing log filter (overrides `--verbose`) | — |
