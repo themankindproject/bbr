@@ -18,6 +18,7 @@ target
 CLAUDE.md
 .claude/
 .codex/
+.commandcode/
 .agents/
 
 # OS
