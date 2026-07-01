@@ -239,10 +239,33 @@ bbr pr checkout 467
 
 #### `bbr pr diff`
 
-Print the diff for a PR with syntax highlighting and paging. Uses `bat` if installed, falls back to `less`/`$PAGER`, and writes raw to stdout when piped.
+Print the diff for a PR with syntax highlighting and paging. Default output is a rendered pretty diff with box-drawn file headers, line numbers, and ANSI colors. Falls back to `bat`/`less` with `--raw`.
 
 ```bash
-bbr pr diff 467
+bbr pr diff 467                          # pretty diff (default)
+bbr pr diff 467 --raw                    # bypass pretty renderer, use bat/less (legacy)
+bbr pr diff 467 --context 5              # more context lines around changes
+bbr pr diff 467 --no-syntax              # disable syntax highlighting
+bbr pr diff 467 --side-by-side           # side-by-side view (deferred, acts as unified)
+bbr pr diff 467 --json                   # structured JSON with file/hunk/line data
+bbr pr diff 467 --no-color               # plain text, no ANSI
+```
+
+Output (pretty mode):
+
+```
+╭─ ~  src/main.rs · +2, -1 ─────────────────────────────╮
+│ modified                                               │
+├────────────────────────────────────────────────────────┤
+@@ -1,3 +1,4 @@
+   1    1 │ fn hello() {
+   2      │     println!("goodbye");     ← red text
+        2 │     println!("hello");       ← green text
+        3 │     println!("world");       ← green text
+   3    4 │ }
+├────────────────────────────────────────────────────────┤
+│ 1 file changed, 2 insertions(+), 1 deletion(-)         │
+╰────────────────────────────────────────────────────────╯
 ```
 
 #### `bbr pr diffstat`

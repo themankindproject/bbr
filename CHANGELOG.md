@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Pretty diff renderer for `bbr pr diff`** — structured diff parser, intra-line word diffing, and a terminal renderer with box-drawing, line numbers, ANSI colors, collapsed context sections, and summary bar.
+  - New flags: `--raw` (legacy bat/less), `--context N` (lines around changes), `--no-syntax`, `--side-by-side`.
+  - `--json` now emits structured `files[]` / `hunks[]` / `lines[]` data instead of raw diff text.
+  - New dependencies: `similar` (word-level diffing), `unicode-width` (CJK-safe column width).
 - **`bbr workspace list`** — list workspaces with `--role` filter and `--limit`.
 - **`bbr deploy trigger <env_uuid> --commit <hash>`** — trigger a deployment.
 - **`bbr repo permissions`** — list user and group permissions for the repository.
