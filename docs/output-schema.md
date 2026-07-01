@@ -283,6 +283,58 @@ On failure, `success` is `false` and the process exits with code `5`.
 }
 ```
 
+## `bbr pr diff --json`
+
+```json
+{
+  "id": 467,
+  "files": [
+    {
+      "status": "modified",
+      "old_path": "src/main.rs",
+      "new_path": "src/main.rs",
+      "additions": 3,
+      "deletions": 1,
+      "hunks": [
+        {
+          "old_start": 42,
+          "old_lines": 4,
+          "new_start": 42,
+          "new_lines": 6,
+          "header": "fn foo()",
+          "lines": [
+            { "kind": "context",  "old_lineno": 42, "new_lineno": 42, "content": "fn foo() {" },
+            { "kind": "deletion", "old_lineno": 43, "new_lineno": null, "content": "    bar()" },
+            { "kind": "addition", "old_lineno": null, "new_lineno": 43, "content": "    baz()" },
+            { "kind": "context",  "old_lineno": 44, "new_lineno": 44, "content": "}" }
+          ]
+        }
+      ]
+    },
+    {
+      "status": "new",
+      "old_path": "",
+      "new_path": "src/lib.rs",
+      "additions": 5,
+      "deletions": 0,
+      "hunks": []
+    }
+  ],
+  "summary": {
+    "files_changed": 2,
+    "additions": 8,
+    "deletions": 1
+  }
+}
+```
+
+`status` values: `"added"`, `"deleted"`, `"modified"`, `"renamed"`.  
+`kind` values per line: `"context"`, `"addition"`, `"deletion"`.  
+`old_lineno` is `null` for additions; `new_lineno` is `null` for deletions.  
+`hunks` is empty for binary files or files with no parseable diff content.
+
+Pass `--raw --json` for the legacy flat shape `{ "id": 467, "diff": "..." }`.
+
 ## Exit codes
 
 | Code | Meaning |

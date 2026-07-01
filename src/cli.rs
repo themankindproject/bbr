@@ -411,6 +411,18 @@ pub enum PrAction {
     /// Show the diff for a pull request.
     Diff {
         id: u64,
+        /// Output raw diff text (legacy behavior: pipe through bat/less).
+        #[arg(long)]
+        raw: bool,
+        /// Use side-by-side view instead of unified.
+        #[arg(long)]
+        side_by_side: bool,
+        /// Number of context lines around changes (default: 3).
+        #[arg(long, default_value_t = 3)]
+        context: usize,
+        /// Disable syntax highlighting.
+        #[arg(long)]
+        no_syntax: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -1422,7 +1434,14 @@ async fn dispatch_pr(g: &GlobalArgs, action: PrAction) -> Result<()> {
         PrAction::Unapprove { id, g } => commands::pr::unapprove(&g, id).await,
         PrAction::Decline { id, g } => commands::pr::decline(&g, id).await,
         PrAction::Checkout { id, g } => commands::pr::checkout(&g, id).await,
-        PrAction::Diff { id, g } => commands::pr::diff(&g, id).await,
+        PrAction::Diff {
+            id,
+            raw,
+            side_by_side,
+            context,
+            no_syntax,
+            g,
+        } => commands::pr::diff(&g, id, raw, side_by_side, context, no_syntax).await,
         PrAction::Diffstat { id, g } => commands::pr::diffstat(&g, id).await,
         PrAction::Patch { id, output, g } => commands::pr::patch(&g, id, output.as_deref()).await,
         PrAction::Update {
@@ -1755,5 +1774,3 @@ fn init_tracing(verbose: u8) {
         .with_ansi(io::stderr().is_terminal())
         .init();
 }
-
-pub use crate::output::Formatter;

@@ -52,6 +52,12 @@ impl Theme {
         self.unicode
     }
 
+    /// Create a test theme with explicit settings. Only available in tests.
+    #[cfg(test)]
+    pub(crate) fn test_instance(colors: bool, unicode: bool) -> Theme {
+        Theme { colors, unicode }
+    }
+
     // --- semantic helpers -------------------------------------------------
 
     pub fn success<'a>(&self, s: &'a str) -> Cow<'a, str> {

@@ -1,5 +1,7 @@
 //! `bbr pr` — list / view / create / comment.
 
+use std::io::IsTerminal;
+
 use serde::Serialize;
 
 use crate::api::pr::{
@@ -17,7 +19,7 @@ use crate::error::{BitbucketError, Result};
 use crate::git;
 use crate::output::table::Table;
 use crate::output::theme::Theme;
-use crate::output::Formatter;
+use crate::output::{print_block, print_paginated, Formatter};
 
 // ---- JSON output shapes ---------------------------------------------------
 
@@ -701,7 +703,14 @@ pub async fn update(
     fmt.print(&out, &human)
 }
 
-pub async fn diff(g: &GlobalArgs, id: u64) -> Result<()> {
+pub async fn diff(
+    g: &GlobalArgs,
+    id: u64,
+    raw: bool,
+    side_by_side: bool,
+    context: usize,
+    no_syntax: bool,
+) -> Result<()> {
     let repo = resolve_repo(g)?;
     let client = client(g)?;
 
@@ -710,8 +719,46 @@ pub async fn diff(g: &GlobalArgs, id: u64) -> Result<()> {
     let body = client.pr_diff(&repo.workspace, &repo.slug, id).await?;
     spinner.finish_and_clear();
 
-    let fmt = Formatter::from_json_flag(g.json);
-    fmt.print_diff(&serde_json::json!({ "id": id, "diff": body }), &body)
+    if g.json {
+        // JSON: emit structured diff with file metadata
+        let files = crate::diff::parser::parse(&body);
+        let output = serde_json::json!({
+            "id": id,
+            "files": files,
+            "summary": {
+                "files_changed": files.len(),
+                "additions": files.iter().map(|f| f.additions).sum::<u32>(),
+                "deletions": files.iter().map(|f| f.deletions).sum::<u32>(),
+            }
+        });
+        let fmt = Formatter::from_json_flag(true);
+        fmt.print(&output, "")
+    } else if raw {
+        // Legacy: pipe raw diff through bat/less
+        let fmt = Formatter::from_json_flag(false);
+        fmt.print_diff(&serde_json::json!({ "id": id, "diff": body }), &body)
+    } else {
+        // Pretty diff renderer
+        let theme = Theme::current();
+        let files = crate::diff::parser::parse(&body);
+        let options = crate::diff::DiffRenderOptions {
+            context_lines: context,
+            mode: if side_by_side {
+                crate::diff::RenderMode::SideBySide
+            } else {
+                crate::diff::RenderMode::Unified
+            },
+            syntax_highlight: !no_syntax,
+        };
+        let rendered = crate::diff::renderer::render(&files, &options, theme);
+
+        // Paginate or print directly
+        if g.no_pager || !std::io::stdout().is_terminal() {
+            print_block(&rendered)
+        } else {
+            print_paginated(&rendered)
+        }
+    }
 }
 
 pub async fn diffstat(g: &GlobalArgs, id: Option<u64>) -> Result<()> {
