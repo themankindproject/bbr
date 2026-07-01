@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-07-02
+
 ### Added
 
 - **Pretty diff renderer for `bbr pr diff`** — structured diff parser, intra-line word diffing, and a terminal renderer with box-drawing, line numbers, ANSI colors, collapsed context sections, and summary bar.
@@ -327,7 +329,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credentials file opened with mode `0o600` at creation time on Unix, closing TOCTOU window.
 - No system keyring dependency (avoids 671 MB texlive pull).
 
-[Unreleased]: https://github.com/themankindproject/bbr/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/themankindproject/bbr/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/themankindproject/bbr/releases/tag/v0.1.4
 [0.1.3]: https://github.com/themankindproject/bbr/releases/tag/v0.1.3
 [0.1.2]: https://github.com/themankindproject/bbr/releases/tag/v0.1.2
 [0.1.1]: https://github.com/themankindproject/bbr/releases/tag/v0.1.1
