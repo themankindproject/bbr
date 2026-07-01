@@ -275,7 +275,7 @@ pub fn rebase(g: &GlobalArgs, push: bool) -> Result<()> {
                 steps.push(StackRebaseStep {
                     branch: pr.branch.clone(),
                     status: "ok".to_string(),
-                    message: format!("Successfully rebase{}", push_msg),
+                    message: format!("Successfully rebased{}", push_msg),
                 });
             }
             Err(e) => {

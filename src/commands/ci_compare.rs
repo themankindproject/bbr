@@ -65,7 +65,7 @@ async fn resolve_pipeline_ref(
             BitbucketError::Other(format!("No pipeline found on branch {current_branch}"))
         })
     } else if let Ok(build_num) = ref_str.parse::<u64>() {
-        let pipelines = client.list_pipelines(workspace, slug, None, 100).await?;
+        let pipelines = client.list_pipelines(workspace, slug, None, 1000).await?;
         let p = pipelines.into_iter().find(|p| p.build_number == build_num);
         p.ok_or_else(|| {
             BitbucketError::Other(format!("No pipeline found with build number {build_num}"))

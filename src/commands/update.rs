@@ -165,19 +165,25 @@ const GITHUB_API: &str = "https://api.github.com/repos/themankindproject/bbr/rel
 const USER_AGENT: &str = concat!("bbr-update/", env!("CARGO_PKG_VERSION"));
 
 /// Shared HTTP client for update checks (reused across calls).
-fn update_client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+fn update_client() -> Result<&'static reqwest::Client> {
+    static CLIENT: OnceLock<Option<reqwest::Client>> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .timeout(Duration::from_secs(10))
             .build()
-            .expect("failed to build update HTTP client")
+            .ok()
+    });
+    CLIENT.get().and_then(|c| c.as_ref()).ok_or_else(|| {
+        BitbucketError::Other(
+            "failed to build HTTP client for update check (TLS backend missing?)".into(),
+        )
     })
 }
 
 async fn fetch_latest_release() -> Result<GithubRelease> {
-    let resp = update_client()
+    let client = update_client()?;
+    let resp = client
         .get(GITHUB_API)
         .header("Accept", "application/json")
         .send()
@@ -297,7 +303,8 @@ pub async fn run(g: &GlobalArgs, check_only: bool) -> Result<()> {
 
     loading.finish_and_clear();
 
-    eprintln!("✓  Updated bbr to {latest}");
+    let theme = Theme::current();
+    eprintln!("{}  Updated bbr to {latest}", theme.checkmark());
 
     write_cache(&UpdateCache {
         last_check_epoch: SystemTime::now()

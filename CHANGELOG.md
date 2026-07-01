@@ -31,6 +31,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Reused HTTP client for update checks** — `fetch_latest_release()` now uses a `OnceLock`-cached `reqwest::Client` instead of creating a new one per call.
 - **ASCII fast-path in `truncate()`** — avoids O(n) Unicode char scan for ASCII strings.
 
+### Fixed
+
+- **`bbr update` no longer panics on TLS misconfiguration** — `update_client()` now returns `Result`
+  instead of `expect()`, so update checks gracefully degrade when the HTTP client fails to build.
+- **`git checkout_branch` locale-independent** — uses `git rev-parse --verify` exit code
+  instead of matching against locale-dependent error strings, fixing failures on non-English systems.
+- **`bbr batch merge-approved` overly restrictive approval check** — now accepts PRs with at least
+  one approval instead of requiring all assigned reviewers to approve.
+- **`bbr pr stack rebase` typo** — success message now reads "Successfully rebased" instead of "Successfully rebase".
+- **`bbr ci compare` build number lookup only checked first 100 pipelines** — increased limit to
+  1000 to trigger automatic pagination, correctly finding older builds.
+- **Auth test mutex poison recovery** — test mutex now recovers from poisoned state via
+  `unwrap_or_else(|e| e.into_inner())` instead of panicking on subsequent test failures.
+- **`bbr config path/show/set` ignored `--json`** — all config commands now route through
+  `Formatter::from_json_flag(g.json)` instead of being hardcoded to human mode.
+- **`bbr status --export slack|markdown` used `println!`** — switched to `print_block()` to
+  avoid corrupting `--json` output.
+- **`bbr update` used hardcoded `✓` glyph** — now uses `Theme::checkmark()` to respect
+  `--no-unicode`.
+- **`commit_statuses` paginated with `pagelen=25`** — increased to `pagelen=100` for fewer API calls.
+
 ### Changed
 
 - **Improved HTTP error messages** — 401, 403, and 404 errors now show human-readable descriptions when the API response lacks detail.
@@ -39,7 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
-- All 202 tests pass. Clippy clean with `-D warnings`.
+- All 222 tests pass. Clippy clean with `-D warnings`.
 
 ## [0.1.3] - 2026-06-30
 

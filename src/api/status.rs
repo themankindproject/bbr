@@ -47,7 +47,7 @@ impl BitbucketClient {
         slug: &str,
         commit: &str,
     ) -> Result<super::Paginated<BuildStatus>> {
-        let path = format!("/repositories/{workspace}/{slug}/commit/{commit}/statuses?pagelen=25");
+        let path = format!("/repositories/{workspace}/{slug}/commit/{commit}/statuses?pagelen=100");
         self.send(reqwest::Method::GET, &path, None).await
     }
 

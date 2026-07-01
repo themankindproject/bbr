@@ -865,15 +865,23 @@ pub enum AuthAction {
 #[derive(Debug, Subcommand)]
 pub enum ConfigAction {
     /// Print the config file path.
-    Path,
+    Path {
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
     /// Print the current config as JSON.
-    Show,
+    Show {
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
     /// Set a config value (key value).
     Set {
         /// Config key (e.g. workspace).
         key: String,
         /// Config value.
         value: String,
+        #[command(flatten)]
+        g: GlobalArgs,
     },
 }
 
@@ -1267,7 +1275,11 @@ async fn dispatch(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
-        Some(Command::Config { action }) => commands::config::run(action),
+        Some(Command::Config { action }) => match action {
+            ConfigAction::Path { g } => commands::config::run_path(&g),
+            ConfigAction::Show { g } => commands::config::run_show(&g),
+            ConfigAction::Set { key, value, g } => commands::config::run_set(&g, &key, &value),
+        },
         Some(Command::Api {
             method,
             path,
@@ -1320,7 +1332,7 @@ async fn dispatch_status(
             "markdown" => commands::export::format_markdown(&status_res),
             _ => unreachable!(),
         };
-        println!("{}", text);
+        crate::output::print_block(&text)?;
         Ok(())
     } else if watch {
         commands::status::run_watch(&g, interval).await

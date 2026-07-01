@@ -153,22 +153,13 @@ pub fn fetch_branch(branch: &str) -> Result<()> {
 
 /// Checkout a local branch (creating it if it doesn't exist).
 pub fn checkout_branch(branch: &str) -> Result<()> {
-    match git(&["switch", branch]) {
-        Ok(_) => Ok(()),
-        Err(e) => {
-            let msg = e.to_string();
-            // Only retry with -c if the branch doesn't exist locally
-            if msg.contains("not a valid object")
-                || msg.contains("not found")
-                || msg.contains("unknown revision")
-                || msg.contains("fatal: invalid reference")
-            {
-                git(&["switch", "-c", branch, &format!("origin/{branch}")]).map(|_| ())
-            } else {
-                // The original error was something else (dirty tree, conflicts, etc.)
-                Err(e)
-            }
-        }
+    // First check if branch exists locally (locale-independent)
+    let exists = git(&["rev-parse", "--verify", branch]).is_ok();
+
+    if exists {
+        git(&["switch", branch]).map(|_| ())
+    } else {
+        git(&["switch", "-c", branch, &format!("origin/{branch}")]).map(|_| ())
     }
 }
 

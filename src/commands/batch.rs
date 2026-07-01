@@ -101,19 +101,14 @@ pub async fn merge_approved(
         .await;
 
     for full_pr in fetch_results.into_iter().flatten() {
-        // Check reviewers first, fall back to participants
+        // Count approvals from reviewers (preferred) or all participants
         let approval_count = if !full_pr.reviewers.is_empty() {
             full_pr.reviewers.iter().filter(|r| r.approved).count()
         } else {
             full_pr.participants.iter().filter(|p| p.approved).count()
         };
 
-        let has_reviewers = !full_pr.reviewers.is_empty();
-        let is_approved = if has_reviewers {
-            !full_pr.reviewers.is_empty() && full_pr.reviewers.iter().all(|r| r.approved)
-        } else {
-            approval_count > 0
-        };
+        let is_approved = approval_count > 0;
 
         if is_approved {
             approved_actions.push(MergeAction {

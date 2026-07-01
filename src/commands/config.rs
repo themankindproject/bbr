@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 
-use crate::cli::ConfigAction;
+use crate::cli::GlobalArgs;
 use crate::config;
 use crate::error::{BitbucketError, Result};
 use crate::output::Formatter;
@@ -16,15 +16,7 @@ pub struct ConfigOut {
     pub has_token: bool,
 }
 
-pub fn run(action: ConfigAction) -> Result<()> {
-    match action {
-        ConfigAction::Path => do_path(),
-        ConfigAction::Show => do_show(),
-        ConfigAction::Set { key, value } => do_set(&key, &value),
-    }
-}
-
-fn do_path() -> Result<()> {
+pub fn run_path(g: &GlobalArgs) -> Result<()> {
     let cfg_path = config::config_path();
     let creds_path = config::credentials_path();
     let out = ConfigOut {
@@ -39,10 +31,10 @@ fn do_path() -> Result<()> {
         out.config_path.as_deref().unwrap_or("(unavailable)"),
         out.credentials_path.as_deref().unwrap_or("(unavailable)"),
     );
-    Formatter::from_json_flag(false).print(&out, &human)
+    Formatter::from_json_flag(g.json).print(&out, &human)
 }
 
-fn do_show() -> Result<()> {
+pub fn run_show(g: &GlobalArgs) -> Result<()> {
     let creds = config::load_credentials()?;
     let cfg_path = config::config_path();
     let creds_path = config::credentials_path();
@@ -67,10 +59,10 @@ fn do_show() -> Result<()> {
         out.username.as_deref().unwrap_or("(not set)"),
         out.has_token,
     );
-    Formatter::from_json_flag(false).print(&out, &human)
+    Formatter::from_json_flag(g.json).print(&out, &human)
 }
 
-fn do_set(key: &str, value: &str) -> Result<()> {
+pub fn run_set(g: &GlobalArgs, key: &str, value: &str) -> Result<()> {
     match key {
         "workspace" => {
             let mut creds = config::load_credentials()?.unwrap_or_default();
@@ -82,7 +74,7 @@ fn do_set(key: &str, value: &str) -> Result<()> {
             let path = config::save_credentials(&creds)?;
             let human = format!("Set workspace = \"{value}\" in {}", path.display());
             let out = serde_json::json!({ "key": key, "value": value, "path": path.display().to_string() });
-            Formatter::from_json_flag(false).print(&out, &human)
+            Formatter::from_json_flag(g.json).print(&out, &human)
         }
         _ => Err(BitbucketError::Other(format!(
             "unknown config key: {key} (valid: workspace)"
