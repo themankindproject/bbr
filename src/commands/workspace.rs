@@ -16,7 +16,12 @@ pub struct WorkspaceOut {
 
 #[derive(Debug, Deserialize)]
 struct WorkspaceResponse {
-    values: Vec<Workspace>,
+    values: Vec<WorkspaceMembership>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkspaceMembership {
+    workspace: Workspace,
 }
 
 #[derive(Debug, Deserialize)]
@@ -32,9 +37,9 @@ pub async fn list(g: &GlobalArgs, role: Option<&str>, limit: u32) -> Result<()> 
     let spinner = make_spinner(g.json);
     spinner.set_message("Fetching workspaces...");
 
-    let mut path = format!("/workspaces?pagelen={limit}");
+    let mut path = format!("/user/permissions/workspaces?pagelen={limit}");
     if let Some(r) = role {
-        path.push_str(&format!("&role={r}"));
+        path.push_str(&format!("&q=permission%3D%22{r}%22"));
     }
 
     let page: WorkspaceResponse = client.send(reqwest::Method::GET, &path, None).await?;
@@ -44,10 +49,10 @@ pub async fn list(g: &GlobalArgs, role: Option<&str>, limit: u32) -> Result<()> 
     let workspaces: Vec<WorkspaceOut> = page
         .values
         .into_iter()
-        .map(|w| WorkspaceOut {
-            slug: w.slug,
-            name: w.name,
-            uuid: w.uuid,
+        .map(|m| WorkspaceOut {
+            slug: m.workspace.slug,
+            name: m.workspace.name,
+            uuid: m.workspace.uuid,
         })
         .collect();
 

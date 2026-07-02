@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Spinner respects CLI `--quiet` flag** — global `--quiet` / `-q` CLI flags now properly suppress the steady tick spinner.
 - **Table rendering respects `NO_COLOR`** — pretty table outputs now respect the `NO_COLOR` env var via the global `Theme` singleton, and fallback to `presets::ASCII_FULL` when Unicode is disabled.
+- **Fixed workspace list deprecation** — migrated `bbr workspace list` from the deprecated cross-workspace `/workspaces` endpoint to the supported `/user/permissions/workspaces` endpoint and updated the deserialization schema.
 
 ## [0.1.4] - 2026-07-02
 
