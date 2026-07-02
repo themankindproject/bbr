@@ -27,7 +27,7 @@ struct WorkspaceMembership {
 #[derive(Debug, Deserialize)]
 struct Workspace {
     slug: String,
-    name: String,
+    name: Option<String>,
     uuid: String,
 }
 
@@ -37,7 +37,7 @@ pub async fn list(g: &GlobalArgs, role: Option<&str>, limit: u32) -> Result<()> 
     let spinner = make_spinner(g.json);
     spinner.set_message("Fetching workspaces...");
 
-    let mut path = format!("/user/permissions/workspaces?pagelen={limit}");
+    let mut path = format!("/user/workspaces?pagelen={limit}");
     if let Some(r) = role {
         path.push_str(&format!("&q=permission%3D%22{r}%22"));
     }
@@ -50,8 +50,8 @@ pub async fn list(g: &GlobalArgs, role: Option<&str>, limit: u32) -> Result<()> 
         .values
         .into_iter()
         .map(|m| WorkspaceOut {
-            slug: m.workspace.slug,
-            name: m.workspace.name,
+            slug: m.workspace.slug.clone(),
+            name: m.workspace.name.unwrap_or_else(|| m.workspace.slug.clone()),
             uuid: m.workspace.uuid,
         })
         .collect();
