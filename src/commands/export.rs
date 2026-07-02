@@ -290,6 +290,11 @@ mod tests {
             comment_count: 3,
             task_count: 1,
             reviewers: vec![],
+            lines_added: None,
+            lines_removed: None,
+            created_on: None,
+            description: None,
+            conflicts: None,
         });
         let s = format_slack(&out);
         assert!(s.contains("#42"));

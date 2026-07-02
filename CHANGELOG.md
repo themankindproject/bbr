@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Unified polling interval flags** — changed `--interval-secs` to `--interval` in `bbr ci watch` to match `bbr status --watch --interval`.
+- **Enriched PR status output** — enriched `bbr status` output with diffstats (`+N, -N`), relative time "opened N days ago", description first line excerpt, reviewer approval annotations (✅ / ⏳ / ❌), and a merge readiness row showing approvals, CI status, and conflicts.
+- **Smarter suggested commands** — status output suggestions now dynamically adapt to PR state (open, merged, declined, unapproved, changes requested) and pipeline state (failing, running, successful, none), ordered by urgency (merge > fix CI > approve > view).
 
 ### Fixed
 

@@ -159,6 +159,8 @@ pub struct Participant {
     pub approved: bool,
     #[serde(default)]
     pub user: Option<User>,
+    #[serde(default)]
+    pub state: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
