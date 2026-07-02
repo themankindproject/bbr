@@ -130,6 +130,7 @@ pub fn make_formatter(g: &GlobalArgs) -> crate::output::Formatter {
 /// Check if quiet mode is enabled (via --quiet flag or BBR_QUIET env).
 fn is_quiet() -> bool {
     std::env::var_os("BBR_QUIET").is_some()
+        || std::env::args().any(|arg| arg == "--quiet" || arg == "-q")
 }
 
 /// Create a spinner if stdout is a TTY and we're not in JSON or quiet mode.

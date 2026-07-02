@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Unified polling interval flags** — changed `--interval-secs` to `--interval` in `bbr ci watch` to match `bbr status --watch --interval`.
+
+### Fixed
+
+- **Spinner respects CLI `--quiet` flag** — global `--quiet` / `-q` CLI flags now properly suppress the steady tick spinner.
+- **Table rendering respects `NO_COLOR`** — pretty table outputs now respect the `NO_COLOR` env var via the global `Theme` singleton, and fallback to `presets::ASCII_FULL` when Unicode is disabled.
+
 ## [0.1.4] - 2026-07-02
 
 ### Added

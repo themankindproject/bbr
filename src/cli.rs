@@ -534,7 +534,7 @@ pub enum CiAction {
         #[arg(long, help = "branch name (default: current branch)")]
         branch: Option<String>,
         #[arg(long, help = "poll interval in seconds", default_value_t = 5)]
-        interval_secs: u64,
+        interval: u64,
         #[arg(long, help = "print failing step log when the pipeline fails")]
         logs: bool,
         #[command(flatten)]
@@ -1485,10 +1485,10 @@ async fn dispatch_ci(action: CiAction) -> Result<()> {
         CiAction::Status { branch, g } => commands::ci::status(&g, branch.as_deref()).await,
         CiAction::Watch {
             branch,
-            interval_secs,
+            interval,
             logs,
             g,
-        } => commands::ci::watch(&g, branch.as_deref(), interval_secs, logs).await,
+        } => commands::ci::watch(&g, branch.as_deref(), interval, logs).await,
         CiAction::Logs {
             uuid,
             step,

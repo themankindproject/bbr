@@ -186,7 +186,7 @@ pub async fn status(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
 pub async fn watch(
     g: &GlobalArgs,
     branch: Option<&str>,
-    interval_secs: u64,
+    interval: u64,
     include_logs: bool,
 ) -> Result<()> {
     let repo = resolve_repo(g)?;
@@ -213,7 +213,7 @@ pub async fn watch(
             break;
         }
         spinner.set_message(format!("state: {}", current.state_name()));
-        time::sleep(Duration::from_secs(interval_secs.max(1))).await;
+        time::sleep(Duration::from_secs(interval.max(1))).await;
         current = client
             .get_pipeline(&repo.workspace, &repo.slug, &uuid)
             .await?;

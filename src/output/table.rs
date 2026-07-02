@@ -1,7 +1,5 @@
 //! Pretty table rendering for humans.
 
-use std::io::IsTerminal;
-
 use comfy_table::{ContentArrangement, Table as ComfyTable};
 
 /// A small wrapper around `comfy_table::Table` that applies our theme and
@@ -13,10 +11,14 @@ pub struct Table {
 impl Table {
     pub fn new() -> Self {
         let mut inner = ComfyTable::new();
-        inner
-            .load_preset(comfy_table::presets::UTF8_FULL)
-            .set_content_arrangement(ContentArrangement::Disabled);
-        if !std::io::stdout().is_terminal() {
+        let theme = crate::output::theme::Theme::current();
+        if theme.unicode_enabled() {
+            inner.load_preset(comfy_table::presets::UTF8_FULL);
+        } else {
+            inner.load_preset(comfy_table::presets::ASCII_FULL);
+        }
+        inner.set_content_arrangement(ContentArrangement::Disabled);
+        if !theme.colors_enabled() {
             inner.force_no_tty();
         }
         Self { inner }
