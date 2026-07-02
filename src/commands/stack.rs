@@ -199,28 +199,33 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
     let spinner = make_spinner(g.json);
     spinner.set_message("Fetching pull request statuses...");
 
-    let mut prs_status = Vec::new();
-    for pr in &stack.prs {
-        let (state, url) = if let Some(id) = pr.pr_id {
-            match client.get_pr(&repo.workspace, &repo.slug, id).await {
-                Ok(full_pr) => {
-                    let url = full_pr.web_url().map(|u| u.to_string());
-                    (Some(full_pr.state), url)
+    let futures = stack.prs.iter().map(|pr| {
+        let client = client.clone();
+        let ws = repo.workspace.clone();
+        let slug = repo.slug.clone();
+        async move {
+            let (state, url) = if let Some(id) = pr.pr_id {
+                match client.get_pr(&ws, &slug, id).await {
+                    Ok(full_pr) => {
+                        let url = full_pr.web_url().map(|u| u.to_string());
+                        (Some(full_pr.state), url)
+                    }
+                    Err(_) => (Some("UNKNOWN".to_string()), None),
                 }
-                Err(_) => (Some("UNKNOWN".to_string()), None),
+            } else {
+                (None, None)
+            };
+            StackPrStatus {
+                branch: pr.branch.clone(),
+                pr_id: pr.pr_id,
+                state,
+                parent_branch: pr.parent_branch.clone(),
+                url,
             }
-        } else {
-            (None, None)
-        };
+        }
+    });
 
-        prs_status.push(StackPrStatus {
-            branch: pr.branch.clone(),
-            pr_id: pr.pr_id,
-            state,
-            parent_branch: pr.parent_branch.clone(),
-            url,
-        });
-    }
+    let prs_status = futures::future::join_all(futures).await;
 
     spinner.finish_and_clear();
 

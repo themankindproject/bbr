@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unified polling interval flags** — changed `--interval-secs` to `--interval` in `bbr ci watch` to match `bbr status --watch --interval`.
 - **Enriched PR status output** — enriched `bbr status` output with diffstats (`+N, -N`), relative time "opened N days ago", description first line excerpt, reviewer approval annotations (✅ / ⏳ / ❌), and a merge readiness row showing approvals, CI status, and conflicts.
 - **Smarter suggested commands** — status output suggestions now dynamically adapt to PR state (open, merged, declined, unapproved, changes requested) and pipeline state (failing, running, successful, none), ordered by urgency (merge > fix CI > approve > view).
+- **Optimized batch merge approvals** — retrieved reviewers and participants data directly in `bbr batch merge-approved` listing, completely eliminating N+1 `get_pr()` calls.
+- **Concurrent stack listing** — parallelized pull request status fetching in `bbr pr stack list` using asynchronous joins, resolving sequential fetch bottlenecks.
+- **Concurrent page fetching** — parallelized multi-page fetches in `fetch_all_pages` using asynchronous page requests based on total counts.
+- **Cached default branch inference** — cached repository default branch results per process lifetime in `bbr pr create`.
+- **Targeted fields fallback** — list fallback query retries are now restricted to 400 Bad Request responses, preventing duplicate requests on transient/rate-limiting errors.
 
 ### Fixed
 

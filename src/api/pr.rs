@@ -365,7 +365,7 @@ impl BitbucketClient {
              values.source.branch.name,values.destination.branch.name,\
              values.author.display_name,values.links.html.href,\
              values.comment_count,values.task_count,values.close_source_branch,\
-             values.updated_on";
+             values.updated_on,values.reviewers,values.participants";
 
         let path_with_fields = format!(
             "/repositories/{workspace}/{slug}/pullrequests?\
@@ -399,7 +399,7 @@ impl BitbucketClient {
                     Ok(page.values)
                 }
             }
-            Err(_) => {
+            Err(BitbucketError::BadRequest(_)) => {
                 // Fallback: retry without fields= and with smaller pagelen
                 let safe_pagelen = pagelen.min(50);
                 let path_no_fields = format!(
@@ -415,6 +415,7 @@ impl BitbucketClient {
                     Ok(page.values)
                 }
             }
+            Err(e) => Err(e),
         }
     }
 

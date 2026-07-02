@@ -923,8 +923,12 @@ async fn infer_default_branch(
     slug: &str,
     client: &crate::api::BitbucketClient,
 ) -> Result<String> {
+    static CACHE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    if let Some(cached) = CACHE.get() {
+        return Ok(cached.clone());
+    }
     let repo = client.get_repo(workspace, slug).await?;
-    Ok(repo
+    let branch = repo
         .mainbranch
         .and_then(|b| {
             if b.name.is_empty() {
@@ -933,7 +937,9 @@ async fn infer_default_branch(
                 Some(b.name)
             }
         })
-        .unwrap_or_else(|| "main".to_string()))
+        .unwrap_or_else(|| "main".to_string());
+    let _ = CACHE.set(branch.clone());
+    Ok(branch)
 }
 
 fn render_list(out: &PrListOut) -> String {

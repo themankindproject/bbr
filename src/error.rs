@@ -62,6 +62,9 @@ pub enum BitbucketError {
 
     #[error("{0}")]
     Other(String),
+
+    #[error("bad request: {0}")]
+    BadRequest(String),
 }
 
 impl BitbucketError {

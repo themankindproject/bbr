@@ -143,29 +143,76 @@ impl BitbucketClient {
         self.send(Method::POST, path, Some(&raw)).await
     }
 
-    /// Fetch all pages of a paginated endpoint, up to `limit`.
-    /// Follows `next` links until the limit is reached or there are no more pages.
     pub async fn fetch_all_pages<T: DeserializeOwned>(
         &self,
         path: &str,
         limit: usize,
     ) -> Result<Vec<T>> {
-        let mut all = Vec::new();
-        let mut next_path = path.to_string();
-        loop {
-            let page: crate::api::Paginated<T> = self.send(Method::GET, &next_path, None).await?;
-            let remaining = limit.saturating_sub(all.len());
-            all.extend(page.values.into_iter().take(remaining));
-            if all.len() >= limit {
-                break;
-            }
-            match page.next {
-                Some(next_url) => {
-                    next_path = strip_base(&next_url, &self.base_url)?;
-                }
-                None => break,
-            }
+        // Fetch the first page
+        let first_page: crate::api::Paginated<T> = self.send(Method::GET, path, None).await?;
+        let mut all = first_page.values;
+
+        if all.len() >= limit || first_page.next.is_none() {
+            all.truncate(limit);
+            return Ok(all);
         }
+
+        let size = first_page.size as usize;
+        let pagelen = if first_page.pagelen > 0 {
+            first_page.pagelen as usize
+        } else {
+            25
+        };
+
+        if size == 0 {
+            // Fall back to sequential paging
+            let mut next_path = strip_base(&first_page.next.unwrap(), &self.base_url)?;
+            loop {
+                let page: crate::api::Paginated<T> =
+                    self.send(Method::GET, &next_path, None).await?;
+                let remaining = limit.saturating_sub(all.len());
+                all.extend(page.values.into_iter().take(remaining));
+                if all.len() >= limit {
+                    break;
+                }
+                match page.next {
+                    Some(next_url) => {
+                        next_path = strip_base(&next_url, &self.base_url)?;
+                    }
+                    None => break,
+                }
+            }
+            all.truncate(limit);
+            return Ok(all);
+        }
+
+        let total_needed = limit.min(size);
+        if total_needed <= all.len() {
+            all.truncate(total_needed);
+            return Ok(all);
+        }
+
+        let num_pages = total_needed.div_ceil(pagelen);
+
+        let mut futures = Vec::new();
+        for p in 2..=num_pages {
+            let p_path = if path.contains('?') {
+                format!("{path}&page={p}")
+            } else {
+                format!("{path}?page={p}")
+            };
+            futures.push(async move {
+                self.send::<crate::api::Paginated<T>>(Method::GET, &p_path, None)
+                    .await
+            });
+        }
+
+        let results = futures::future::try_join_all(futures).await?;
+        for page in results {
+            all.extend(page.values);
+        }
+
+        all.truncate(limit);
         Ok(all)
     }
 
@@ -366,6 +413,7 @@ pub fn map_error(status: StatusCode, body: &str) -> BitbucketError {
         StatusCode::TOO_MANY_REQUESTS => {
             BitbucketError::RateLimit(format!("HTTP {status}: {full}"))
         }
+        StatusCode::BAD_REQUEST => BitbucketError::BadRequest(format!("HTTP {status}: {full}")),
         _ => BitbucketError::Other(format!("HTTP {status}: {full}")),
     }
 }

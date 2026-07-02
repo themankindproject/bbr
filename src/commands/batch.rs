@@ -82,40 +82,22 @@ pub async fn merge_approved(
 
     let mut approved_actions = Vec::new();
 
-    // Parallelize per-PR fetches with bounded concurrency
-    use futures::stream::{self, StreamExt};
-    let ws = repo.workspace.clone();
-    let slug_owned = slug.to_string();
-    let fetch_results: Vec<_> = stream::iter(prs)
-        .map(|pr| {
-            let ws = ws.clone();
-            let slug = slug_owned.clone();
-            let c = &client;
-            async move {
-                let full_pr = c.get_pr(&ws, &slug, pr.id).await;
-                full_pr.ok()
-            }
-        })
-        .buffer_unordered(10)
-        .collect()
-        .await;
-
-    for full_pr in fetch_results.into_iter().flatten() {
+    for pr in prs {
         // Count approvals from reviewers (preferred) or all participants
-        let approval_count = if !full_pr.reviewers.is_empty() {
-            full_pr.reviewers.iter().filter(|r| r.approved).count()
+        let approval_count = if !pr.reviewers.is_empty() {
+            pr.reviewers.iter().filter(|r| r.approved).count()
         } else {
-            full_pr.participants.iter().filter(|p| p.approved).count()
+            pr.participants.iter().filter(|p| p.approved).count()
         };
 
         let is_approved = approval_count > 0;
 
         if is_approved {
             approved_actions.push(MergeAction {
-                pr_id: full_pr.id,
-                title: full_pr.title.clone(),
-                source: full_pr.source_branch().to_string(),
-                destination: full_pr.destination_branch().to_string(),
+                pr_id: pr.id,
+                title: pr.title.clone(),
+                source: pr.source_branch().to_string(),
+                destination: pr.destination_branch().to_string(),
                 approvals: approval_count,
             });
         }
