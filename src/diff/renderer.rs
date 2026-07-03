@@ -354,44 +354,93 @@ fn render_side_by_side_row(
         .and_then(|l| l.old_lineno)
         .map(|n| format!("{:>4}", n))
         .unwrap_or_else(|| "    ".to_string());
-    let left_content = del
-        .map(|l| truncate_code(&l.content, code_width))
-        .unwrap_or_else(|| " ".repeat(code_width));
 
     let right_lineno = add
         .and_then(|l| l.new_lineno)
         .map(|n| format!("{:>4}", n))
         .unwrap_or_else(|| "    ".to_string());
-    let right_content = add
-        .map(|l| truncate_code(&l.content, code_width))
-        .unwrap_or_else(|| " ".repeat(code_width));
 
     if theme.colors_enabled() {
-        let left_col = if let Some(l) = del {
-            if l.kind == DiffLineKind::Context {
-                dim(&left_content, theme).into_owned()
-            } else {
-                format!("\x1b[31m{}\x1b[0m", left_content)
+        let sep = if theme.unicode_enabled() { " │ " } else { " | " };
+
+        let left_col = match (del, add) {
+            (Some(l), Some(r)) if l.kind == DiffLineKind::Deletion && r.kind == DiffLineKind::Addition => {
+                // Paired change: word-level highlighting
+                let left_visible = truncate_code_raw(&l.content, code_width);
+                let right_visible = truncate_code_raw(&r.content, code_width);
+                let segments = crate::diff::word_diff::word_changes(&left_visible, &right_visible);
+                let mut col = String::new();
+                let mut left_w = 0;
+                for seg in segments {
+                    match seg.kind {
+                        crate::diff::word_diff::WordChange::Deleted => {
+                            col.push_str(&format!("\x1b[30;41m{}\x1b[0m", seg.text));
+                            left_w += seg.text.width();
+                        }
+                        crate::diff::word_diff::WordChange::Equal => {
+                            col.push_str(&format!("\x1b[31m{}\x1b[0m", seg.text));
+                            left_w += seg.text.width();
+                        }
+                        crate::diff::word_diff::WordChange::Inserted => {}
+                    }
+                }
+                let pad = code_width.saturating_sub(left_w);
+                col.push_str(&" ".repeat(pad));
+                col
             }
-        } else {
-            left_content
+            (Some(l), _) => {
+                let left_visible = truncate_code_raw(&l.content, code_width);
+                let left_w = left_visible.width();
+                let col = if l.kind == DiffLineKind::Context {
+                    dim(&left_visible, theme).into_owned()
+                } else {
+                    format!("\x1b[31m{}\x1b[0m", left_visible)
+                };
+                let pad = code_width.saturating_sub(left_w);
+                format!("{}{}", col, " ".repeat(pad))
+            }
+            (None, _) => " ".repeat(code_width),
         };
 
-        let right_col = if let Some(l) = add {
-            if l.kind == DiffLineKind::Context {
-                dim(&right_content, theme).into_owned()
-            } else {
-                format!("\x1b[32m{}\x1b[0m", right_content)
+        let right_col = match (del, add) {
+            (Some(l), Some(r)) if l.kind == DiffLineKind::Deletion && r.kind == DiffLineKind::Addition => {
+                // Paired change: word-level highlighting
+                let left_visible = truncate_code_raw(&l.content, code_width);
+                let right_visible = truncate_code_raw(&r.content, code_width);
+                let segments = crate::diff::word_diff::word_changes(&left_visible, &right_visible);
+                let mut col = String::new();
+                let mut right_w = 0;
+                for seg in segments {
+                    match seg.kind {
+                        crate::diff::word_diff::WordChange::Inserted => {
+                            col.push_str(&format!("\x1b[30;42m{}\x1b[0m", seg.text));
+                            right_w += seg.text.width();
+                        }
+                        crate::diff::word_diff::WordChange::Equal => {
+                            col.push_str(&format!("\x1b[32m{}\x1b[0m", seg.text));
+                            right_w += seg.text.width();
+                        }
+                        crate::diff::word_diff::WordChange::Deleted => {}
+                    }
+                }
+                let pad = code_width.saturating_sub(right_w);
+                col.push_str(&" ".repeat(pad));
+                col
             }
-        } else {
-            right_content
+            (_, Some(r)) => {
+                let right_visible = truncate_code_raw(&r.content, code_width);
+                let right_w = right_visible.width();
+                let col = if r.kind == DiffLineKind::Context {
+                    dim(&right_visible, theme).into_owned()
+                } else {
+                    format!("\x1b[32m{}\x1b[0m", right_visible)
+                };
+                let pad = code_width.saturating_sub(right_w);
+                format!("{}{}", col, " ".repeat(pad))
+            }
+            (_, None) => " ".repeat(code_width),
         };
 
-        let sep = if theme.unicode_enabled() {
-            " │ "
-        } else {
-            " | "
-        };
         out.push_str(&format!(
             " {} {} {} {} {} {}\n",
             dim(&left_lineno, theme),
@@ -402,6 +451,13 @@ fn render_side_by_side_row(
             right_col
         ));
     } else {
+        let left_content = del
+            .map(|l| truncate_code(&l.content, code_width))
+            .unwrap_or_else(|| " ".repeat(code_width));
+        let right_content = add
+            .map(|l| truncate_code(&l.content, code_width))
+            .unwrap_or_else(|| " ".repeat(code_width));
+
         let sep = " | ";
         let left_sign = del
             .map(|l| match l.kind {
@@ -430,11 +486,10 @@ fn render_side_by_side_row(
     }
 }
 
-fn truncate_code(s: &str, max_width: usize) -> String {
+fn truncate_code_raw(s: &str, max_width: usize) -> String {
     let w = unicode_width::UnicodeWidthStr::width(s);
     if w <= max_width {
-        let pad = max_width.saturating_sub(w);
-        format!("{}{}", s, " ".repeat(pad))
+        s.to_string()
     } else {
         let mut result = String::new();
         let mut current_w = 0;
@@ -447,9 +502,15 @@ fn truncate_code(s: &str, max_width: usize) -> String {
             current_w += ch_w;
         }
         result.push('…');
-        let pad = max_width.saturating_sub(current_w + 1);
-        format!("{}{}", result, " ".repeat(pad))
+        result
     }
+}
+
+fn truncate_code(s: &str, max_width: usize) -> String {
+    let raw = truncate_code_raw(s, max_width);
+    let w = unicode_width::UnicodeWidthStr::width(raw.as_str());
+    let pad = max_width.saturating_sub(w);
+    format!("{}{}", raw, " ".repeat(pad))
 }
 
 /// A range of lines to render (either visible or collapsed).
