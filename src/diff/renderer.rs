@@ -361,10 +361,16 @@ fn render_side_by_side_row(
         .unwrap_or_else(|| "    ".to_string());
 
     if theme.colors_enabled() {
-        let sep = if theme.unicode_enabled() { " │ " } else { " | " };
+        let sep = if theme.unicode_enabled() {
+            " │ "
+        } else {
+            " | "
+        };
 
         let left_col = match (del, add) {
-            (Some(l), Some(r)) if l.kind == DiffLineKind::Deletion && r.kind == DiffLineKind::Addition => {
+            (Some(l), Some(r))
+                if l.kind == DiffLineKind::Deletion && r.kind == DiffLineKind::Addition =>
+            {
                 // Paired change: word-level highlighting
                 let left_visible = truncate_code_raw(&l.content, code_width);
                 let right_visible = truncate_code_raw(&r.content, code_width);
@@ -403,7 +409,9 @@ fn render_side_by_side_row(
         };
 
         let right_col = match (del, add) {
-            (Some(l), Some(r)) if l.kind == DiffLineKind::Deletion && r.kind == DiffLineKind::Addition => {
+            (Some(l), Some(r))
+                if l.kind == DiffLineKind::Deletion && r.kind == DiffLineKind::Addition =>
+            {
                 // Paired change: word-level highlighting
                 let left_visible = truncate_code_raw(&l.content, code_width);
                 let right_visible = truncate_code_raw(&r.content, code_width);
