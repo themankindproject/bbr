@@ -166,7 +166,12 @@ fn render_hunk(hunk: &DiffHunk, options: &DiffRenderOptions, theme: &Theme, out:
     }
 }
 
-fn render_hunk_unified(hunk: &DiffHunk, options: &DiffRenderOptions, theme: &Theme, out: &mut String) {
+fn render_hunk_unified(
+    hunk: &DiffHunk,
+    options: &DiffRenderOptions,
+    theme: &Theme,
+    out: &mut String,
+) {
     let ranges = find_change_ranges(&hunk.lines, options.context_lines);
 
     for range in &ranges {
@@ -282,7 +287,12 @@ fn render_paired_line(line: &DiffLine, pair: Option<&DiffLine>, theme: &Theme, o
     }
 }
 
-fn render_hunk_side_by_side(hunk: &DiffHunk, options: &DiffRenderOptions, theme: &Theme, out: &mut String) {
+fn render_hunk_side_by_side(
+    hunk: &DiffHunk,
+    options: &DiffRenderOptions,
+    theme: &Theme,
+    out: &mut String,
+) {
     let width = crate::output::theme::terminal_width().unwrap_or(80);
     // 17 characters reserved: left_lineno(4) + sep(3) + middle_sep(3) + right_lineno(4) + right_sep(3)
     let code_width = width.saturating_sub(17) / 2;
@@ -377,7 +387,11 @@ fn render_side_by_side_row(
             right_content
         };
 
-        let sep = if theme.unicode_enabled() { " │ " } else { " | " };
+        let sep = if theme.unicode_enabled() {
+            " │ "
+        } else {
+            " | "
+        };
         out.push_str(&format!(
             " {} {} {} {} {} {}\n",
             dim(&left_lineno, theme),
@@ -389,19 +403,29 @@ fn render_side_by_side_row(
         ));
     } else {
         let sep = " | ";
-        let left_sign = del.map(|l| match l.kind {
-            DiffLineKind::Deletion => "-",
-            _ => " ",
-        }).unwrap_or(" ");
-        let right_sign = add.map(|l| match l.kind {
-            DiffLineKind::Addition => "+",
-            _ => " ",
-        }).unwrap_or(" ");
+        let left_sign = del
+            .map(|l| match l.kind {
+                DiffLineKind::Deletion => "-",
+                _ => " ",
+            })
+            .unwrap_or(" ");
+        let right_sign = add
+            .map(|l| match l.kind {
+                DiffLineKind::Addition => "+",
+                _ => " ",
+            })
+            .unwrap_or(" ");
         out.push_str(&format!(
             " {} {} {} {} {} {} {} {} {}\n",
-            left_lineno, sep, left_sign, left_content,
+            left_lineno,
             sep,
-            right_lineno, sep, right_sign, right_content
+            left_sign,
+            left_content,
+            sep,
+            right_lineno,
+            sep,
+            right_sign,
+            right_content
         ));
     }
 }
@@ -620,8 +644,6 @@ fn truncate_mid(s: &str, max_width: usize) -> String {
     }
     result
 }
-
-
 
 #[cfg(test)]
 mod tests {

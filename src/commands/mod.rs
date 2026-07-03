@@ -249,7 +249,6 @@ pub async fn confirm(msg: &str) -> Result<bool> {
     .map_err(|e| BitbucketError::Other(format!("confirm task panicked: {e}")))?
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

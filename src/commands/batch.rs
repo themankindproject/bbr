@@ -148,7 +148,8 @@ pub async fn merge_approved(
         && !confirm(&format!(
             "Merge {} pull requests? (y/n): ",
             approved_actions.len()
-        )).await?
+        ))
+        .await?
     {
         return Ok(());
     }
@@ -270,7 +271,8 @@ pub async fn rerun_failed(
         && !confirm(&format!(
             "Rerun {} pipelines? (y/n): ",
             failed_actions.len()
-        )).await?
+        ))
+        .await?
     {
         return Ok(());
     }
@@ -387,7 +389,8 @@ pub async fn cleanup_merged_branches(
         && !confirm(&format!(
             "Delete/cleanup {} branch targets? (y/n): ",
             cleanup_actions.len()
-        )).await?
+        ))
+        .await?
     {
         return Ok(());
     }

@@ -601,7 +601,8 @@ pub async fn merge(
             pr.title,
             empty_as_unknown(pr.source_branch()),
             empty_as_unknown(pr.destination_branch()),
-        )).await?
+        ))
+        .await?
     {
         let fmt = Formatter::from_json_flag(g.json);
         let human = "Aborted.".to_string();

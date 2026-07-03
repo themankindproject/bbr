@@ -216,7 +216,6 @@ pub fn terminal_width() -> Option<usize> {
     None
 }
 
-
 /// Call `TIOCGWINSZ` on the given file descriptor and return the column count.
 #[cfg(unix)]
 fn tiocgwinsz(fd: std::os::unix::io::RawFd) -> Option<usize> {
