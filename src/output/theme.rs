@@ -183,10 +183,16 @@ fn matches_ignore_ascii_case(s: &str, values: &[&str]) -> bool {
     values.iter().any(|v| s.eq_ignore_ascii_case(v))
 }
 
-/// Best-effort terminal width via `stty size` or `$COLUMNS`.
+/// Best-effort terminal width.
+///
+/// Resolution order:
+/// 1. `$COLUMNS` environment variable (works everywhere including CI overrides).
+/// 2. `TIOCGWINSZ` ioctl on Unix (no subprocess, instant).
+/// 3. Fall back to 80.
 fn terminal_width() -> Option<usize> {
     static WIDTH: OnceLock<Option<usize>> = OnceLock::new();
     *WIDTH.get_or_init(|| {
+        // 1. Respect explicit override (useful in CI and scripts).
         if let Ok(cols) = std::env::var("COLUMNS") {
             if let Ok(n) = cols.parse::<usize>() {
                 if n > 0 {
@@ -194,19 +200,51 @@ fn terminal_width() -> Option<usize> {
                 }
             }
         }
-        let output = std::process::Command::new("stty")
-            .arg("size")
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
+
+        // 2. ioctl(TIOCGWINSZ) — Linux / macOS only, no subprocess.
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            // Try stdout first, then stderr (one of them is likely a tty).
+            for fd in [std::io::stdout().as_raw_fd(), std::io::stderr().as_raw_fd()] {
+                if let Some(w) = tiocgwinsz(fd) {
+                    if w > 0 {
+                        return Some(w);
+                    }
+                }
+            }
         }
-        let fields: Vec<&str> = std::str::from_utf8(&output.stdout)
-            .ok()?
-            .split_whitespace()
-            .collect();
-        fields.get(1)?.parse::<usize>().ok()
+
+        None
     })
+}
+
+/// Call `TIOCGWINSZ` on the given file descriptor and return the column count.
+#[cfg(unix)]
+fn tiocgwinsz(fd: std::os::unix::io::RawFd) -> Option<usize> {
+    // `libc::winsize` layout: ws_row, ws_col, ws_xpixel, ws_ypixel — all u16.
+    #[repr(C)]
+    struct Winsize {
+        ws_row: u16,
+        ws_col: u16,
+        _ws_xpixel: u16,
+        _ws_ypixel: u16,
+    }
+    let mut ws = Winsize {
+        ws_row: 0,
+        ws_col: 0,
+        _ws_xpixel: 0,
+        _ws_ypixel: 0,
+    };
+    // SAFETY: `ws` is a valid C struct, `fd` is a raw file descriptor.
+    // TIOCGWINSZ is 0x5413 on Linux / 0x40087468 on macOS — use the
+    // platform constant via `libc`.
+    let ret = unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) };
+    if ret == 0 && ws.ws_col > 0 {
+        Some(ws.ws_col as usize)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]

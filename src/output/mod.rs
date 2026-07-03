@@ -97,21 +97,33 @@ pub fn print_diff(s: &str) -> Result<()> {
     // If the user explicitly set PAGER, respect it instead of sniffing for bat.
     // Otherwise, try bat first.
     if pager_env.is_empty() {
-        if let Ok(mut child) = Command::new("bat")
+        match Command::new("bat")
             .args(["--language=diff", "--paging=always", "--color=always"])
             .stdin(Stdio::piped())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .spawn()
         {
-            if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(s.as_bytes());
-                if !s.ends_with('\n') {
-                    let _ = stdin.write_all(b"\n");
+            Ok(mut child) => {
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(s.as_bytes());
+                    if !s.ends_with('\n') {
+                        let _ = stdin.write_all(b"\n");
+                    }
                 }
+                let _ = child.wait();
+                return Ok(());
             }
-            let _ = child.wait();
-            return Ok(());
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // bat is not installed — tell the user once, then fall through
+                // to the plain pager.
+                eprintln!(
+                    "hint: install `bat` for syntax-highlighted diffs (https://github.com/sharkdp/bat)"
+                );
+            }
+            Err(_) => {
+                // Any other spawn error — silently fall through.
+            }
         }
     }
 

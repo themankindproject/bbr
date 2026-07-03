@@ -259,7 +259,8 @@ pub async fn notify_if_outdated() {
 // ---------------------------------------------------------------------------
 
 pub async fn run(g: &GlobalArgs, check_only: bool) -> Result<()> {
-    let loading = crate::commands::make_spinner(g.json);
+    let loading =
+        crate::commands::SpinnerGuard::new(crate::commands::make_spinner(g.json, g.quiet));
     loading.set_message("Checking for updates...");
 
     let release = fetch_latest_release().await?;
@@ -267,7 +268,7 @@ pub async fn run(g: &GlobalArgs, check_only: bool) -> Result<()> {
     let latest = release.tag_name.trim().to_string();
 
     if !is_newer(&latest, current) {
-        loading.finish_and_clear();
+        loading.finish();
         let out = UpdateOut {
             current_version: current.to_string(),
             latest_version: latest,
@@ -279,7 +280,7 @@ pub async fn run(g: &GlobalArgs, check_only: bool) -> Result<()> {
         return Formatter::from_json_flag(g.json).print(&out, &human);
     }
 
-    loading.finish_and_clear();
+    loading.finish();
 
     if check_only {
         let out = UpdateOut {
@@ -296,12 +297,13 @@ pub async fn run(g: &GlobalArgs, check_only: bool) -> Result<()> {
         return Formatter::from_json_flag(g.json).print(&out, &human);
     }
 
-    let loading = crate::commands::make_spinner(g.json);
+    let loading =
+        crate::commands::SpinnerGuard::new(crate::commands::make_spinner(g.json, g.quiet));
     loading.set_message(format!("Updating bbr {} → {}...", current, latest));
 
     download_and_install(&release, &latest).await?;
 
-    loading.finish_and_clear();
+    loading.finish();
 
     let theme = Theme::current();
     eprintln!("{}  Updated bbr to {latest}", theme.checkmark());

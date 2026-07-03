@@ -1,7 +1,7 @@
 //! Workspace operations (`bbr workspace`).
 
 use crate::cli::GlobalArgs;
-use crate::commands::{client, make_spinner};
+use crate::commands::{client, make_spinner, SpinnerGuard};
 use crate::error::Result;
 use crate::output::theme::Theme;
 use crate::output::Formatter;
@@ -34,7 +34,7 @@ struct Workspace {
 pub async fn list(g: &GlobalArgs, role: Option<&str>, limit: u32) -> Result<()> {
     let client = client(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching workspaces...");
 
     let mut path = format!("/user/workspaces?pagelen={limit}");
@@ -44,7 +44,7 @@ pub async fn list(g: &GlobalArgs, role: Option<&str>, limit: u32) -> Result<()> 
 
     let page: WorkspaceResponse = client.send(reqwest::Method::GET, &path, None).await?;
 
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let workspaces: Vec<WorkspaceOut> = page
         .values

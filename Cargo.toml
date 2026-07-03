@@ -1,6 +1,6 @@
 [package]
 name = "bbr"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 description = "BitBucket Remote — a fast, single-binary Bitbucket Cloud CLI for coding agents and humans"
 license = "MIT"
@@ -60,6 +60,10 @@ unicode-width = "0.1"
 # Self-update
 flate2 = "1"
 tar = "0.4"
+
+[target.'cfg(unix)'.dependencies]
+# Terminal width detection (ioctl TIOCGWINSZ on Unix)
+libc = "0.2"
 
 [dev-dependencies]
 wiremock = "0.6"

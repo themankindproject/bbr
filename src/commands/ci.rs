@@ -10,7 +10,9 @@ use crate::api::pipeline::{
 };
 use crate::api::BitbucketClient;
 use crate::cli::GlobalArgs;
-use crate::commands::{client, confirm, current_head, human_duration, make_spinner, resolve_repo};
+use crate::commands::{
+    client, confirm, current_head, human_duration, make_spinner, resolve_repo, SpinnerGuard,
+};
 use crate::error::{BitbucketError, Result};
 use crate::output::table::Table;
 use crate::output::theme::Theme;
@@ -67,12 +69,12 @@ pub async fn list(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> Result<()
     };
     let client = client(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching pipelines...");
     let pipelines = client
         .list_pipelines(&repo.workspace, &repo.slug, Some(&branch), limit)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let fmt = Formatter::from_json_flag(g.json);
     if pipelines.is_empty() {
@@ -152,7 +154,7 @@ pub async fn status(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
     };
     let client = client(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching pipeline...");
     let pipeline = client
         .latest_pipeline(&repo.workspace, &repo.slug, Some(&branch))
@@ -163,7 +165,7 @@ pub async fn status(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
         .await
         .map(|steps| steps.iter().map(step_out).collect::<Vec<_>>())
         .unwrap_or_default();
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = CiStatusOut {
         branch: branch.clone(),
@@ -204,7 +206,7 @@ pub async fn watch(
     let uuid = initial.uuid.clone();
     let theme = Theme::current();
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.println(format!("Watching pipeline {uuid} on {branch}..."));
 
     let mut current = initial;
@@ -218,7 +220,7 @@ pub async fn watch(
             .get_pipeline(&repo.workspace, &repo.slug, &uuid)
             .await?;
     }
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let raw_steps = steps_for_pipeline(&client, &repo.workspace, &repo.slug, &uuid)
         .await
@@ -357,12 +359,12 @@ pub async fn steps(g: &GlobalArgs, uuid: Option<&str>) -> Result<()> {
         }
     };
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching steps...");
     let raw = client
         .list_steps(&repo.workspace, &repo.slug, &uuid)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     #[derive(Debug, Serialize)]
     pub struct CiStepsOut {
@@ -410,16 +412,16 @@ pub async fn tests(
         }
     };
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching steps...");
     let steps = client
         .list_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let selected = select_step(&steps.values, step, false, false, step.is_none())?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching test report...");
     let report = client
         .test_report(&repo.workspace, &repo.slug, &pipeline_uuid, &selected.uuid)
@@ -434,7 +436,7 @@ pub async fn tests(
             limit,
         )
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     #[derive(Debug, Serialize)]
     pub struct CiTestsOut {
@@ -524,12 +526,12 @@ pub async fn stop(g: &GlobalArgs, uuid: Option<&str>, branch: Option<&str>) -> R
                 .uuid
         }
     };
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Stopping pipeline...");
     client
         .stop_pipeline(&repo.workspace, &repo.slug, &pipeline_uuid)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
     let fmt = Formatter::from_json_flag(g.json);
     fmt.print(
         &serde_json::json!({ "uuid": pipeline_uuid, "stopped": true }),
@@ -545,13 +547,13 @@ pub async fn rerun(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
     };
     let client = client(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching latest pipeline...");
     let pipeline = client
         .latest_pipeline(&repo.workspace, &repo.slug, Some(&branch))
         .await?
         .ok_or_else(|| BitbucketError::NotFound(format!("no pipeline for branch '{branch}'")))?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     if !g.json
         && !confirm(&format!(
@@ -566,12 +568,12 @@ pub async fn rerun(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Triggering rerun...");
     let new_pipeline = client
         .rerun_pipeline(&repo.workspace, &repo.slug, &pipeline.uuid)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
     let out = CiStatusOut {
         branch: branch.clone(),
         pipeline: Some(PipelineOut {
@@ -634,7 +636,7 @@ pub async fn trigger(
         )
     };
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message(format!("Triggering pipeline for '{branch}'..."));
     let pipeline = client
         .trigger_pipeline_with_variables(
@@ -644,7 +646,7 @@ pub async fn trigger(
             variables_payload.as_deref(),
         )
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = CiStatusOut {
         branch: branch.clone(),

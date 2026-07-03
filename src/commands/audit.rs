@@ -2,7 +2,7 @@
 
 use crate::api::repo::{BranchRestriction, DefaultReviewer};
 use crate::cli::GlobalArgs;
-use crate::commands::{client, make_spinner, resolve_repo};
+use crate::commands::{client, make_spinner, resolve_repo, SpinnerGuard};
 use crate::error::Result;
 use crate::output::theme::Theme;
 use crate::output::Formatter;
@@ -47,7 +47,7 @@ pub async fn run_audit(g: &GlobalArgs, slug_arg: Option<&str>) -> Result<()> {
     let repo = resolve_repo(g)?;
     let ws = &repo.workspace;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
 
     let repos = if let Some(s) = slug_arg {
         spinner.set_message(format!("Fetching repository {}...", s));
@@ -85,7 +85,7 @@ pub async fn run_audit(g: &GlobalArgs, slug_arg: Option<&str>) -> Result<()> {
 
     let audits = join_all(audit_futures).await;
 
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let mut total_issues = 0;
     let mut errors = 0;

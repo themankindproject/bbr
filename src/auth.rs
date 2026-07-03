@@ -56,6 +56,10 @@ fn from_env() -> Option<Credentials> {
     let username = std::env::var(ENV_USERNAME).ok()?;
     let token = std::env::var(ENV_TOKEN).ok()?;
     if token.is_empty() {
+        tracing::warn!(
+            "{ENV_TOKEN} is set but empty; ignoring environment credentials. \
+             Set a valid Atlassian API token from https://id.atlassian.com/manage-profile/security/api-tokens"
+        );
         return None;
     }
     if username.is_empty() {

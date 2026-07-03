@@ -1,6 +1,14 @@
 //! Pretty table rendering for humans.
 
-use comfy_table::{ContentArrangement, Table as ComfyTable};
+use comfy_table::{Cell, ColumnConstraint, ContentArrangement, Table as ComfyTable, Width};
+
+/// Maximum character width for free-text columns (title, description, body…).
+/// Long strings are truncated by the caller via [`crate::commands::truncate`]
+/// before being inserted, so this is a hard safety cap at the table layer.
+const MAX_TEXT_COL_WIDTH: u16 = 60;
+
+/// Columns whose header name (case-insensitive) get a width cap applied.
+const WIDE_COL_NAMES: &[&str] = &["title", "description", "body", "name", "message", "summary"];
 
 /// A small wrapper around `comfy_table::Table` that applies our theme and
 /// honors `NO_COLOR` / non-TTY.
@@ -42,6 +50,15 @@ impl Table {
                     col.set_cell_alignment(comfy_table::CellAlignment::Center);
                 }
             }
+            // Cap wide free-text columns so a single long value can't blow out
+            // the terminal width.
+            if WIDE_COL_NAMES.iter().any(|&n| lower == n) {
+                if let Some(col) = self.inner.column_mut(i) {
+                    col.set_constraint(ColumnConstraint::UpperBoundary(Width::Fixed(
+                        MAX_TEXT_COL_WIDTH,
+                    )));
+                }
+            }
         }
         self
     }
@@ -51,7 +68,7 @@ impl Table {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        let cells: Vec<String> = row.into_iter().map(Into::into).collect();
+        let cells: Vec<Cell> = row.into_iter().map(|s| Cell::new(s.into())).collect();
         self.inner.add_row(cells);
         self
     }
@@ -101,5 +118,19 @@ mod tests {
         let out = table.render();
         assert!(out.contains("A"));
         assert!(out.contains("B"));
+    }
+
+    #[test]
+    fn title_column_constraint_applied() {
+        // A title column should have a width constraint set so it doesn't
+        // blow out the terminal with a 300-char PR title.
+        let table =
+            Table::new()
+                .headers(["ID", "Title", "State"])
+                .add_row(["1", &"x".repeat(200), "OPEN"]);
+        let out = table.render();
+        // The rendered output must not contain the full 200-char string verbatim
+        // (comfy-table will wrap/truncate to the column constraint).
+        assert!(!out.contains(&"x".repeat(200)));
     }
 }

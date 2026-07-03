@@ -97,17 +97,24 @@ pub fn current_head() -> Result<Head> {
 
 /// Read body text from one of: direct `--body`, a `--body-file`, or stdin
 /// (when `body_stdin` is set). Returns the resolved text or an error if none.
-pub fn resolve_body(
+///
+/// Stdin is read via `tokio::task::spawn_blocking` so the async runtime is not
+/// stalled while waiting for piped input.
+pub async fn resolve_body(
     body: Option<&str>,
     body_file: Option<&str>,
     body_stdin: bool,
 ) -> Result<String> {
     if body_stdin {
-        use std::io::Read;
-        let mut buf = String::new();
-        std::io::stdin()
-            .read_to_string(&mut buf)
-            .map_err(BitbucketError::Io)?;
+        let buf = tokio::task::spawn_blocking(|| {
+            use std::io::Read;
+            let mut buf = String::new();
+            std::io::stdin().read_to_string(&mut buf)?;
+            Ok::<String, std::io::Error>(buf)
+        })
+        .await
+        .map_err(|e| BitbucketError::Other(format!("stdin read task panicked: {e}")))?
+        .map_err(BitbucketError::Io)?;
         return Ok(buf);
     }
     if let Some(path) = body_file {
@@ -127,15 +134,12 @@ pub fn make_formatter(g: &GlobalArgs) -> crate::output::Formatter {
     crate::output::Formatter::from_args(g.json, g.no_pager)
 }
 
-/// Check if quiet mode is enabled (via --quiet flag or BBR_QUIET env).
-fn is_quiet() -> bool {
-    std::env::var_os("BBR_QUIET").is_some()
-        || std::env::args().any(|arg| arg == "--quiet" || arg == "-q")
-}
-
 /// Create a spinner if stdout is a TTY and we're not in JSON or quiet mode.
-pub fn make_spinner(json: bool) -> ProgressBar {
-    if json || is_quiet() {
+///
+/// Pass `g.quiet` as the `quiet` argument. The spinner is hidden when either
+/// `json` or `quiet` is true, or when the `BBR_QUIET` env var is set.
+pub fn make_spinner(json: bool, quiet: bool) -> ProgressBar {
+    if json || quiet || std::env::var_os("BBR_QUIET").is_some() {
         ProgressBar::hidden()
     } else {
         let pb = ProgressBar::new_spinner();
@@ -145,6 +149,45 @@ pub fn make_spinner(json: bool) -> ProgressBar {
                 .unwrap_or_else(|_| ProgressStyle::default_spinner()),
         );
         pb
+    }
+}
+
+/// RAII guard for a [`ProgressBar`] spinner.
+///
+/// The spinner is finished and cleared automatically when the guard is dropped,
+/// so error-path early returns no longer leave a dangling spinner on screen.
+///
+/// ```rust,ignore
+/// let _spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
+/// _spinner.set_message("Loading…");
+/// let data = client.fetch().await?; // spinner cleared even on error
+/// ```
+pub struct SpinnerGuard(pub ProgressBar);
+
+impl SpinnerGuard {
+    pub fn new(pb: ProgressBar) -> Self {
+        Self(pb)
+    }
+
+    /// Delegate to the inner [`ProgressBar::set_message`].
+    pub fn set_message(&self, msg: impl Into<std::borrow::Cow<'static, str>>) {
+        self.0.set_message(msg);
+    }
+
+    /// Print a line above the spinner without disturbing it.
+    pub fn println(&self, msg: impl AsRef<str>) {
+        self.0.println(msg);
+    }
+
+    /// Finish and clear immediately (also called on drop).
+    pub fn finish(&self) {
+        self.0.finish_and_clear();
+    }
+}
+
+impl Drop for SpinnerGuard {
+    fn drop(&mut self) {
+        self.0.finish_and_clear();
     }
 }
 
@@ -257,19 +300,25 @@ mod tests {
 
     #[test]
     fn make_spinner_hidden_in_json_mode() {
-        let pb = make_spinner(true);
+        let pb = make_spinner(true, false);
         assert!(pb.is_hidden());
     }
 
     #[test]
-    fn resolve_body_direct() {
-        let result = resolve_body(Some("hello"), None, false).unwrap();
+    fn make_spinner_hidden_in_quiet_mode() {
+        let pb = make_spinner(false, true);
+        assert!(pb.is_hidden());
+    }
+
+    #[tokio::test]
+    async fn resolve_body_direct() {
+        let result = resolve_body(Some("hello"), None, false).await.unwrap();
         assert_eq!(result, "hello");
     }
 
-    #[test]
-    fn resolve_body_errors_without_source() {
-        let err = resolve_body(None, None, false).unwrap_err();
+    #[tokio::test]
+    async fn resolve_body_errors_without_source() {
+        let err = resolve_body(None, None, false).await.unwrap_err();
         assert!(format!("{err}").contains("no body provided"));
     }
 }

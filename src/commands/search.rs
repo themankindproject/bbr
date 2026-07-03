@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::BitbucketClient;
 use crate::cli::GlobalArgs;
-use crate::commands::{client, make_spinner, resolve_repo};
+use crate::commands::{client, make_spinner, resolve_repo, SpinnerGuard};
 use crate::error::Result;
 use crate::output::Formatter;
 
@@ -83,12 +83,12 @@ pub async fn run(g: &GlobalArgs, query: &str, repo_filter: Option<&str>, limit: 
     let repo = resolve_repo(g)?;
     let client = client(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message(format!("Searching for '{query}'..."));
     let api_resp = client
         .search_code(&repo.workspace, query, repo_filter, limit)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let mut results = Vec::new();
     for hit in &api_resp.values {

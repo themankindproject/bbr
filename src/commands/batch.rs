@@ -2,7 +2,7 @@
 
 use crate::api::pr::{MergePrRequest, PrState};
 use crate::cli::GlobalArgs;
-use crate::commands::{client, confirm, make_spinner, resolve_repo};
+use crate::commands::{client, confirm, make_spinner, resolve_repo, SpinnerGuard};
 use crate::error::Result;
 use crate::output::table::Table;
 use crate::output::theme::Theme;
@@ -63,7 +63,7 @@ pub async fn merge_approved(
     let repo = resolve_repo(g)?;
     let slug = repo_arg.unwrap_or(&repo.slug);
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching open pull requests...");
 
     let prs = client
@@ -103,7 +103,7 @@ pub async fn merge_approved(
         }
     }
 
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let plan = BatchPlan {
         dry_run,
@@ -156,7 +156,7 @@ pub async fn merge_approved(
     let mut succeeded = Vec::new();
     let mut failed = Vec::new();
 
-    let run_spinner = make_spinner(g.json);
+    let run_spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     for act in approved_actions {
         run_spinner.set_message(format!("Merging PR #{}...", act.pr_id));
         let merge_req = MergePrRequest {
@@ -180,7 +180,7 @@ pub async fn merge_approved(
             }),
         }
     }
-    run_spinner.finish_and_clear();
+    run_spinner.finish();
 
     let result = BatchResult { succeeded, failed };
     let human = render_results(&result);
@@ -198,7 +198,7 @@ pub async fn rerun_failed(
     let repo = resolve_repo(g)?;
     let slug = repo_arg.unwrap_or(&repo.slug);
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching recent pipelines...");
 
     let pipelines = client
@@ -227,7 +227,7 @@ pub async fn rerun_failed(
         }
     }
 
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let plan = BatchPlan {
         dry_run,
@@ -278,7 +278,7 @@ pub async fn rerun_failed(
     let mut succeeded = Vec::new();
     let mut failed = Vec::new();
 
-    let run_spinner = make_spinner(g.json);
+    let run_spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     for act in failed_actions {
         run_spinner.set_message(format!("Rerunning pipeline #{}...", act.build_number));
         match client
@@ -300,7 +300,7 @@ pub async fn rerun_failed(
             }),
         }
     }
-    run_spinner.finish_and_clear();
+    run_spinner.finish();
 
     let result = BatchResult { succeeded, failed };
     let human = render_results(&result);
@@ -318,7 +318,7 @@ pub async fn cleanup_merged_branches(
     let repo = resolve_repo(g)?;
     let slug = repo_arg.unwrap_or(&repo.slug);
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Listing remote branches...");
 
     let branches = client.list_branches(&repo.workspace, slug, 100).await?;
@@ -348,7 +348,7 @@ pub async fn cleanup_merged_branches(
         }
     }
 
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let plan = BatchPlan {
         dry_run,
@@ -395,7 +395,7 @@ pub async fn cleanup_merged_branches(
     let mut succeeded = Vec::new();
     let mut failed = Vec::new();
 
-    let run_spinner = make_spinner(g.json);
+    let run_spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     for act in cleanup_actions {
         if act.is_remote {
             run_spinner.set_message(format!("Deleting remote branch {}...", act.branch_name));
@@ -445,7 +445,7 @@ pub async fn cleanup_merged_branches(
             }
         }
     }
-    run_spinner.finish_and_clear();
+    run_spinner.finish();
 
     let result = BatchResult { succeeded, failed };
     let human = render_results(&result);

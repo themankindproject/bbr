@@ -2,7 +2,9 @@
 
 use crate::api::pipeline::{Pipeline, PipelineStep};
 use crate::cli::GlobalArgs;
-use crate::commands::{client, current_head, human_duration, make_spinner, resolve_repo};
+use crate::commands::{
+    client, current_head, human_duration, make_spinner, resolve_repo, SpinnerGuard,
+};
 use crate::error::{BitbucketError, Result};
 use crate::output::theme::Theme;
 use crate::output::Formatter;
@@ -83,7 +85,7 @@ pub async fn compare(g: &GlobalArgs, a_ref: &str, b_ref: &str) -> Result<()> {
     let head = current_head().ok();
     let current_branch = head.map_or_else(|| "main".to_string(), |h| h.branch);
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Resolving pipelines...");
 
     let pipe_a =
@@ -112,7 +114,7 @@ pub async fn compare(g: &GlobalArgs, a_ref: &str, b_ref: &str) -> Result<()> {
     )
     .await?;
 
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let step_deltas = compute_step_deltas(&steps_a, &steps_b);
 

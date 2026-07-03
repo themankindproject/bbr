@@ -3,7 +3,7 @@
 use serde::Serialize;
 
 use crate::cli::GlobalArgs;
-use crate::commands::{client, make_spinner, resolve_repo, truncate};
+use crate::commands::{client, make_spinner, resolve_repo, truncate, SpinnerGuard};
 use crate::error::Result;
 use crate::output::table::Table;
 use crate::output::Formatter;
@@ -85,12 +85,12 @@ pub async fn list_branches(g: &GlobalArgs, limit: u32) -> Result<()> {
     let repo = resolve_repo(g)?;
     let client = client(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching branches...");
     let values = client
         .list_branches(&repo.workspace, &repo.slug, limit)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let branches: Vec<BranchOut> = values
         .iter()
@@ -112,10 +112,10 @@ pub async fn list_tags(g: &GlobalArgs, limit: u32) -> Result<()> {
     let repo = resolve_repo(g)?;
     let client = client(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching tags...");
     let values = client.list_tags(&repo.workspace, &repo.slug, limit).await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let tags: Vec<TagOut> = values
         .iter()
@@ -146,7 +146,7 @@ pub async fn list_commits(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> R
     let repo = resolve_repo(g)?;
     let client = client(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching commits...");
     let commits: Vec<CommitOut> = client
         .list_commits(&repo.workspace, &repo.slug, branch, limit)
@@ -159,7 +159,7 @@ pub async fn list_commits(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> R
             date: c.date,
         })
         .collect();
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let fmt = Formatter::from_json_flag(g.json);
     let mut table = Table::new().headers(["Hash", "Date", "Author", "Message"]);
@@ -186,12 +186,12 @@ pub async fn create(
     let ws = resolve_repo(g)?.workspace;
     let client = client(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Creating repository...");
     let repo = client
         .create_repo(&ws, slug, is_private, description, language, enable_issues)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = RepoInfoOut {
         workspace: ws,
@@ -227,10 +227,10 @@ pub async fn delete(g: &GlobalArgs, slug: &str, yes: bool) -> Result<()> {
         return Ok(());
     }
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message(format!("Deleting {ws}/{slug}..."));
     client.delete_repo(&ws, slug).await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = serde_json::json!({"deleted": true, "workspace": ws, "slug": slug});
     let human = format!("Deleted {ws}/{slug}");
@@ -247,12 +247,12 @@ pub async fn fork(
     let slug = slug.unwrap_or(&repo.slug);
     let client = client(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message(format!("Forking {slug}..."));
     let forked = client
         .fork_repo(&repo.workspace, slug, name, workspace)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = serde_json::json!({
         "workspace": forked.full_name.split('/').next().unwrap_or(""),
@@ -277,12 +277,12 @@ pub async fn create_branch(g: &GlobalArgs, name: &str, from: Option<&str>) -> Re
         None => crate::git::current_commit()?,
     };
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message(format!("Creating branch {name}..."));
     let branch = client
         .create_branch(&repo.workspace, &repo.slug, name, &target_hash)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = serde_json::json!({
         "name": branch.name,
@@ -314,12 +314,12 @@ pub async fn create_tag(
         None => crate::git::current_commit()?,
     };
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message(format!("Creating tag {name}..."));
     let tag = client
         .create_tag(&repo.workspace, &repo.slug, name, &target_hash, message)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = serde_json::json!({
         "name": tag.name,
@@ -338,7 +338,7 @@ pub async fn permissions(g: &GlobalArgs) -> Result<()> {
     let repo = resolve_repo(g)?;
     let client = client(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching permissions...");
     let (users, groups) = tokio::join!(
         client.list_user_permissions(&repo.workspace, &repo.slug),
@@ -346,7 +346,7 @@ pub async fn permissions(g: &GlobalArgs) -> Result<()> {
     );
     let users = users.unwrap_or_default();
     let groups = groups.unwrap_or_default();
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = serde_json::json!({
         "workspace": repo.workspace,

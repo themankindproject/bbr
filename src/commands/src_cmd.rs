@@ -1,6 +1,6 @@
 //! `bbr src` — remote source browser.
 use crate::cli::GlobalArgs;
-use crate::commands::{client, current_head, make_spinner, resolve_repo};
+use crate::commands::{client, current_head, make_spinner, resolve_repo, SpinnerGuard};
 use crate::error::Result;
 use crate::output::table::Table;
 use crate::output::Formatter;
@@ -30,12 +30,12 @@ pub async fn cat(g: &GlobalArgs, path: &str, git_ref: Option<&str>) -> Result<()
         Some(r) => r.to_string(),
         None => current_head()?.branch,
     };
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message(format!("Fetching {path}..."));
     let content = client
         .get_file_raw(&repo.workspace, &repo.slug, &resolved_ref, path)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let fmt = Formatter::from_json_flag(g.json);
     if g.json {
@@ -60,12 +60,12 @@ pub async fn ls(g: &GlobalArgs, path: Option<&str>, git_ref: Option<&str>) -> Re
         None => current_head()?.branch,
     };
     let dir = path.unwrap_or("");
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching directory listing...");
     let entries = client
         .list_src(&repo.workspace, &repo.slug, &resolved_ref, dir)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out: Vec<SrcEntryOut> = entries
         .iter()

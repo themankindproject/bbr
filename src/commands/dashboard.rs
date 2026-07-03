@@ -3,7 +3,7 @@
 use crate::api::pr::{Participant, PrState};
 use crate::api::repo::Repository;
 use crate::cli::GlobalArgs;
-use crate::commands::{client, make_spinner, resolve_repo, truncate};
+use crate::commands::{client, make_spinner, resolve_repo, truncate, SpinnerGuard};
 use crate::error::Result;
 use crate::output::theme::Theme;
 use crate::output::Formatter;
@@ -81,7 +81,7 @@ pub async fn run_dashboard(
     let repo = resolve_repo(g)?;
     let ws = &repo.workspace;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching current user...");
     let user = client.current_user().await?;
     let my_name = user.display_name.clone();
@@ -236,7 +236,7 @@ pub async fn run_dashboard(
         }
     }
 
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = DashboardOut {
         workspace: ws.clone(),

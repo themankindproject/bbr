@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use crate::api::status::{BuildStatus, BuildStatusRequest};
 use crate::cli::GlobalArgs;
-use crate::commands::{client, current_head, make_spinner, resolve_repo};
+use crate::commands::{client, current_head, make_spinner, resolve_repo, SpinnerGuard};
 use crate::error::{BitbucketError, Result};
 use crate::output::Formatter;
 
@@ -45,12 +45,12 @@ pub async fn set_status(
     };
     let client = client(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Setting commit status...");
     let status = client
         .create_commit_status(&repo.workspace, &repo.slug, &commit, &req)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = status_out(&commit, &status);
     let human = format!(

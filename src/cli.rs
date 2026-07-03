@@ -3,12 +3,23 @@
 use std::io::{self, IsTerminal};
 use std::process::ExitCode;
 
-use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand};
+use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{generate, Shell};
 use tracing_subscriber::EnvFilter;
 
 use crate::commands;
 use crate::error::{report, ExitCode as AppExitCode, Result};
+
+/// When to emit ANSI color output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ColorChoice {
+    /// Use color if the output is a TTY and `NO_COLOR` is not set (default).
+    Auto,
+    /// Always use color, even when piped.
+    Always,
+    /// Never use color.
+    Never,
+}
 /// Default Bitbucket Cloud REST API base.
 pub const DEFAULT_API_BASE: &str = "https://api.bitbucket.org/2.0";
 
@@ -43,11 +54,12 @@ pub struct GlobalArgs {
     #[arg(short, long, global = true, action = ArgAction::SetTrue)]
     pub quiet: bool,
 
-    /// Force ANSI color output.
-    #[arg(long, global = true, action = ArgAction::SetTrue)]
-    pub color: bool,
+    /// When to use color: auto (default), always, or never.
+    /// Also controlled by NO_COLOR / CLICOLOR / CLICOLOR_FORCE env vars.
+    #[arg(long, global = true, value_enum, default_value = "auto")]
+    pub color: ColorChoice,
 
-    /// Disable ANSI color output.
+    /// Disable ANSI color output (equivalent to --color never).
     #[arg(long, global = true, action = ArgAction::SetTrue)]
     pub no_color: bool,
 
@@ -1199,12 +1211,14 @@ pub async fn run() -> ExitCode {
 
     init_tracing(cli.global.verbose);
 
-    // Set color override before any Theme access
-    if cli.global.no_color {
+    // Set color override before any Theme access.
+    // --no-color takes precedence over --color.
+    if cli.global.no_color || cli.global.color == ColorChoice::Never {
         crate::output::theme::Theme::set_color_override(false);
-    } else if cli.global.color {
+    } else if cli.global.color == ColorChoice::Always {
         crate::output::theme::Theme::set_color_override(true);
     }
+    // ColorChoice::Auto: let Theme decide based on NO_COLOR + TTY detection.
 
     // Set unicode override before any Theme access
     if cli.global.no_unicode {
@@ -1775,9 +1789,9 @@ async fn dispatch_issue(action: IssueAction) -> Result<()> {
 
 fn init_tracing(verbose: u8) {
     let level = match verbose {
-        0 => "warn",
-        1 => "info",
-        _ => "debug",
+        0 => "info",
+        1 => "debug",
+        _ => "trace",
     };
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
     tracing_subscriber::fmt()

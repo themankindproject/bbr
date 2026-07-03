@@ -5,7 +5,7 @@
 //! workspaces that have the issue tracker enabled.
 
 use crate::cli::GlobalArgs;
-use crate::commands::{client, make_spinner, resolve_repo, truncate};
+use crate::commands::{client, make_spinner, resolve_repo, truncate, SpinnerGuard};
 use crate::error::Result;
 use crate::output::table::Table;
 use crate::output::Formatter;
@@ -92,7 +92,7 @@ pub async fn list(
     warn_deprecated();
     let repo = resolve_repo(g)?;
     let client = client(g)?;
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching issues...");
     let issues = client
         .list_issues(
@@ -106,7 +106,7 @@ pub async fn list(
             query,
         )
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out: Vec<IssueOut> = issues.iter().map(issue_to_out).collect();
 
@@ -137,10 +137,10 @@ pub async fn view(g: &GlobalArgs, id: u64, show_comments: bool) -> Result<()> {
     warn_deprecated();
     let repo = resolve_repo(g)?;
     let client = client(g)?;
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message(format!("Fetching issue #{id}..."));
     let issue = client.get_issue(&repo.workspace, &repo.slug, id).await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let body = issue
         .content
@@ -257,7 +257,7 @@ pub async fn create(
     warn_deprecated();
     let repo = resolve_repo(g)?;
     let client = client(g)?;
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Creating issue...");
     let issue = client
         .create_issue(
@@ -270,7 +270,7 @@ pub async fn create(
             assignee,
         )
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
     let out = issue_to_out(&issue);
     let fmt = Formatter::from_json_flag(g.json);
     let human = format!(
@@ -294,7 +294,7 @@ pub async fn update(
     warn_deprecated();
     let repo = resolve_repo(g)?;
     let client = client(g)?;
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message(format!("Updating issue #{id}..."));
     let issue = client
         .update_issue(
@@ -309,7 +309,7 @@ pub async fn update(
             assignee,
         )
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
     let out = issue_to_out(&issue);
     let fmt = Formatter::from_json_flag(g.json);
     let human = format!("Updated issue #{}", issue.id);
@@ -320,12 +320,12 @@ pub async fn comment(g: &GlobalArgs, id: u64, body: &str) -> Result<()> {
     warn_deprecated();
     let repo = resolve_repo(g)?;
     let client = client(g)?;
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Posting comment...");
     let c = client
         .create_issue_comment(&repo.workspace, &repo.slug, id, body)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
     let out = IssueCommentOut {
         id: c.id,
         author: c.author.as_ref().map(|u| u.display_name.clone()),
@@ -345,12 +345,12 @@ pub async fn list_comments(g: &GlobalArgs, id: u64, limit: u32) -> Result<()> {
     warn_deprecated();
     let repo = resolve_repo(g)?;
     let client = client(g)?;
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message(format!("Fetching comments for issue #{id}..."));
     let comments = client
         .list_issue_comments(&repo.workspace, &repo.slug, id, limit)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out: Vec<IssueCommentOut> = comments
         .iter()

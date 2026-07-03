@@ -128,8 +128,13 @@ pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
         match result {
             Ok(out) => {
                 let human = render_human(&out);
-                // Clear previous output — preserve scrollback buffer
-                eprint!("\x1B[H\x1B[J");
+                // Clear screen only when colors/ANSI is enabled (i.e. we're on a TTY).
+                // When piped or --no-color, just print a separator instead.
+                if theme.colors_enabled() {
+                    eprint!("\x1B[H\x1B[J");
+                } else {
+                    eprintln!("{}", theme.separator());
+                }
                 eprint!(
                     "{} (refreshing every {interval_secs}s — Ctrl+C to stop)\n\n",
                     theme.bold("bbr status --watch")
@@ -138,7 +143,9 @@ pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
                 fmt.print(&out, &human)?;
             }
             Err(e) => {
-                eprint!("\x1B[2J\x1B[H");
+                if theme.colors_enabled() {
+                    eprint!("\x1B[2J\x1B[H");
+                }
                 eprintln!("bbr: {e}");
                 if matches!(
                     e,

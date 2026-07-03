@@ -1,6 +1,6 @@
 //! `bbr deploy` — deployment and environment management.
 use crate::cli::GlobalArgs;
-use crate::commands::{client, make_spinner, resolve_repo, truncate};
+use crate::commands::{client, make_spinner, resolve_repo, truncate, SpinnerGuard};
 use crate::error::{BitbucketError, Result};
 use crate::output::table::Table;
 use crate::output::Formatter;
@@ -36,12 +36,12 @@ pub async fn list_deployments(g: &GlobalArgs, limit: u32) -> Result<()> {
     let repo = resolve_repo(g)?;
     let api = client(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching deployments...");
     let deployments = api
         .list_deployments(&repo.workspace, &repo.slug, limit)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out: Vec<DeploymentOut> = deployments
         .into_iter()
@@ -90,10 +90,10 @@ pub async fn list_environments(g: &GlobalArgs) -> Result<()> {
     let repo = resolve_repo(g)?;
     let api = client(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching environments...");
     let mut envs = api.list_environments(&repo.workspace, &repo.slug).await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     // Sort by rank ascending
     envs.sort_by_key(|e| e.rank);
@@ -126,12 +126,12 @@ pub async fn create_environment(g: &GlobalArgs, name: &str, env_type: &str) -> R
     let repo = resolve_repo(g)?;
     let api = client(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message(format!("Creating environment '{name}'..."));
     let env = api
         .create_environment(&repo.workspace, &repo.slug, name, env_type)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = EnvironmentOut {
         uuid: env.uuid,
@@ -151,12 +151,12 @@ pub async fn list_env_vars(g: &GlobalArgs, env_uuid: &str) -> Result<()> {
     let repo = resolve_repo(g)?;
     let api = client(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching environment variables...");
     let vars = api
         .list_env_variables(&repo.workspace, &repo.slug, env_uuid)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out: Vec<EnvVarOut> = vars
         .into_iter()
@@ -192,16 +192,16 @@ pub async fn set_env_var(
     let repo = resolve_repo(g)?;
     let api = client(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Checking existing variables...");
     let vars = api
         .list_env_variables(&repo.workspace, &repo.slug, env_uuid)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let fmt = Formatter::from_json_flag(g.json);
     if let Some(existing) = vars.iter().find(|v| v.key == key) {
-        let spinner2 = make_spinner(g.json);
+        let spinner2 = SpinnerGuard::new(make_spinner(g.json, g.quiet));
         spinner2.set_message(format!("Updating {key}..."));
         api.update_env_variable(
             &repo.workspace,
@@ -213,16 +213,16 @@ pub async fn set_env_var(
             secured,
         )
         .await?;
-        spinner2.finish_and_clear();
+        spinner2.finish();
         let out = serde_json::json!({"action": "updated", "key": key});
         let human = format!("Updated {key}");
         fmt.print(&out, &human)?;
     } else {
-        let spinner2 = make_spinner(g.json);
+        let spinner2 = SpinnerGuard::new(make_spinner(g.json, g.quiet));
         spinner2.set_message(format!("Creating {key}..."));
         api.create_env_variable(&repo.workspace, &repo.slug, env_uuid, key, value, secured)
             .await?;
-        spinner2.finish_and_clear();
+        spinner2.finish();
         let out = serde_json::json!({"action": "created", "key": key});
         let human = format!("Created {key}");
         fmt.print(&out, &human)?;
@@ -235,23 +235,23 @@ pub async fn delete_env_var(g: &GlobalArgs, env_uuid: &str, key: &str) -> Result
     let repo = resolve_repo(g)?;
     let api = client(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching variables...");
     let vars = api
         .list_env_variables(&repo.workspace, &repo.slug, env_uuid)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let var = vars
         .into_iter()
         .find(|v| v.key == key)
         .ok_or_else(|| BitbucketError::Other(format!("variable '{}' not found", key)))?;
 
-    let spinner2 = make_spinner(g.json);
+    let spinner2 = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner2.set_message(format!("Deleting {key}..."));
     api.delete_env_variable(&repo.workspace, &repo.slug, env_uuid, &var.uuid)
         .await?;
-    spinner2.finish_and_clear();
+    spinner2.finish();
 
     let fmt = Formatter::from_json_flag(g.json);
     let out = serde_json::json!({"action": "deleted", "key": key});
@@ -263,14 +263,14 @@ pub async fn trigger_deployment(g: &GlobalArgs, env_uuid: &str, commit: &str) ->
     let repo = resolve_repo(g)?;
     let api = client(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message(format!(
         "Triggering deployment to environment {env_uuid}..."
     ));
     let deployment = api
         .trigger_deployment(&repo.workspace, &repo.slug, env_uuid, commit)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = DeploymentOut {
         uuid: deployment.uuid.clone(),

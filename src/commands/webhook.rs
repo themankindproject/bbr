@@ -1,6 +1,6 @@
 //! `bbr webhook` — repository webhook management.
 use crate::cli::GlobalArgs;
-use crate::commands::{client, confirm, make_spinner, resolve_repo, truncate};
+use crate::commands::{client, confirm, make_spinner, resolve_repo, truncate, SpinnerGuard};
 use crate::error::{BitbucketError, Result};
 use crate::output::table::Table;
 use crate::output::Formatter;
@@ -20,10 +20,10 @@ pub struct WebhookOut {
 pub async fn list(g: &GlobalArgs) -> Result<()> {
     let repo = resolve_repo(g)?;
     let client = client(g)?;
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching webhooks...");
     let hooks = client.list_webhooks(&repo.workspace, &repo.slug).await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out: Vec<WebhookOut> = hooks
         .iter()
@@ -59,10 +59,10 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
 pub async fn view(g: &GlobalArgs, uid: &str) -> Result<()> {
     let repo = resolve_repo(g)?;
     let client = client(g)?;
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching webhook...");
     let hook = client.get_webhook(&repo.workspace, &repo.slug, uid).await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = WebhookOut {
         uuid: hook.uuid.clone(),
@@ -110,7 +110,7 @@ pub async fn create(
             "--events must be a non-empty comma-separated list".into(),
         ));
     }
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Creating webhook...");
     let hook = client
         .create_webhook(
@@ -123,7 +123,7 @@ pub async fn create(
             secret,
         )
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = WebhookOut {
         uuid: hook.uuid.clone(),
@@ -155,7 +155,7 @@ pub async fn update(
             .filter(|e| !e.is_empty())
             .collect()
     });
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Updating webhook...");
     let hook = client
         .update_webhook(
@@ -168,7 +168,7 @@ pub async fn update(
             active,
         )
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = WebhookOut {
         uuid: hook.uuid.clone(),
@@ -193,12 +193,12 @@ pub async fn delete(g: &GlobalArgs, uid: &str, yes: bool) -> Result<()> {
     }
     let repo = resolve_repo(g)?;
     let client = client(g)?;
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Deleting webhook...");
     client
         .delete_webhook(&repo.workspace, &repo.slug, uid)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
     let fmt = Formatter::from_json_flag(g.json);
     let out = serde_json::json!({"deleted": uid});
     fmt.print(&out, &format!("Deleted webhook {uid}"))

@@ -13,7 +13,7 @@ use crate::api::status::BuildStatus;
 use crate::api::BitbucketClient;
 use crate::cli::GlobalArgs;
 use crate::commands::{
-    client, confirm, current_head, make_spinner, resolve_body, resolve_repo, truncate,
+    client, confirm, current_head, make_spinner, resolve_body, resolve_repo, truncate, SpinnerGuard,
 };
 use crate::error::{BitbucketError, Result};
 use crate::git;
@@ -181,7 +181,7 @@ pub async fn list(
     let state = PrState::parse(state)?;
     let repo = resolve_repo(g)?;
     let client = client(g)?;
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching pull requests...");
     let values = client
         .list_prs(
@@ -196,7 +196,7 @@ pub async fn list(
             Some(order),
         )
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let rows: Vec<PrSummary> = values.iter().map(summarize).collect();
     let out = PrListOut {
@@ -239,20 +239,20 @@ pub async fn view(
     let mut human = render_view(&out);
 
     if show_diff {
-        let spinner = make_spinner(g.json);
+        let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
         spinner.set_message("Fetching diff...");
         let diff = client.pr_diff(&repo.workspace, &repo.slug, pr.id).await?;
-        spinner.finish_and_clear();
+        spinner.finish();
         human.push_str(&format!("\n\n{}", diff));
     }
 
     if show_comments {
-        let spinner = make_spinner(g.json);
+        let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
         spinner.set_message("Fetching comments...");
         let comments = client
             .pr_comments(&repo.workspace, &repo.slug, pr.id, 100)
             .await?;
-        spinner.finish_and_clear();
+        spinner.finish();
         let comments_out = PrCommentsOut {
             pr_id: pr.id,
             comments: comments
@@ -300,7 +300,7 @@ pub async fn create(
     };
 
     let description = if body.is_some() || body_file.is_some() || body_stdin {
-        Some(resolve_body(body, body_file, body_stdin)?)
+        Some(resolve_body(body, body_file, body_stdin).await?)
     } else {
         None
     };
@@ -330,10 +330,10 @@ pub async fn create(
         draft: if draft { Some(true) } else { None },
     };
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Creating pull request...");
     let pr = client.create_pr(&repo.workspace, &repo.slug, &req).await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = PrCreateOut {
         id: pr.id,
@@ -371,7 +371,7 @@ pub async fn comment(
 ) -> Result<()> {
     let repo = resolve_repo(g)?;
     let client = client(g)?;
-    let text = resolve_body(body, body_file, body_stdin)?;
+    let text = resolve_body(body, body_file, body_stdin).await?;
     client
         .comment_pr(&repo.workspace, &repo.slug, id, &text, reply_to)
         .await?;
@@ -394,12 +394,12 @@ pub async fn comments(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()>
     let client = client(g)?;
     let id = resolve_pr_id(&client, &repo.workspace, &repo.slug, id).await?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching comments...");
     let comments = client
         .pr_comments(&repo.workspace, &repo.slug, id, limit)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = PrCommentsOut {
         pr_id: id,
@@ -414,12 +414,12 @@ pub async fn tasks(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()> {
     let client = client(g)?;
     let id = resolve_pr_id(&client, &repo.workspace, &repo.slug, id).await?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching tasks...");
     let tasks = client
         .pr_tasks(&repo.workspace, &repo.slug, id, limit)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = PrTasksOut {
         pr_id: id,
@@ -434,12 +434,12 @@ pub async fn commits(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()> 
     let client = client(g)?;
     let id = resolve_pr_id(&client, &repo.workspace, &repo.slug, id).await?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching PR commits...");
     let commits = client
         .pr_commits(&repo.workspace, &repo.slug, id, limit)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = PrCommitsOut {
         pr_id: id,
@@ -454,12 +454,12 @@ pub async fn statuses(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()>
     let client = client(g)?;
     let id = resolve_pr_id(&client, &repo.workspace, &repo.slug, id).await?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching PR statuses...");
     let statuses = client
         .pr_statuses(&repo.workspace, &repo.slug, id, limit)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = PrStatusesOut {
         pr_id: id,
@@ -474,12 +474,12 @@ pub async fn conflicts(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()
     let client = client(g)?;
     let id = resolve_pr_id(&client, &repo.workspace, &repo.slug, id).await?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching PR conflicts...");
     let conflicts = client
         .pr_conflicts(&repo.workspace, &repo.slug, id, limit)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = PrConflictsOut {
         pr_id: id,
@@ -492,12 +492,12 @@ pub async fn conflicts(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()
 pub async fn request_changes(g: &GlobalArgs, id: u64) -> Result<()> {
     let repo = resolve_repo(g)?;
     let client = client(g)?;
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Requesting changes...");
     client
         .request_pr_changes(&repo.workspace, &repo.slug, id)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
     Formatter::from_json_flag(g.json).print(
         &serde_json::json!({ "id": id, "changes_requested": true }),
         &format!("Requested changes on PR #{}", id),
@@ -507,12 +507,12 @@ pub async fn request_changes(g: &GlobalArgs, id: u64) -> Result<()> {
 pub async fn unrequest_changes(g: &GlobalArgs, id: u64) -> Result<()> {
     let repo = resolve_repo(g)?;
     let client = client(g)?;
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Clearing change request...");
     client
         .unrequest_pr_changes(&repo.workspace, &repo.slug, id)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
     Formatter::from_json_flag(g.json).print(
         &serde_json::json!({ "id": id, "changes_requested": false }),
         &format!("Cleared change request on PR #{}", id),
@@ -522,7 +522,7 @@ pub async fn unrequest_changes(g: &GlobalArgs, id: u64) -> Result<()> {
 pub async fn approve(g: &GlobalArgs, id: u64, message: Option<&str>) -> Result<()> {
     let repo = resolve_repo(g)?;
     let client = client(g)?;
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Approving...");
     if let Some(msg) = message {
         client
@@ -531,7 +531,7 @@ pub async fn approve(g: &GlobalArgs, id: u64, message: Option<&str>) -> Result<(
     } else {
         client.approve_pr(&repo.workspace, &repo.slug, id).await?;
     }
-    spinner.finish_and_clear();
+    spinner.finish();
     let fmt = Formatter::from_json_flag(g.json);
     fmt.print(
         &serde_json::json!({ "id": id, "approved": true }),
@@ -542,10 +542,10 @@ pub async fn approve(g: &GlobalArgs, id: u64, message: Option<&str>) -> Result<(
 pub async fn unapprove(g: &GlobalArgs, id: u64) -> Result<()> {
     let repo = resolve_repo(g)?;
     let client = client(g)?;
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Removing approval...");
     client.unapprove_pr(&repo.workspace, &repo.slug, id).await?;
-    spinner.finish_and_clear();
+    spinner.finish();
     let fmt = Formatter::from_json_flag(g.json);
     fmt.print(
         &serde_json::json!({ "id": id, "approved": false }),
@@ -556,10 +556,10 @@ pub async fn unapprove(g: &GlobalArgs, id: u64) -> Result<()> {
 pub async fn decline(g: &GlobalArgs, id: u64) -> Result<()> {
     let repo = resolve_repo(g)?;
     let client = client(g)?;
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Declining...");
     let pr = client.decline_pr(&repo.workspace, &repo.slug, id).await?;
-    spinner.finish_and_clear();
+    spinner.finish();
     let out = PrViewOut::from(&pr);
     let fmt = Formatter::from_json_flag(g.json);
     fmt.print(&out, &format!("Declined PR #{}", id))
@@ -585,10 +585,10 @@ pub async fn merge(
         message: message.map(|m| m.to_string()),
     };
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching PR details...");
     let pr = client.get_pr(&repo.workspace, &repo.slug, id).await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     if !g.json
         && !confirm(&format!(
@@ -605,7 +605,7 @@ pub async fn merge(
         return Ok(());
     }
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Merging...");
     let body = if close_source_branch || strategy.is_some() || message.is_some() {
         Some(&merge_body)
@@ -615,7 +615,7 @@ pub async fn merge(
     let pr = client
         .merge_pr(&repo.workspace, &repo.slug, id, body)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = PrViewOut::from(&pr);
 
@@ -632,10 +632,10 @@ pub async fn checkout(g: &GlobalArgs, id: u64) -> Result<()> {
     let repo = resolve_repo(g)?;
     let client = client(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching PR details...");
     let pr = client.get_pr(&repo.workspace, &repo.slug, id).await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let branch = pr
         .source
@@ -644,12 +644,12 @@ pub async fn checkout(g: &GlobalArgs, id: u64) -> Result<()> {
         .map(|b| b.name.clone())
         .ok_or_else(|| BitbucketError::Other("PR has no source branch".into()))?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message(format!("Fetching '{branch}'..."));
     git::fetch_branch(&branch)?;
     spinner.set_message(format!("Checking out '{branch}'..."));
     git::checkout_branch(&branch)?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let fmt = Formatter::from_json_flag(g.json);
     fmt.print(
@@ -674,10 +674,10 @@ pub async fn update(
             close_source_branch: None,
         },
         (title, desc) => {
-            let spinner = make_spinner(g.json);
+            let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
             spinner.set_message("Fetching PR details...");
             let pr = client.get_pr(&repo.workspace, &repo.slug, id).await?;
-            spinner.finish_and_clear();
+            spinner.finish();
 
             UpdatePrRequest {
                 title: title.unwrap_or(&pr.title).to_string(),
@@ -689,12 +689,12 @@ pub async fn update(
         }
     };
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Updating PR...");
     let pr = client
         .update_pr(&repo.workspace, &repo.slug, id, &req)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = PrViewOut::from(&pr);
 
@@ -714,10 +714,10 @@ pub async fn diff(
     let repo = resolve_repo(g)?;
     let client = client(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching diff...");
     let body = client.pr_diff(&repo.workspace, &repo.slug, id).await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     if g.json {
         // JSON: emit structured diff with file metadata
@@ -769,10 +769,10 @@ pub async fn diffstat(g: &GlobalArgs, id: Option<u64>) -> Result<()> {
         None => resolve_pr_id(&client, &repo.workspace, &repo.slug, None).await?,
     };
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching diffstat...");
     let stat = client.pr_diffstat(&repo.workspace, &repo.slug, id).await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let fmt = Formatter::from_json_flag(g.json);
     let human = format!(
@@ -791,10 +791,10 @@ pub async fn patch(g: &GlobalArgs, id: Option<u64>, output: Option<&str>) -> Res
         None => resolve_pr_id(&client, &repo.workspace, &repo.slug, None).await?,
     };
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching patch...");
     let body = client.pr_patch(&repo.workspace, &repo.slug, id).await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     if let Some(path) = output {
         std::fs::write(path, &body)

@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-07-04
+
+### Fixed
+
+- **`--color` flag now accepts `auto|always|never`** — was a boolean `SetTrue` flag that accepted no
+  value, disagreeing with the README, USAGE.md, and `git`-style conventions. Now a proper
+  `ValueEnum` with three variants. `--color always` forces color even when piped; `--color never`
+  disables it; `--color auto` (default) continues to detect TTY + `NO_COLOR`. `--no-color` is
+  kept as a shorthand for `--color never`.
+- **`-v` now logs at `debug`, not `info`** — `--verbose 0` (no flag) was logging at `warn`
+  while the docs said `info`. Fixed: no flag → `info`, `-v` → `debug`, `-vv` → `trace`.
+- **`make_spinner` used arg-scanner instead of `GlobalArgs.quiet`** — `is_quiet()` scanned
+  `std::env::args()` for `--quiet`/`-q` literals, bypassing clap's normalization. It now reads
+  the `quiet` field on `GlobalArgs` directly.
+- **`resolve_body` blocked a Tokio worker thread on stdin** — `--body-stdin` called
+  `std::io::stdin().read_to_string()` synchronously inside an async function. Now uses
+  `tokio::task::spawn_blocking` so the runtime thread is not stalled.
+- **`bbr status --watch` emitted raw ANSI escapes regardless of `--no-color`** — screen-clear
+  sequences (`\x1B[H\x1B[J`, `\x1B[2J\x1B[H`) were hardcoded. Now gated on
+  `Theme::colors_enabled()`; falls back to a plain separator line when color is off.
+- **`terminal_width()` spawned a `stty` subprocess** — replaced with a `TIOCGWINSZ` ioctl on
+  Unix (instant, no subprocess) and a `$COLUMNS` env-var fallback that works everywhere
+  including Windows. `stty` is no longer invoked.
+- **`BITBUCKET_TOKEN` set-but-empty was silently ignored** — now emits a `tracing::warn` message
+  pointing to the API token creation page, matching the existing warning for an empty username.
+
+### Changed
+
+- **`libc` added as an explicit Unix-only dependency** — used for the `TIOCGWINSZ` ioctl in
+  `terminal_width()`. Was already a transitive dependency; now declared explicitly with
+  `[target.'cfg(unix)'.dependencies]`.
+
+### UX
+
+- **Spinner always cleared on error paths** — introduced `SpinnerGuard`, a RAII wrapper around
+  `indicatif::ProgressBar`. All spinner locals across every command file are now wrapped; the
+  `Drop` impl calls `finish_and_clear()` automatically, so early `?`-returns on errors no longer
+  leave a dangling spinner on the terminal.
+- **Table text columns capped at 60 characters** — PR titles, descriptions, names, and similar
+  free-text columns now have an `UpperBoundary(Width::Fixed(60))` constraint applied by the
+  `Table` wrapper. A 200-character PR title no longer blows out the terminal width.
+- **`bbr pr diff` hints when `bat` is not installed** — previously fell back silently to `less`.
+  Now prints a single `hint:` line pointing to the bat install page when the binary is not found,
+  then continues with the plain pager.
+
+### Testing
+
+- New tests: `make_spinner_hidden_in_quiet_mode`, `title_column_constraint_applied`,
+  `resolve_body_direct` / `resolve_body_errors_without_source` converted to async
+  `#[tokio::test]`.
+- Total: 196 unit + 22 integration + 9 smoke = **237 tests, all passing**.
+
 ## [0.1.5] - 2026-07-03
 
 ### Changed
@@ -348,7 +400,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credentials file opened with mode `0o600` at creation time on Unix, closing TOCTOU window.
 - No system keyring dependency (avoids 671 MB texlive pull).
 
-[Unreleased]: https://github.com/themankindproject/bbr/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/themankindproject/bbr/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/themankindproject/bbr/releases/tag/v0.1.6
+[0.1.5]: https://github.com/themankindproject/bbr/releases/tag/v0.1.5
 [0.1.4]: https://github.com/themankindproject/bbr/releases/tag/v0.1.4
 [0.1.3]: https://github.com/themankindproject/bbr/releases/tag/v0.1.3
 [0.1.2]: https://github.com/themankindproject/bbr/releases/tag/v0.1.2

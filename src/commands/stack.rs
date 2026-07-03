@@ -2,7 +2,7 @@
 
 use crate::api::pr::{CreateBranchRef, CreateNamed, CreatePrRequest, MergePrRequest};
 use crate::cli::GlobalArgs;
-use crate::commands::{client, confirm, current_head, make_spinner, resolve_repo};
+use crate::commands::{client, confirm, current_head, make_spinner, resolve_repo, SpinnerGuard};
 use crate::error::{BitbucketError, Result};
 use crate::output::theme::Theme;
 use crate::output::Formatter;
@@ -128,7 +128,7 @@ pub async fn add(g: &GlobalArgs, branch: &str, parent: Option<&str>) -> Result<(
     let client = client(g)?;
     let repo = resolve_repo(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message(format!("Pushing branch {} to remote...", branch));
 
     // Push branch to remote
@@ -162,7 +162,7 @@ pub async fn add(g: &GlobalArgs, branch: &str, parent: Option<&str>) -> Result<(
     let pr = client
         .create_pr(&repo.workspace, &repo.slug, &pr_req)
         .await?;
-    spinner.finish_and_clear();
+    spinner.finish();
 
     stack.prs.push(StackPr {
         branch: branch.to_string(),
@@ -196,7 +196,7 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
     let client = client(g)?;
     let repo = resolve_repo(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching pull request statuses...");
 
     let futures = stack.prs.iter().map(|pr| {
@@ -227,7 +227,7 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
 
     let prs_status = futures::future::join_all(futures).await;
 
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = StackListOut {
         name: stack.name.clone(),
@@ -249,7 +249,7 @@ pub fn rebase(g: &GlobalArgs, push: bool) -> Result<()> {
     let config = StackConfig::load()?;
     let stack = config.active_stack()?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     let mut steps = Vec::new();
 
     for pr in &stack.prs {
@@ -294,7 +294,7 @@ pub fn rebase(g: &GlobalArgs, push: bool) -> Result<()> {
         }
     }
 
-    spinner.finish_and_clear();
+    spinner.finish();
 
     let out = StackRebaseOut { steps };
     let human = render_rebase(&out);
@@ -329,7 +329,7 @@ pub async fn land(g: &GlobalArgs, strategy: Option<&str>, yes: bool) -> Result<(
         return Ok(());
     }
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     let mut merged = Vec::new();
     let mut failed = Vec::new();
 
@@ -362,7 +362,7 @@ pub async fn land(g: &GlobalArgs, strategy: Option<&str>, yes: bool) -> Result<(
         }
     }
 
-    spinner.finish_and_clear();
+    spinner.finish();
 
     // If all merged successfully, delete the stack config
     if failed.is_empty() {
@@ -397,7 +397,7 @@ pub async fn abort(g: &GlobalArgs, yes: bool) -> Result<()> {
     let client = client(g)?;
     let repo = resolve_repo(g)?;
 
-    let spinner = make_spinner(g.json);
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     let mut declined = Vec::new();
     let mut branches_deleted = Vec::new();
 
@@ -421,7 +421,7 @@ pub async fn abort(g: &GlobalArgs, yes: bool) -> Result<()> {
         }
     }
 
-    spinner.finish_and_clear();
+    spinner.finish();
 
     // Remove stack from configuration
     let mut new_config = StackConfig::load().unwrap_or_default();
