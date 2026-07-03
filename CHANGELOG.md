@@ -54,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Bounded concurrency for `bbr ci list` pipeline steps** — replaced the unbounded `join_all`
   concurrency loop with a capped `buffer_unordered(5)` stream to prevent 429 Rate Limit spikes when listing large pipeline sets.
+- **Bounded concurrency for `bbr pr stack list` status checks** — replaced the unbounded `join_all` concurrency loop with a capped `buffered(5)` stream to prevent rate limit spikes on large PR stacks, while keeping the parent-child ordering intact.
 
 ### UX
 

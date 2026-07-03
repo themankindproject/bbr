@@ -225,7 +225,11 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
         }
     });
 
-    let prs_status = futures::future::join_all(futures).await;
+    use futures::StreamExt;
+    let prs_status = futures::stream::iter(futures)
+        .buffered(5)
+        .collect::<Vec<StackPrStatus>>()
+        .await;
 
     spinner.finish();
 
