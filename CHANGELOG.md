@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Word-level highlighting inside side-by-side diff mode** — paired change lines in side-by-side layout now display fine-grained red/green highlights for deleted/inserted words.
+
+### Fixed
+
+- **`git branch -d` local deletion in `batch.rs` no longer blocks Tokio worker threads** — refactored manual `git` subprocess spawning to use a shared non-blocking `git::delete_branch_local_safe()` helper with built-in timeout protection.
+- **Browser opening in `open.rs` no longer blocks Tokio worker threads** — wrapped blocking browser launch `opener_command().status()` in a `tokio::task::spawn_blocking` task.
+
+### Performance
+
+- **Bounded concurrency for `bbr pr stack list` status checks** — replaced the unbounded `join_all` concurrency loop with a capped `buffered(5)` stream to prevent rate limit spikes on large PR stacks, while keeping the parent-child ordering intact.
+
 ## [0.1.6] - 2026-07-04
 
 ### Added
@@ -37,8 +50,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   including Windows. Eliminated duplicate `stty` spawning in `src/diff/renderer.rs` by routing to the shared helper.
 - **`confirm` prompt no longer blocks Tokio worker threads** — wrapped blocking stdin `read_line`
   in `tokio::task::spawn_blocking` across all subcommands.
-- **`git branch -d` local deletion in `batch.rs` no longer blocks Tokio worker threads** — refactored manual `git` subprocess spawning to use a shared non-blocking `git::delete_branch_local_safe()` helper with built-in timeout protection.
-- **Browser opening in `open.rs` no longer blocks Tokio worker threads** — wrapped blocking browser launch `opener_command().status()` in a `tokio::task::spawn_blocking` task.
 - **Dynamic window resizing in `--watch` loops** — removed the static `OnceLock` caching from
   the shared `terminal_width()` helper, allowing terminal geometry changes to be captured dynamically.
 - **`BITBUCKET_TOKEN` set-but-empty was silently ignored** — now emits a `tracing::warn` message
@@ -54,7 +65,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Bounded concurrency for `bbr ci list` pipeline steps** — replaced the unbounded `join_all`
   concurrency loop with a capped `buffer_unordered(5)` stream to prevent 429 Rate Limit spikes when listing large pipeline sets.
-- **Bounded concurrency for `bbr pr stack list` status checks** — replaced the unbounded `join_all` concurrency loop with a capped `buffered(5)` stream to prevent rate limit spikes on large PR stacks, while keeping the parent-child ordering intact.
 
 ### UX
 
