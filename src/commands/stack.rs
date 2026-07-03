@@ -324,7 +324,7 @@ pub async fn land(g: &GlobalArgs, strategy: Option<&str>, yes: bool) -> Result<(
         && !confirm(&format!(
             "Merge and land {} stacked pull requests bottom-up? (y/n): ",
             stack.prs.len()
-        ))?
+        )).await?
     {
         return Ok(());
     }
@@ -389,7 +389,7 @@ pub async fn abort(g: &GlobalArgs, yes: bool) -> Result<()> {
         && !confirm(&format!(
             "Decline all PRs and delete branches for stack '{}'? (y/n): ",
             stack.name
-        ))?
+        )).await?
     {
         return Ok(());
     }

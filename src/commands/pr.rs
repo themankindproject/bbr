@@ -241,9 +241,13 @@ pub async fn view(
     if show_diff {
         let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
         spinner.set_message("Fetching diff...");
-        let diff = client.pr_diff(&repo.workspace, &repo.slug, pr.id).await?;
+        let diff_body = client.pr_diff(&repo.workspace, &repo.slug, pr.id).await?;
         spinner.finish();
-        human.push_str(&format!("\n\n{}", diff));
+        let theme = Theme::current();
+        let files = crate::diff::parser::parse(&diff_body);
+        let options = crate::diff::DiffRenderOptions::default();
+        let rendered = crate::diff::renderer::render(&files, &options, theme);
+        human.push_str(&format!("\n\n{}", rendered));
     }
 
     if show_comments {
@@ -597,7 +601,7 @@ pub async fn merge(
             pr.title,
             empty_as_unknown(pr.source_branch()),
             empty_as_unknown(pr.destination_branch()),
-        ))?
+        )).await?
     {
         let fmt = Formatter::from_json_flag(g.json);
         let human = "Aborted.".to_string();

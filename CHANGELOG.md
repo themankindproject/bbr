@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.6] - 2026-07-04
 
+### Added
+
+- **Intra-line word-level highlighting** — integrated word-level tokenization and diffing (using the `similar` crate) into the pretty diff renderer. Changed lines now highlight modified words with distinct background colors (reverse video green/red).
+- **Side-by-side diff rendering mode** — implemented the side-by-side layout option for diff displays, splitting the terminal width between old and new files with clean vertical boundary lines.
+
 ### Fixed
 
 - **`--color` flag now accepts `auto|always|never`** — was a boolean `SetTrue` flag that accepted no
@@ -29,7 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Theme::colors_enabled()`; falls back to a plain separator line when color is off.
 - **`terminal_width()` spawned a `stty` subprocess** — replaced with a `TIOCGWINSZ` ioctl on
   Unix (instant, no subprocess) and a `$COLUMNS` env-var fallback that works everywhere
-  including Windows. `stty` is no longer invoked.
+  including Windows. Eliminated duplicate `stty` spawning in `src/diff/renderer.rs` by routing to the shared helper.
+- **`confirm` prompt no longer blocks Tokio worker threads** — wrapped blocking stdin `read_line`
+  in `tokio::task::spawn_blocking` across all subcommands.
+- **Dynamic window resizing in `--watch` loops** — removed the static `OnceLock` caching from
+  the shared `terminal_width()` helper, allowing terminal geometry changes to be captured dynamically.
 - **`BITBUCKET_TOKEN` set-but-empty was silently ignored** — now emits a `tracing::warn` message
   pointing to the API token creation page, matching the existing warning for an empty username.
 
@@ -39,8 +48,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `terminal_width()`. Was already a transitive dependency; now declared explicitly with
   `[target.'cfg(unix)'.dependencies]`.
 
+### Performance
+
+- **Bounded concurrency for `bbr ci list` pipeline steps** — replaced the unbounded `join_all`
+  concurrency loop with a capped `buffer_unordered(5)` stream to prevent 429 Rate Limit spikes when listing large pipeline sets.
+
 ### UX
 
+- **`bbr pr view --diff` pretty rendering** — now formats the pull request diff with the custom
+  box-drawn and line-numbered renderer, matching the layout of `bbr pr diff`.
 - **Spinner always cleared on error paths** — introduced `SpinnerGuard`, a RAII wrapper around
   `indicatif::ProgressBar`. All spinner locals across every command file are now wrapped; the
   `Drop` impl calls `finish_and_clear()` automatically, so early `?`-returns on errors no longer

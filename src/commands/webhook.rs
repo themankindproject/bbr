@@ -186,7 +186,7 @@ pub async fn update(
 
 pub async fn delete(g: &GlobalArgs, uid: &str, yes: bool) -> Result<()> {
     if !yes {
-        let ok = confirm(&format!("Delete webhook {uid}? [y/N] "))?;
+        let ok = confirm(&format!("Delete webhook {uid}? [y/N] ")).await?;
         if !ok {
             return Ok(());
         }

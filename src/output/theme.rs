@@ -189,35 +189,33 @@ fn matches_ignore_ascii_case(s: &str, values: &[&str]) -> bool {
 /// 1. `$COLUMNS` environment variable (works everywhere including CI overrides).
 /// 2. `TIOCGWINSZ` ioctl on Unix (no subprocess, instant).
 /// 3. Fall back to 80.
-fn terminal_width() -> Option<usize> {
-    static WIDTH: OnceLock<Option<usize>> = OnceLock::new();
-    *WIDTH.get_or_init(|| {
-        // 1. Respect explicit override (useful in CI and scripts).
-        if let Ok(cols) = std::env::var("COLUMNS") {
-            if let Ok(n) = cols.parse::<usize>() {
-                if n > 0 {
-                    return Some(n);
+pub fn terminal_width() -> Option<usize> {
+    // 1. Respect explicit override (useful in CI and scripts).
+    if let Ok(cols) = std::env::var("COLUMNS") {
+        if let Ok(n) = cols.parse::<usize>() {
+            if n > 0 {
+                return Some(n);
+            }
+        }
+    }
+
+    // 2. ioctl(TIOCGWINSZ) — Linux / macOS only, no subprocess.
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        // Try stdout first, then stderr (one of them is likely a tty).
+        for fd in [std::io::stdout().as_raw_fd(), std::io::stderr().as_raw_fd()] {
+            if let Some(w) = tiocgwinsz(fd) {
+                if w > 0 {
+                    return Some(w);
                 }
             }
         }
+    }
 
-        // 2. ioctl(TIOCGWINSZ) — Linux / macOS only, no subprocess.
-        #[cfg(unix)]
-        {
-            use std::os::unix::io::AsRawFd;
-            // Try stdout first, then stderr (one of them is likely a tty).
-            for fd in [std::io::stdout().as_raw_fd(), std::io::stderr().as_raw_fd()] {
-                if let Some(w) = tiocgwinsz(fd) {
-                    if w > 0 {
-                        return Some(w);
-                    }
-                }
-            }
-        }
-
-        None
-    })
+    None
 }
+
 
 /// Call `TIOCGWINSZ` on the given file descriptor and return the column count.
 #[cfg(unix)]

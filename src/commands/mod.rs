@@ -230,19 +230,25 @@ pub fn truncate(s: &str, n: usize) -> String {
 
 /// Prompt the user for a yes/no confirmation on stderr.
 /// Returns `true` if the user typed `y` or `yes`.
-pub fn confirm(msg: &str) -> Result<bool> {
-    use std::io::{BufRead, Write};
-    let mut out = std::io::stderr().lock();
-    out.write_all(msg.as_bytes()).map_err(BitbucketError::Io)?;
-    out.flush().map_err(BitbucketError::Io)?;
-    let mut line = String::new();
-    std::io::stdin()
-        .lock()
-        .read_line(&mut line)
-        .map_err(BitbucketError::Io)?;
-    let trimmed = line.trim();
-    Ok(trimmed.eq_ignore_ascii_case("y") || trimmed.eq_ignore_ascii_case("yes"))
+pub async fn confirm(msg: &str) -> Result<bool> {
+    let msg = msg.to_string();
+    tokio::task::spawn_blocking(move || {
+        use std::io::{BufRead, Write};
+        let mut out = std::io::stderr().lock();
+        out.write_all(msg.as_bytes()).map_err(BitbucketError::Io)?;
+        out.flush().map_err(BitbucketError::Io)?;
+        let mut line = String::new();
+        std::io::stdin()
+            .lock()
+            .read_line(&mut line)
+            .map_err(BitbucketError::Io)?;
+        let trimmed = line.trim();
+        Ok(trimmed.eq_ignore_ascii_case("y") || trimmed.eq_ignore_ascii_case("yes"))
+    })
+    .await
+    .map_err(|e| BitbucketError::Other(format!("confirm task panicked: {e}")))?
 }
+
 
 #[cfg(test)]
 mod tests {

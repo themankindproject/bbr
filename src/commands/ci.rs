@@ -86,11 +86,19 @@ pub async fn list(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> Result<()
         return fmt.print(&out, &human);
     }
 
-    let step_futures: Vec<_> = pipelines
-        .iter()
-        .map(|p| steps_for_pipeline(&client, &repo.workspace, &repo.slug, &p.uuid))
-        .collect();
-    let all_steps: Vec<Vec<PipelineStep>> = futures::future::join_all(step_futures)
+    use futures::StreamExt;
+
+    let step_futures = pipelines.iter().map(|p| {
+        let client = &client;
+        let workspace = &repo.workspace;
+        let slug = &repo.slug;
+        async move {
+            steps_for_pipeline(client, workspace, slug, &p.uuid).await
+        }
+    });
+    let all_steps: Vec<Vec<PipelineStep>> = futures::stream::iter(step_futures)
+        .buffer_unordered(5)
+        .collect::<Vec<_>>()
         .await
         .into_iter()
         .map(|r| r.unwrap_or_default())
@@ -561,7 +569,7 @@ pub async fn rerun(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
             pipeline.build_number,
             pipeline.state_name(),
             branch,
-        ))?
+        )).await?
     {
         let fmt = Formatter::from_json_flag(g.json);
         fmt.print(&(), "Aborted.")?;

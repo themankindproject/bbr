@@ -222,7 +222,7 @@ pub async fn delete(g: &GlobalArgs, slug: &str, yes: bool) -> Result<()> {
     let client = client(g)?;
 
     if !yes
-        && !crate::commands::confirm(&format!("Delete {ws}/{slug}? This is permanent. (y/n): "))?
+        && !crate::commands::confirm(&format!("Delete {ws}/{slug}? This is permanent. (y/n): ")).await?
     {
         return Ok(());
     }

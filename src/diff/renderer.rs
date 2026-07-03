@@ -3,7 +3,7 @@
 //! Takes parsed [`DiffFile`]s and outputs a beautifully formatted string
 //! suitable for terminal display or piping through a pager.
 
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::output::theme::Theme;
 
@@ -100,7 +100,7 @@ fn render_file_header(file: &DiffFile, theme: &Theme, out: &mut String) {
         file.old_path.clone()
     };
 
-    let width = terminal_width().unwrap_or(80);
+    let width = crate::output::theme::terminal_width().unwrap_or(80);
     let box_inner = width.saturating_sub(4); // margin 2 + box sides 2
 
     let header_text = format!(" {}  {}{}", icon, display_path, change_count);
@@ -159,6 +159,14 @@ fn render_hunk(hunk: &DiffHunk, options: &DiffRenderOptions, theme: &Theme, out:
         ));
     };
 
+    if options.mode == RenderMode::SideBySide {
+        render_hunk_side_by_side(hunk, options, theme, out);
+    } else {
+        render_hunk_unified(hunk, options, theme, out);
+    }
+}
+
+fn render_hunk_unified(hunk: &DiffHunk, options: &DiffRenderOptions, theme: &Theme, out: &mut String) {
     let ranges = find_change_ranges(&hunk.lines, options.context_lines);
 
     for range in &ranges {
@@ -173,10 +181,250 @@ fn render_hunk(hunk: &DiffHunk, options: &DiffRenderOptions, theme: &Theme, out:
             continue;
         }
 
-        for i in range.start..range.end {
-            let line = &hunk.lines[i];
+        let mut i = range.start;
+        while i < range.end {
+            let mut deletions = Vec::new();
+            while i < range.end && hunk.lines[i].kind == DiffLineKind::Deletion {
+                deletions.push(&hunk.lines[i]);
+                i += 1;
+            }
+            let mut additions = Vec::new();
+            while i < range.end && hunk.lines[i].kind == DiffLineKind::Addition {
+                additions.push(&hunk.lines[i]);
+                i += 1;
+            }
+
+            if !deletions.is_empty() || !additions.is_empty() {
+                // Render deletions first, paired with additions if possible
+                for (j, del) in deletions.iter().enumerate() {
+                    let pair = additions.get(j).copied();
+                    render_paired_line(del, pair, theme, out);
+                }
+                // Render additions next, paired with deletions if possible
+                for (j, add) in additions.iter().enumerate() {
+                    let pair = deletions.get(j).copied();
+                    render_paired_line(add, pair, theme, out);
+                }
+            } else {
+                // Context line
+                render_line(&hunk.lines[i], theme, out);
+                i += 1;
+            }
+        }
+    }
+}
+
+fn render_paired_line(line: &DiffLine, pair: Option<&DiffLine>, theme: &Theme, out: &mut String) {
+    let old = line
+        .old_lineno
+        .map(|n| format!("{:>4}", n))
+        .unwrap_or_else(|| "    ".to_string());
+    let new = line
+        .new_lineno
+        .map(|n| format!("{:>4}", n))
+        .unwrap_or_else(|| "    ".to_string());
+
+    let dimmed_old = dim(&old, theme);
+    let dimmed_new = dim(&new, theme);
+
+    match line.kind {
+        DiffLineKind::Addition => {
+            if theme.colors_enabled() {
+                out.push_str(&format!(" {} {} \u{2502} ", dimmed_old, new));
+                if let Some(p) = pair {
+                    let segments = crate::diff::word_diff::word_changes(&p.content, &line.content);
+                    for seg in segments {
+                        match seg.kind {
+                            crate::diff::word_diff::WordChange::Inserted => {
+                                out.push_str(&format!("\x1b[30;42m{}\x1b[0m", seg.text));
+                            }
+                            crate::diff::word_diff::WordChange::Deleted => {}
+                            crate::diff::word_diff::WordChange::Equal => {
+                                out.push_str(&format!("\x1b[32m{}\x1b[0m", seg.text));
+                            }
+                        }
+                    }
+                    out.push('\n');
+                } else {
+                    out.push_str(&format!("\x1b[32m{}\x1b[0m\n", line.content));
+                }
+            } else {
+                out.push_str(&format!(" {} {} + {}\n", old, new, line.content));
+            }
+        }
+        DiffLineKind::Deletion => {
+            if theme.colors_enabled() {
+                out.push_str(&format!(" {} {} \u{2502} ", old, dimmed_new));
+                if let Some(p) = pair {
+                    let segments = crate::diff::word_diff::word_changes(&line.content, &p.content);
+                    for seg in segments {
+                        match seg.kind {
+                            crate::diff::word_diff::WordChange::Deleted => {
+                                out.push_str(&format!("\x1b[30;41m{}\x1b[0m", seg.text));
+                            }
+                            crate::diff::word_diff::WordChange::Inserted => {}
+                            crate::diff::word_diff::WordChange::Equal => {
+                                out.push_str(&format!("\x1b[31m{}\x1b[0m", seg.text));
+                            }
+                        }
+                    }
+                    out.push('\n');
+                } else {
+                    out.push_str(&format!("\x1b[31m{}\x1b[0m\n", line.content));
+                }
+            } else {
+                out.push_str(&format!(" {} {} - {}\n", old, new, line.content));
+            }
+        }
+        DiffLineKind::Context => {
             render_line(line, theme, out);
         }
+    }
+}
+
+fn render_hunk_side_by_side(hunk: &DiffHunk, options: &DiffRenderOptions, theme: &Theme, out: &mut String) {
+    let width = crate::output::theme::terminal_width().unwrap_or(80);
+    // 17 characters reserved: left_lineno(4) + sep(3) + middle_sep(3) + right_lineno(4) + right_sep(3)
+    let code_width = width.saturating_sub(17) / 2;
+
+    let ranges = find_change_ranges(&hunk.lines, options.context_lines);
+
+    for range in &ranges {
+        if range.is_collapsed && range.end > range.start {
+            let hidden = range.end - range.start;
+            let msg = format!("{} lines hidden", hidden);
+            let line = if theme.unicode_enabled() {
+                let fill_len = width.saturating_sub(msg.len() + 6) / 2;
+                let fill = "╶".repeat(fill_len.max(2));
+                format!("  {} {} {}\n", fill, msg, fill)
+            } else {
+                format!("  -- {} --\n", msg)
+            };
+            out.push_str(&dim(&line, theme));
+            continue;
+        }
+
+        let mut i = range.start;
+        while i < range.end {
+            let mut deletions = Vec::new();
+            while i < range.end && hunk.lines[i].kind == DiffLineKind::Deletion {
+                deletions.push(&hunk.lines[i]);
+                i += 1;
+            }
+            let mut additions = Vec::new();
+            while i < range.end && hunk.lines[i].kind == DiffLineKind::Addition {
+                additions.push(&hunk.lines[i]);
+                i += 1;
+            }
+
+            if !deletions.is_empty() || !additions.is_empty() {
+                let max_len = deletions.len().max(additions.len());
+                for j in 0..max_len {
+                    let del = deletions.get(j).copied();
+                    let add = additions.get(j).copied();
+                    render_side_by_side_row(del, add, code_width, theme, out);
+                }
+            } else {
+                let line = &hunk.lines[i];
+                render_side_by_side_row(Some(line), Some(line), code_width, theme, out);
+                i += 1;
+            }
+        }
+    }
+}
+
+fn render_side_by_side_row(
+    del: Option<&DiffLine>,
+    add: Option<&DiffLine>,
+    code_width: usize,
+    theme: &Theme,
+    out: &mut String,
+) {
+    let left_lineno = del
+        .and_then(|l| l.old_lineno)
+        .map(|n| format!("{:>4}", n))
+        .unwrap_or_else(|| "    ".to_string());
+    let left_content = del
+        .map(|l| truncate_code(&l.content, code_width))
+        .unwrap_or_else(|| " ".repeat(code_width));
+
+    let right_lineno = add
+        .and_then(|l| l.new_lineno)
+        .map(|n| format!("{:>4}", n))
+        .unwrap_or_else(|| "    ".to_string());
+    let right_content = add
+        .map(|l| truncate_code(&l.content, code_width))
+        .unwrap_or_else(|| " ".repeat(code_width));
+
+    if theme.colors_enabled() {
+        let left_col = if let Some(l) = del {
+            if l.kind == DiffLineKind::Context {
+                dim(&left_content, theme).into_owned()
+            } else {
+                format!("\x1b[31m{}\x1b[0m", left_content)
+            }
+        } else {
+            left_content
+        };
+
+        let right_col = if let Some(l) = add {
+            if l.kind == DiffLineKind::Context {
+                dim(&right_content, theme).into_owned()
+            } else {
+                format!("\x1b[32m{}\x1b[0m", right_content)
+            }
+        } else {
+            right_content
+        };
+
+        let sep = if theme.unicode_enabled() { " │ " } else { " | " };
+        out.push_str(&format!(
+            " {} {} {} {} {} {}\n",
+            dim(&left_lineno, theme),
+            dim(sep, theme),
+            left_col,
+            dim(sep, theme),
+            dim(&right_lineno, theme),
+            right_col
+        ));
+    } else {
+        let sep = " | ";
+        let left_sign = del.map(|l| match l.kind {
+            DiffLineKind::Deletion => "-",
+            _ => " ",
+        }).unwrap_or(" ");
+        let right_sign = add.map(|l| match l.kind {
+            DiffLineKind::Addition => "+",
+            _ => " ",
+        }).unwrap_or(" ");
+        out.push_str(&format!(
+            " {} {} {} {} {} {} {} {} {}\n",
+            left_lineno, sep, left_sign, left_content,
+            sep,
+            right_lineno, sep, right_sign, right_content
+        ));
+    }
+}
+
+fn truncate_code(s: &str, max_width: usize) -> String {
+    let w = unicode_width::UnicodeWidthStr::width(s);
+    if w <= max_width {
+        let pad = max_width.saturating_sub(w);
+        format!("{}{}", s, " ".repeat(pad))
+    } else {
+        let mut result = String::new();
+        let mut current_w = 0;
+        for ch in s.chars() {
+            let ch_w = ch.width().unwrap_or(0);
+            if current_w + ch_w + 1 > max_width {
+                break;
+            }
+            result.push(ch);
+            current_w += ch_w;
+        }
+        result.push('…');
+        let pad = max_width.saturating_sub(current_w + 1);
+        format!("{}{}", result, " ".repeat(pad))
     }
 }
 
@@ -373,28 +621,7 @@ fn truncate_mid(s: &str, max_width: usize) -> String {
     result
 }
 
-/// Get terminal width.
-fn terminal_width() -> Option<usize> {
-    if let Ok(cols) = std::env::var("COLUMNS") {
-        if let Ok(n) = cols.parse::<usize>() {
-            if n > 0 {
-                return Some(n);
-            }
-        }
-    }
-    let output = std::process::Command::new("stty")
-        .arg("size")
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let fields: Vec<&str> = std::str::from_utf8(&output.stdout)
-        .ok()?
-        .split_whitespace()
-        .collect();
-    fields.get(1)?.parse::<usize>().ok()
-}
+
 
 #[cfg(test)]
 mod tests {
@@ -525,5 +752,29 @@ diff --git a/b.rs b/b.rs
         assert!(result.contains("2 files changed"));
         assert!(result.contains("a.rs"));
         assert!(result.contains("b.rs"));
+    }
+
+    #[test]
+    fn test_render_side_by_side() {
+        let diff = "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1,1 +1,1 @@
+-foo
++bar
+";
+        let files = parse(diff);
+        let options = DiffRenderOptions {
+            context_lines: 3,
+            mode: RenderMode::SideBySide,
+            syntax_highlight: false,
+        };
+        let result = render(&files, &options, &test_theme());
+        assert!(result.contains("a.rs"));
+        assert!(result.contains("foo"));
+        assert!(result.contains("bar"));
+        // Check for side-by-side separator
+        assert!(result.contains(" | ") || result.contains(" │ "));
     }
 }
