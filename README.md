@@ -838,12 +838,7 @@ bbr                            # Shows workspace/repo/branch
 
 ### Rate Limited (exit code 4)
 
-Bitbucket API rate limits apply. `bbr` automatically retries on `429 Too Many Requests` with exponential backoff. If you consistently hit limits:
-
-```bash
-# Reduce request frequency
-export BBR_PAGING_LIMIT=25    # Smaller page sizes
-```
+Bitbucket API rate limits apply. `bbr` automatically retries on `429 Too Many Requests` with exponential backoff.
 
 ### Colors Not Working
 
@@ -881,9 +876,6 @@ Add that line to your shell config (`~/.bashrc`, `~/.zshrc`, etc.).
 ```bash
 # Use --json to avoid formatting overhead
 bbr status --json
-
-# Reduce concurrent requests
-export BBR_MAX_CONCURRENCY=3  # Default is usually fine
 ```
 
 ---
