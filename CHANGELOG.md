@@ -37,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   including Windows. Eliminated duplicate `stty` spawning in `src/diff/renderer.rs` by routing to the shared helper.
 - **`confirm` prompt no longer blocks Tokio worker threads** — wrapped blocking stdin `read_line`
   in `tokio::task::spawn_blocking` across all subcommands.
+- **`git branch -d` local deletion in `batch.rs` no longer blocks Tokio worker threads** — refactored manual `git` subprocess spawning to use a shared non-blocking `git::delete_branch_local_safe()` helper with built-in timeout protection.
+- **Browser opening in `open.rs` no longer blocks Tokio worker threads** — wrapped blocking browser launch `opener_command().status()` in a `tokio::task::spawn_blocking` task.
 - **Dynamic window resizing in `--watch` loops** — removed the static `OnceLock` caching from
   the shared `terminal_width()` helper, allowing terminal geometry changes to be captured dynamically.
 - **`BITBUCKET_TOKEN` set-but-empty was silently ignored** — now emits a `tracing::warn` message

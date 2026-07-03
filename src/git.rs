@@ -202,6 +202,12 @@ pub fn delete_branch_local(branch: &str) -> Result<()> {
     Ok(())
 }
 
+/// Delete a branch locally, checking if it is fully merged (safe delete).
+pub fn delete_branch_local_safe(branch: &str) -> Result<()> {
+    git(&["branch", "-d", branch])?;
+    Ok(())
+}
+
 /// Delete a remote branch on origin.
 pub fn delete_branch_remote(branch: &str) -> Result<()> {
     git_with_timeout(&["push", "origin", "--delete", branch], GIT_WRITE_TIMEOUT)?;

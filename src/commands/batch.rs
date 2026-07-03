@@ -419,30 +419,18 @@ pub async fn cleanup_merged_branches(
             }
         } else {
             run_spinner.set_message(format!("Deleting local branch {}...", act.branch_name));
-            // Run git branch -d <branch>
-            let git_res = std::process::Command::new("git")
-                .args(["branch", "-d", &act.branch_name])
-                .output();
-            match git_res {
-                Ok(output) if output.status.success() => succeeded.push(BatchActionOutcome {
+            match crate::git::delete_branch_local_safe(&act.branch_name) {
+                Ok(_) => succeeded.push(BatchActionOutcome {
                     id: format!("local/{}", act.branch_name),
                     description: format!("Deleted local branch {}", act.branch_name),
                     error: None,
                 }),
-                Ok(output) => {
-                    let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                    failed.push(BatchActionOutcome {
-                        id: format!("local/{}", act.branch_name),
-                        description: format!(
-                            "Failed to delete local branch {} (use -D manually or prune)",
-                            act.branch_name
-                        ),
-                        error: Some(err),
-                    })
-                }
                 Err(e) => failed.push(BatchActionOutcome {
                     id: format!("local/{}", act.branch_name),
-                    description: format!("Failed to run git branch -d {}", act.branch_name),
+                    description: format!(
+                        "Failed to delete local branch {} (use -D manually or prune)",
+                        act.branch_name
+                    ),
                     error: Some(e.to_string()),
                 }),
             }

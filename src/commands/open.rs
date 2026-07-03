@@ -37,7 +37,7 @@ pub async fn run(g: &GlobalArgs, action: Option<OpenAction>) -> Result<()> {
         OpenAction::Ci { branch } => ci_url(g, branch.as_deref()).await?,
     };
 
-    let opened = if g.json { false } else { open_url(&url)? };
+    let opened = if g.json { false } else { open_url(&url).await? };
     let out = OpenOut {
         target,
         url: url.clone(),
@@ -100,15 +100,20 @@ async fn ci_url(g: &GlobalArgs, branch: Option<&str>) -> Result<(String, String)
     Ok(("ci".into(), url))
 }
 
-fn open_url(url: &str) -> Result<bool> {
-    let status = match opener_command(url).status() {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::debug!("failed to launch browser opener: {e}");
-            return Ok(false);
-        }
-    };
-    Ok(status.success())
+async fn open_url(url: &str) -> Result<bool> {
+    let url = url.to_string();
+    tokio::task::spawn_blocking(move || {
+        let status = match opener_command(&url).status() {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::debug!("failed to launch browser opener: {e}");
+                return Ok(false);
+            }
+        };
+        Ok(status.success())
+    })
+    .await
+    .map_err(|e| BitbucketError::Other(format!("open_url task panicked: {e}")))?
 }
 
 #[cfg(target_os = "macos")]
