@@ -405,41 +405,89 @@ async fn download_and_install(release: &GithubRelease, _latest: &str) -> Result<
 
     let bytes = resp.bytes().await.map_err(BitbucketError::Http)?;
 
-    use std::io::Read;
+    // --- SHA256 integrity verification ---
+    // Look for a checksums asset (checksums.txt or SHA256SUMS) in the release.
+    let checksum_asset = release.assets.iter().find(|a| {
+        let name = a.name.to_ascii_lowercase();
+        name == "checksums.txt"
+            || name == "sha256sums"
+            || name == "sha256sums.txt"
+            || name.contains("checksum")
+    });
+
+    if let Some(cs_asset) = checksum_asset {
+        let cs_resp = client
+            .get(&cs_asset.browser_download_url)
+            .send()
+            .await
+            .map_err(BitbucketError::Http)?;
+        if cs_resp.status().is_success() {
+            let cs_text = cs_resp.text().await.map_err(BitbucketError::Http)?;
+            if let Some(expected_hash) = parse_checksum_for_asset(&cs_text, &target_name) {
+                let actual_hash = sha256_hex(&bytes);
+                if actual_hash != expected_hash {
+                    return Err(BitbucketError::Other(format!(
+                        "SHA256 checksum mismatch for {target_name}!\n\
+                         Expected: {expected_hash}\n\
+                         Got:      {actual_hash}\n\
+                         The downloaded archive may be corrupted or tampered with. \
+                         Aborting update."
+                    )));
+                }
+                tracing::debug!("SHA256 checksum verified for {target_name}");
+            } else {
+                tracing::warn!(
+                    "Checksum file found but no entry for {target_name}; skipping verification"
+                );
+            }
+        }
+    } else {
+        tracing::debug!(
+            "No checksums asset in release; skipping integrity verification. \
+             Consider adding a checksums.txt asset to releases for supply-chain security."
+        );
+    }
+
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(&bytes[..]));
     let mut extracted = false;
 
     for entry in archive
         .entries()
-        .map_err(|e| BitbucketError::Other(format!("Corrupt archive: {e}")))?
+        .map_err(|e| BitbucketError::Other(format!("Failed to read archive: {e}")))?
     {
-        let mut entry =
-            entry.map_err(|e| BitbucketError::Other(format!("Archive read error: {e}")))?;
+        let mut entry = entry
+            .map_err(|e| BitbucketError::Other(format!("Failed to read archive entry: {e}")))?;
+
         let path = entry
             .path()
-            .map_err(|e| BitbucketError::Other(format!("Archive path error: {e}")))?;
+            .map_err(|e| BitbucketError::Other(format!("Invalid archive entry path: {e}")))?
+            .into_owned();
 
-        if path.file_name().is_some_and(|n| n == "bbr") {
-            let mut data = Vec::new();
-            entry
-                .read_to_end(&mut data)
-                .map_err(|e| BitbucketError::Other(format!("Extract error: {e}")))?;
-
-            let tmp_path = dest_dir.join(".bbr.tmp");
-            fs::write(&tmp_path, &data).map_err(|e| {
-                BitbucketError::Other(format!("Failed to write {}: {e}", tmp_path.display()))
+        if path.file_name().and_then(|n| n.to_str()) == Some("bbr") {
+            let mut tmp = tempfile::NamedTempFile::new_in(&dest_dir).map_err(|e| {
+                BitbucketError::Other(format!(
+                    "Failed to create temp file in {}: {e}",
+                    dest_dir.display()
+                ))
             })?;
+            std::io::copy(&mut entry, &mut tmp)
+                .map_err(|e| BitbucketError::Other(format!("Failed to write temp file: {e}")))?;
 
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
+                let tmp_path = tmp.path().to_path_buf();
                 fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o755)).map_err(|e| {
                     BitbucketError::Other(format!("Failed to set permissions: {e}"))
                 })?;
             }
 
-            fs::rename(&tmp_path, &dest_path).map_err(|e| {
-                BitbucketError::Other(format!("Failed to install to {}: {e}", dest_path.display()))
+            tmp.persist(&dest_path).map_err(|e| {
+                BitbucketError::Other(format!(
+                    "Failed to install to {}: {}",
+                    dest_path.display(),
+                    e.error
+                ))
             })?;
 
             extracted = true;
@@ -454,6 +502,47 @@ async fn download_and_install(release: &GithubRelease, _latest: &str) -> Result<
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// SHA256 helpers
+// ---------------------------------------------------------------------------
+
+/// Compute the hex-encoded SHA256 hash of some bytes.
+fn sha256_hex(data: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    let hash = hasher.finalize();
+    // Format as lowercase hex
+    hash.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Parse a checksums file (format: `<hex-hash>  <filename>` or `<hex-hash> *<filename>`)
+/// and return the expected hash for the given asset name.
+fn parse_checksum_for_asset(checksums_text: &str, asset_name: &str) -> Option<String> {
+    for line in checksums_text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // Common formats:
+        //   abc123def  filename.tar.gz
+        //   abc123def *filename.tar.gz
+        let parts: Vec<&str> = line.splitn(2, |c: char| c.is_whitespace()).collect();
+        if parts.len() == 2 {
+            let hash = parts[0].trim();
+            let name = parts[1].trim().trim_start_matches('*');
+            // Match by exact filename or by filename at end of path
+            if name == asset_name || name.ends_with(asset_name) {
+                // Validate it looks like a hex hash (64 chars for SHA256)
+                if hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return Some(hash.to_lowercase());
+                }
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -527,5 +616,59 @@ mod tests {
         let rendered = render_update(&out);
         assert!(rendered.contains("2.0.0"));
         assert!(rendered.contains("1.0.0"));
+    }
+
+    #[test]
+    fn sha256_hex_computes_known_hash() {
+        // SHA256("hello") = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+        let hash = sha256_hex(b"hello");
+        assert_eq!(
+            hash,
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+    }
+
+    #[test]
+    fn parse_checksum_for_asset_standard_format() {
+        let checksums = "\
+abc123def456abc123def456abc123def456abc123def456abc123def456abcd  bbr-x86_64-unknown-linux-gnu.tar.gz\n\
+def456abc123def456abc123def456abc123def456abc123def456abc123def4  bbr-aarch64-apple-darwin.tar.gz\n";
+        let result = parse_checksum_for_asset(checksums, "bbr-x86_64-unknown-linux-gnu.tar.gz");
+        assert_eq!(
+            result,
+            Some("abc123def456abc123def456abc123def456abc123def456abc123def456abcd".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_checksum_for_asset_star_prefix() {
+        let checksums =
+            "abc123def456abc123def456abc123def456abc123def456abc123def456abcd *bbr-x86_64-unknown-linux-gnu.tar.gz\n";
+        let result = parse_checksum_for_asset(checksums, "bbr-x86_64-unknown-linux-gnu.tar.gz");
+        assert_eq!(
+            result,
+            Some("abc123def456abc123def456abc123def456abc123def456abc123def456abcd".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_checksum_for_asset_not_found() {
+        let checksums =
+            "abc123def456abc123def456abc123def456abc123def456abc123def456abcd  other-file.tar.gz\n";
+        let result = parse_checksum_for_asset(checksums, "bbr-x86_64-unknown-linux-gnu.tar.gz");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn parse_checksum_for_asset_skips_comments_and_empty() {
+        let checksums = "\
+# SHA256 checksums\n\
+\n\
+abc123def456abc123def456abc123def456abc123def456abc123def456abcd  bbr-x86_64-unknown-linux-gnu.tar.gz\n";
+        let result = parse_checksum_for_asset(checksums, "bbr-x86_64-unknown-linux-gnu.tar.gz");
+        assert_eq!(
+            result,
+            Some("abc123def456abc123def456abc123def456abc123def456abc123def456abcd".to_string())
+        );
     }
 }

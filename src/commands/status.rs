@@ -1,12 +1,14 @@
 //! `bbr status` / `bbr` — PR + CI for the current branch, or repo overview.
 
 use serde::Serialize;
+use time::OffsetDateTime;
 
 use crate::api::pipeline::{Pipeline, PipelineStep, StepSummary};
 use crate::api::pr::{Participant, PrState, PullRequest};
 use crate::cli::GlobalArgs;
 use crate::commands::{client, current_head, human_duration, resolve_repo, truncate};
 use crate::error::Result;
+use crate::git::Head;
 use crate::output::table::Table;
 use crate::output::theme::Theme;
 use crate::output::Formatter;
@@ -120,6 +122,79 @@ pub struct OverviewOut {
     pub suggested_commands: Vec<String>,
 }
 
+/// Common data fetched for the current branch: PR, pipeline, commit statuses.
+/// Used by both `run_inner()` (status command) and `run_overview()` (bare `bbr`).
+struct BranchStatus {
+    repo: RepoSummary,
+    head: Head,
+    pr_summary: Option<PrSummary>,
+    pipeline_summary: Option<PipelineSummary>,
+    commit_statuses: Vec<BuildStatusSummary>,
+}
+
+/// Fetch the PR, pipeline, and commit statuses for the current branch.
+/// This is the shared core of `run_inner()` and `run_overview()`.
+async fn fetch_branch_status(g: &GlobalArgs) -> Result<BranchStatus> {
+    let repo_id = resolve_repo(g)?;
+    let head = current_head()?;
+    let client = client(g)?;
+
+    let (pr, pipeline, commit_statuses_page) = tokio::try_join!(
+        client.pr_for_branch(&repo_id.workspace, &repo_id.slug, &head.branch),
+        client.latest_pipeline(&repo_id.workspace, &repo_id.slug, Some(&head.branch)),
+        client.commit_statuses(&repo_id.workspace, &repo_id.slug, &head.commit),
+    )?;
+
+    let raw_steps = match &pipeline {
+        Some(p) => client
+            .list_steps(&repo_id.workspace, &repo_id.slug, &p.uuid)
+            .await
+            .map(|page| page.values)
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
+
+    let mut pr_summary = pr.as_ref().map(pr_summary);
+    if let Some(ref mut summary) = pr_summary {
+        let (diffstat, conflicts) = tokio::join!(
+            client.pr_diffstat(&repo_id.workspace, &repo_id.slug, summary.id),
+            client.pr_conflicts(&repo_id.workspace, &repo_id.slug, summary.id, 10),
+        );
+        if let Ok(stat) = diffstat {
+            let (added, removed) = parse_diffstat(&stat);
+            summary.lines_added = Some(added);
+            summary.lines_removed = Some(removed);
+        }
+        if let Ok(conflicts) = conflicts {
+            summary.conflicts = Some(!conflicts.is_empty());
+        }
+    }
+
+    let pipeline_summary = pipeline.as_ref().map(|p| pipeline_summary(p, &raw_steps));
+
+    let commit_statuses: Vec<BuildStatusSummary> = commit_statuses_page
+        .values
+        .iter()
+        .map(|s| BuildStatusSummary {
+            state: s.state.clone(),
+            key: s.key.clone(),
+            url: s.url.clone(),
+        })
+        .collect();
+
+    Ok(BranchStatus {
+        repo: RepoSummary {
+            workspace: repo_id.workspace.clone(),
+            slug: repo_id.slug.clone(),
+            full_name: format!("{}/{}", repo_id.workspace, repo_id.slug),
+        },
+        head,
+        pr_summary,
+        pipeline_summary,
+        commit_statuses,
+    })
+}
+
 pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
     let theme = Theme::current();
     loop {
@@ -175,15 +250,18 @@ pub async fn run_short(g: &GlobalArgs) -> Result<()> {
 }
 
 pub async fn run_overview(g: &GlobalArgs) -> Result<()> {
-    let repo = resolve_repo(g)?;
-    let head = current_head()?;
-    let client = client(g)?;
+    let BranchStatus {
+        repo,
+        head,
+        pr_summary,
+        pipeline_summary,
+        commit_statuses,
+    } = fetch_branch_status(g).await?;
 
-    let (pr, pipeline, commit_statuses_page, recent_prs, recent_ci) = tokio::try_join!(
-        client.pr_for_branch(&repo.workspace, &repo.slug, &head.branch),
-        client.latest_pipeline(&repo.workspace, &repo.slug, Some(&head.branch)),
-        client.commit_statuses(&repo.workspace, &repo.slug, &head.commit),
-        client.list_prs(
+    // Fetch additional overview data (recent PRs + pipelines) concurrently.
+    let api_client = client(g)?;
+    let (recent_prs, recent_ci) = tokio::try_join!(
+        api_client.list_prs(
             &repo.workspace,
             &repo.slug,
             PrState::Open,
@@ -194,54 +272,13 @@ pub async fn run_overview(g: &GlobalArgs) -> Result<()> {
             None,
             None
         ),
-        client.list_pipelines(&repo.workspace, &repo.slug, None, 5),
+        api_client.list_pipelines(&repo.workspace, &repo.slug, None, 5),
     )?;
 
-    let raw_steps = match &pipeline {
-        Some(p) => client
-            .list_steps(&repo.workspace, &repo.slug, &p.uuid)
-            .await
-            .map(|page| page.values)
-            .unwrap_or_default(),
-        None => Vec::new(),
-    };
-
-    let mut pr_summary = pr.as_ref().map(pr_summary);
-    if let Some(ref mut summary) = pr_summary {
-        if let Ok(stat) = client
-            .pr_diffstat(&repo.workspace, &repo.slug, summary.id)
-            .await
-        {
-            let (added, removed) = parse_diffstat(&stat);
-            summary.lines_added = Some(added);
-            summary.lines_removed = Some(removed);
-        }
-        if let Ok(conflicts) = client
-            .pr_conflicts(&repo.workspace, &repo.slug, summary.id, 10)
-            .await
-        {
-            summary.conflicts = Some(!conflicts.is_empty());
-        }
-    }
-    let pipeline_summary = pipeline.as_ref().map(|p| pipeline_summary(p, &raw_steps));
-
-    let commit_statuses: Vec<BuildStatusSummary> = commit_statuses_page
-        .values
-        .iter()
-        .map(|s| BuildStatusSummary {
-            state: s.state.clone(),
-            key: s.key.clone(),
-            url: s.url.clone(),
-        })
-        .collect();
     let suggested = suggested_commands(&pr_summary, &pipeline_summary);
 
     let out = OverviewOut {
-        repo: RepoSummary {
-            workspace: repo.workspace.clone(),
-            slug: repo.slug.clone(),
-            full_name: format!("{}/{}", repo.workspace, repo.slug),
-        },
+        repo,
         branch: head.branch.clone(),
         commit: head.commit.clone(),
         pr: pr_summary,
@@ -277,61 +314,18 @@ pub async fn run_overview(g: &GlobalArgs) -> Result<()> {
 }
 
 pub async fn run_inner(g: &GlobalArgs) -> Result<StatusOut> {
-    let repo = resolve_repo(g)?;
-    let head = current_head()?;
-    let client = client(g)?;
-
-    let (pr, pipeline, commit_statuses_page) = tokio::try_join!(
-        client.pr_for_branch(&repo.workspace, &repo.slug, &head.branch),
-        client.latest_pipeline(&repo.workspace, &repo.slug, Some(&head.branch)),
-        client.commit_statuses(&repo.workspace, &repo.slug, &head.commit),
-    )?;
-
-    let raw_steps = match &pipeline {
-        Some(p) => client
-            .list_steps(&repo.workspace, &repo.slug, &p.uuid)
-            .await
-            .map(|page| page.values)
-            .unwrap_or_default(),
-        None => Vec::new(),
-    };
-    let mut pr_summary = pr.as_ref().map(pr_summary);
-    if let Some(ref mut summary) = pr_summary {
-        if let Ok(stat) = client
-            .pr_diffstat(&repo.workspace, &repo.slug, summary.id)
-            .await
-        {
-            let (added, removed) = parse_diffstat(&stat);
-            summary.lines_added = Some(added);
-            summary.lines_removed = Some(removed);
-        }
-        if let Ok(conflicts) = client
-            .pr_conflicts(&repo.workspace, &repo.slug, summary.id, 10)
-            .await
-        {
-            summary.conflicts = Some(!conflicts.is_empty());
-        }
-    }
-    let pipeline_summary = pipeline.as_ref().map(|p| pipeline_summary(p, &raw_steps));
-
-    let commit_statuses: Vec<BuildStatusSummary> = commit_statuses_page
-        .values
-        .iter()
-        .map(|s| BuildStatusSummary {
-            state: s.state.clone(),
-            key: s.key.clone(),
-            url: s.url.clone(),
-        })
-        .collect();
+    let BranchStatus {
+        repo,
+        head,
+        pr_summary,
+        pipeline_summary,
+        commit_statuses,
+    } = fetch_branch_status(g).await?;
 
     let suggested_commands = suggested_commands(&pr_summary, &pipeline_summary);
 
     Ok(StatusOut {
-        repo: RepoSummary {
-            workspace: repo.workspace.clone(),
-            slug: repo.slug.clone(),
-            full_name: format!("{}/{}", repo.workspace, repo.slug),
-        },
+        repo,
         branch: head.branch.clone(),
         commit: head.commit.clone(),
         pr: pr_summary,
@@ -360,35 +354,9 @@ fn parse_diffstat(val: &serde_json::Value) -> (u64, u64) {
 }
 
 fn parse_iso8601_to_seconds(s: &str) -> Option<u64> {
-    if s.len() < 19 {
-        return None;
-    }
-    let year: u64 = s[0..4].parse().ok()?;
-    let month: u64 = s[5..7].parse().ok()?;
-    let day: u64 = s[8..10].parse().ok()?;
-    let hour: u64 = s[11..13].parse().ok()?;
-    let min: u64 = s[14..16].parse().ok()?;
-    let sec: u64 = s[17..19].parse().ok()?;
-
-    let mut days = 0;
-    for y in 1970..year {
-        if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) {
-            days += 366;
-        } else {
-            days += 365;
-        }
-    }
-    let month_days = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    for m in 1..month {
-        days += month_days[m as usize];
-    }
-    if month > 2 && (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) {
-        days += 1;
-    }
-    days += day - 1;
-
-    let total_secs = days * 86400 + hour * 3600 + min * 60 + sec;
-    Some(total_secs)
+    OffsetDateTime::parse(s, &time::format_description::well_known::Iso8601::DEFAULT)
+        .ok()
+        .map(|dt| dt.unix_timestamp().max(0) as u64)
 }
 
 fn relative_time(iso_str: &str) -> String {

@@ -67,7 +67,10 @@ pub struct CredentialProfile {
 
 impl CredentialProfile {
     pub fn secret(&self) -> Option<&str> {
-        self.token.as_deref().filter(|s| !s.is_empty())
+        self.token
+            .as_deref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
     }
 }
 
@@ -80,7 +83,24 @@ pub fn load_credentials() -> Result<Option<CredentialsFile>> {
     if !path.exists() {
         return Ok(None);
     }
-    read_credentials_file(&path).map(Some)
+    let creds = read_credentials_file(&path)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let meta = std::fs::metadata(&path)?;
+        let mode = meta.permissions().mode();
+        if mode & 0o077 != 0 {
+            eprintln!(
+                "bbr: warning: {} has overly permissive file mode {:o}. Consider running `chmod 600 {}`",
+                path.display(),
+                mode & 0o777,
+                path.display()
+            );
+        }
+    }
+
+    Ok(Some(creds))
 }
 
 fn read_credentials_file(path: &Path) -> Result<CredentialsFile> {

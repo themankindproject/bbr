@@ -55,16 +55,18 @@ pub fn resolve() -> Result<Credentials> {
 fn from_env() -> Option<Credentials> {
     let username = std::env::var(ENV_USERNAME).ok()?;
     let token = std::env::var(ENV_TOKEN).ok()?;
+    let username = username.trim().to_string();
+    let token = token.trim().to_string();
     if token.is_empty() {
         tracing::warn!(
-            "{ENV_TOKEN} is set but empty; ignoring environment credentials. \
+            "{ENV_TOKEN} is set but empty or whitespace-only; ignoring environment credentials. \
              Set a valid Atlassian API token from https://id.atlassian.com/manage-profile/security/api-tokens"
         );
         return None;
     }
     if username.is_empty() {
         tracing::warn!(
-            "{ENV_USERNAME} is set but empty; ignoring environment credentials. \
+            "{ENV_USERNAME} is set but empty or whitespace-only; ignoring environment credentials. \
              Set both {ENV_USERNAME} and {ENV_TOKEN} for env-based auth."
         );
         return None;
@@ -84,11 +86,12 @@ fn from_config() -> Result<Option<Credentials>> {
     let Some(secret) = p.secret() else {
         return Ok(None);
     };
-    if p.username.is_empty() {
+    let username = p.username.trim();
+    if username.is_empty() {
         return Ok(None);
     }
     Ok(Some(Credentials {
-        username: p.username.clone(),
+        username: username.to_string(),
         secret: secret.to_string(),
         kind: CredentialKind::ApiToken,
     }))

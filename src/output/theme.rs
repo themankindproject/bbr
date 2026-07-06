@@ -1,15 +1,22 @@
-//! Color / decoration theme. Respects `NO_COLOR` and TTY detection.
+//! Color / decoration theme. Respects `NO_COLOR`, `CLICOLOR`, `CLICOLOR_FORCE`, and TTY detection.
 
 use std::borrow::Cow;
 use std::io::{self, IsTerminal};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::OnceLock;
 
 use colored::Colorize;
 
 /// Global theme singleton (cheap to compute once).
 static THEME: OnceLock<Theme> = OnceLock::new();
-static COLOR_OVERRIDE: OnceLock<bool> = OnceLock::new();
-static UNICODE_OVERRIDE: OnceLock<bool> = OnceLock::new();
+
+/// Atomic override for color. 0 = unset, 1 = force off, 2 = force on.
+static COLOR_OVERRIDE: AtomicU8 = AtomicU8::new(0);
+/// Atomic override for unicode. 0 = unset, 1 = force off, 2 = force on.
+static UNICODE_OVERRIDE: AtomicU8 = AtomicU8::new(0);
+
+/// Tracks whether the theme has already been initialized (for warning on late overrides).
+static THEME_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy)]
 pub struct Theme {
@@ -20,28 +27,81 @@ pub struct Theme {
 impl Theme {
     pub fn current() -> &'static Theme {
         THEME.get_or_init(|| {
-            let colors = if let Some(&forced) = COLOR_OVERRIDE.get() {
-                forced
-            } else {
-                let no_color = std::env::var_os("NO_COLOR").is_some();
-                let is_tty = io::stdout().is_terminal();
-                !no_color && is_tty
+            let colors = match COLOR_OVERRIDE.load(Ordering::Acquire) {
+                1 => false,
+                2 => true,
+                _ => Self::detect_colors(),
             };
-            let unicode = UNICODE_OVERRIDE.get().copied().unwrap_or(true);
+            let unicode = match UNICODE_OVERRIDE.load(Ordering::Acquire) {
+                1 => false,
+                2 => true,
+                _ => true,
+            };
+            THEME_INITIALIZED.store(true, Ordering::Release);
             Theme { colors, unicode }
         })
     }
 
-    /// Set a color override. Must be called before the first `Theme::current()` access.
-    /// Returns `Err` if the theme was already initialized.
-    pub fn set_color_override(force_color: bool) {
-        let _ = COLOR_OVERRIDE.set(force_color);
+    /// Detect color support from environment variables and TTY state.
+    ///
+    /// Precedence:
+    /// 1. `CLICOLOR_FORCE` (non-"0" value) → force colors on
+    /// 2. `NO_COLOR` (any value) → force colors off
+    /// 3. `CLICOLOR=0` → force colors off
+    /// 4. Otherwise → colors enabled only if stdout is a TTY
+    fn detect_colors() -> bool {
+        // CLICOLOR_FORCE overrides everything (unless set to "0")
+        let force_color = std::env::var("CLICOLOR_FORCE")
+            .ok()
+            .map(|v| v != "0")
+            .unwrap_or(false);
+        if force_color {
+            return true;
+        }
+
+        // NO_COLOR disables color unconditionally
+        let no_color = std::env::var_os("NO_COLOR").is_some();
+        if no_color {
+            return false;
+        }
+
+        // CLICOLOR=0 disables color
+        if std::env::var("CLICOLOR").ok().as_deref() == Some("0") {
+            return false;
+        }
+
+        // Default: colors only if stdout is a TTY
+        io::stdout().is_terminal()
     }
 
-    /// Set a unicode override. Must be called before the first `Theme::current()` access.
-    /// Returns `Err` if the theme was already initialized.
+    /// Set a color override. Can be called at any time before the first `Theme::current()` access.
+    /// If called after the theme is already initialized, logs a warning via `tracing` and the
+    /// override will not take effect for this process.
+    pub fn set_color_override(force_color: bool) {
+        let val = if force_color { 2u8 } else { 1u8 };
+        COLOR_OVERRIDE.store(val, Ordering::Release);
+        if THEME_INITIALIZED.load(Ordering::Acquire) {
+            tracing::warn!(
+                "set_color_override({}) called after Theme was already initialized; \
+                 override will not take effect",
+                force_color
+            );
+        }
+    }
+
+    /// Set a unicode override. Can be called at any time before the first `Theme::current()` access.
+    /// If called after the theme is already initialized, logs a warning via `tracing` and the
+    /// override will not take effect for this process.
     pub fn set_unicode_override(enable_unicode: bool) {
-        let _ = UNICODE_OVERRIDE.set(enable_unicode);
+        let val = if enable_unicode { 2u8 } else { 1u8 };
+        UNICODE_OVERRIDE.store(val, Ordering::Release);
+        if THEME_INITIALIZED.load(Ordering::Acquire) {
+            tracing::warn!(
+                "set_unicode_override({}) called after Theme was already initialized; \
+                 override will not take effect",
+                enable_unicode
+            );
+        }
     }
 
     pub fn colors_enabled(&self) -> bool {

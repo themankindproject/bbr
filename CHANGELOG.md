@@ -7,18 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-07-07
+
 ### Added
 
 - **Word-level highlighting inside side-by-side diff mode** — paired change lines in side-by-side layout now display fine-grained red/green highlights for deleted/inserted words.
+- **SHA256 checksum verification for self-update** — `bbr update` now downloads and verifies a `checksums.txt` release asset (if present) against the downloaded archive before installation, protecting against supply-chain attacks and corrupted downloads.
+- **Async git wrappers** — all blocking git operations (`fetch_branch`, `checkout_branch`, `push_branch`, `push_force_with_lease`, `delete_branch_local`, `delete_branch_remote`, `rebase_branch`) now have `_async` variants using `tokio::task::spawn_blocking`, preventing tokio runtime thread stalls.
+- **Credential file permission warning** — on Unix, `bbr` now warns to stderr if `credentials.toml` has group/other-readable permissions (mode > 0600) with a `chmod 600` suggestion.
 
 ### Fixed
 
 - **`git branch -d` local deletion in `batch.rs` no longer blocks Tokio worker threads** — refactored manual `git` subprocess spawning to use a shared non-blocking `git::delete_branch_local_safe()` helper with built-in timeout protection.
 - **Browser opening in `open.rs` no longer blocks Tokio worker threads** — wrapped blocking browser launch `opener_command().status()` in a `tokio::task::spawn_blocking` task.
+- **[SECURITY] Git argument injection** — all git commands now use `--` separator before user-supplied branch/ref names, preventing branch names starting with `-` from being interpreted as git flags.
+- **[SECURITY] Pagination infinite loop** — added empty-page guard (`if page.values.is_empty() { break }`) to both the generic `fetch_all_pages` sequential fallback and the `list_prs` manual pagination loop, preventing infinite loops when the API returns empty pages with `next` URLs.
+- **[SECURITY] BBQL query injection** — issue and PR query parameters now reject values containing double-quotes with a clear error message, preventing Bitbucket Query Language injection.
+- **Diff parser multi-hunk bug** — intermediate hunks in multi-hunk files are now correctly stored (previously only the last hunk per file was preserved; line counts were accurate but rendered output was incomplete).
+- **`list_prs` pagination double-URL** — replaced `unwrap_or(url)` with `strip_base()` in the PR list pagination fallback, preventing corrupted URLs when `strip_prefix` fails.
+- **`send_empty` unnecessary deserialization** — DELETE/PUT endpoints returning 204 No Content no longer attempt to deserialize the empty response body as JSON.
+- **Stack config relative path** — `.bbr/stack.toml` is now anchored to the git repository root via `git rev-parse --show-toplevel`, fixing stack commands when run from subdirectories.
+- **`truncate_mid` UTF-8 panic** — the diff renderer's mid-string truncation now uses character-boundary-safe iteration instead of byte-level slicing, preventing panics on multi-byte filenames.
+- **`PipelineFailed` error display** — now shows `"pipeline #42 failed on main"` instead of the generic `"pipeline failed"`, including build number and branch when available.
+- **Whitespace-only credentials** — username and token values are now trimmed before validation; whitespace-only strings are correctly rejected.
+- **`detect_repo()` error message** — changed from the misleading "no bitbucket.org remote found" to "no git remote found" since the parser accepts any git hosting provider.
+- **Deploy/webhook list truncation** — `list_deployments`, `list_environments`, and `list_webhooks` now paginate through all results instead of silently truncating at 100 items.
+- **Theme override race condition** — `set_color_override()` and `set_unicode_override()` now use `AtomicU8` checked before `OnceLock` initialization, and log a `tracing::warn!` if called too late.
+
+### Changed
+
+- **`CLICOLOR` / `CLICOLOR_FORCE` support** — the theme color detection now implements the full CLICOLOR spec: `CLICOLOR_FORCE` (non-"0") forces colors on; `NO_COLOR` disables; `CLICOLOR=0` disables; otherwise colors are enabled only on TTY. Previously only `NO_COLOR` was checked.
+- **Custom base64 replaced with `base64` crate** — HTTP Basic auth encoding now uses the well-tested `base64` 0.22 crate instead of a hand-rolled implementation, eliminating maintenance risk in auth-critical code.
+- **Rate limit retry honors `Retry-After` header** — when Bitbucket returns a 429 with a `Retry-After` header, the retry delay now uses the server-specified duration instead of fixed linear backoff.
+- **Parallel page fetches capped** — `fetch_all_pages` now uses `buffer_unordered(10)` instead of unbounded `try_join_all`, preventing OOM and rate limit bombardment on large paginated results.
+- **Stacked PR commands use async git** — `bbr pr stack add/rebase/land/abort` and `bbr batch cleanup-merged-branches` now use non-blocking async git wrappers, no longer stalling the tokio runtime.
+- **`status.rs` deduplicated** — extracted shared `fetch_branch_status()` helper, removing ~80 lines of duplicated logic between `run_inner()` and `run_overview()`.
 
 ### Performance
 
 - **Bounded concurrency for `bbr pr stack list` status checks** — replaced the unbounded `join_all` concurrency loop with a capped `buffered(5)` stream to prevent rate limit spikes on large PR stacks, while keeping the parent-child ordering intact.
+- **Parallel page fetch bounded to 10 concurrent requests** — prevents spawning thousands of simultaneous HTTP requests for large paginated results.
 
 ## [0.1.6] - 2026-07-04
 

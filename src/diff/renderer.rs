@@ -694,22 +694,23 @@ fn truncate_mid(s: &str, max_width: usize) -> String {
     }
     // Show start and end, with "…" in the middle
     let each = (max_width - 1) / 2; // 1 for "…"
+
+    // Collect char indices for safe slicing
+    let char_indices: Vec<(usize, char)> = s.char_indices().collect();
+    let char_count = char_indices.len();
+
     let mut result = String::with_capacity(max_width);
-    for (i, ch) in s.chars().enumerate() {
-        if i < each {
-            result.push(ch);
-        } else {
-            break;
-        }
+
+    // Take `each` chars from the start
+    for &(_byte_idx, ch) in char_indices.iter().take(each) {
+        result.push(ch);
     }
     result.push('\u{2026}');
-    let end_start = s.len().saturating_sub(each);
-    for (i, ch) in s[end_start..].char_indices() {
-        if i + result.len() < max_width {
-            result.push(ch);
-        } else {
-            break;
-        }
+
+    // Take `each` chars from the end
+    let end_char_start = char_count.saturating_sub(each);
+    for &(_byte_idx, ch) in char_indices.iter().skip(end_char_start) {
+        result.push(ch);
     }
     result
 }
@@ -867,5 +868,36 @@ diff --git a/a.rs b/a.rs
         assert!(result.contains("bar"));
         // Check for side-by-side separator
         assert!(result.contains(" | ") || result.contains(" │ "));
+    }
+
+    #[test]
+    fn test_truncate_mid_ascii() {
+        let s = "abcdefghijklmnopqrstuvwxyz";
+        let result = truncate_mid(s, 11);
+        assert_eq!(result.len(), 11 + 2); // "…" is 3 bytes
+        assert!(result.contains('\u{2026}'));
+    }
+
+    #[test]
+    fn test_truncate_mid_short_string() {
+        let s = "hello";
+        let result = truncate_mid(s, 10);
+        assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn test_truncate_mid_utf8_no_panic() {
+        // Multi-byte characters: each emoji is 4 bytes
+        let s = "🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀";
+        let result = truncate_mid(s, 7);
+        assert!(result.contains('\u{2026}'));
+        // Should not panic - that's the main thing we're testing
+    }
+
+    #[test]
+    fn test_truncate_mid_mixed_utf8_no_panic() {
+        let s = "héllo wörld café résumé naïve";
+        let result = truncate_mid(s, 12);
+        assert!(result.contains('\u{2026}'));
     }
 }

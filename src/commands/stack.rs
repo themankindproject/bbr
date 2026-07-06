@@ -132,7 +132,7 @@ pub async fn add(g: &GlobalArgs, branch: &str, parent: Option<&str>) -> Result<(
     spinner.set_message(format!("Pushing branch {} to remote...", branch));
 
     // Push branch to remote
-    crate::git::push_branch(branch)?;
+    crate::git::push_branch_async(branch).await?;
 
     spinner.set_message(format!(
         "Creating pull request: {} → {}...",
@@ -243,7 +243,7 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
     Formatter::from_json_flag(g.json).print(&out, &human)
 }
 
-pub fn rebase(g: &GlobalArgs, push: bool) -> Result<()> {
+pub async fn rebase(g: &GlobalArgs, push: bool) -> Result<()> {
     if !crate::git::is_working_tree_clean()? {
         return Err(BitbucketError::Other(
             "Working directory is dirty. Please commit or stash changes before rebasing.".into(),
@@ -261,7 +261,7 @@ pub fn rebase(g: &GlobalArgs, push: bool) -> Result<()> {
             "Rebasing {} onto {}...",
             pr.branch, pr.parent_branch
         ));
-        match crate::git::rebase_branch(&pr.branch, &pr.parent_branch) {
+        match crate::git::rebase_branch_async(&pr.branch, &pr.parent_branch).await {
             Ok(_) => {
                 let mut push_msg = String::new();
                 if push {
@@ -269,7 +269,7 @@ pub fn rebase(g: &GlobalArgs, push: bool) -> Result<()> {
                         "Pushing branch {} with force-with-lease...",
                         pr.branch
                     ));
-                    match crate::git::push_force_with_lease(&pr.branch) {
+                    match crate::git::push_force_with_lease_async(&pr.branch).await {
                         Ok(_) => push_msg = " and pushed".to_string(),
                         Err(e) => {
                             steps.push(StackRebaseStep {
@@ -353,7 +353,7 @@ pub async fn land(g: &GlobalArgs, strategy: Option<&str>, yes: bool) -> Result<(
                 Ok(_) => {
                     merged.push(id);
                     // Also clean up local branch
-                    let _ = crate::git::delete_branch_local(&pr.branch);
+                    let _ = crate::git::delete_branch_local_async(&pr.branch).await;
                 }
                 Err(e) => {
                     failed.push(StackLandFailure {
@@ -419,10 +419,16 @@ pub async fn abort(g: &GlobalArgs, yes: bool) -> Result<()> {
             }
         }
         spinner.set_message(format!("Deleting branch {}...", pr.branch));
-        if crate::git::delete_branch_local(&pr.branch).is_ok() {
+        if crate::git::delete_branch_local_async(&pr.branch)
+            .await
+            .is_ok()
+        {
             branches_deleted.push(format!("local/{}", pr.branch));
         }
-        if crate::git::delete_branch_remote(&pr.branch).is_ok() {
+        if crate::git::delete_branch_remote_async(&pr.branch)
+            .await
+            .is_ok()
+        {
             branches_deleted.push(format!("remote/{}", pr.branch));
         }
     }

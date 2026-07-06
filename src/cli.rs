@@ -1485,7 +1485,7 @@ async fn dispatch_pr(g: &GlobalArgs, action: PrAction) -> Result<()> {
                 commands::stack::add(g, &branch, parent.as_deref()).await
             }
             StackAction::List => commands::stack::list(g).await,
-            StackAction::Rebase { push } => commands::stack::rebase(g, push),
+            StackAction::Rebase { push } => commands::stack::rebase(g, push).await,
             StackAction::Land { strategy, yes } => {
                 commands::stack::land(g, strategy.as_deref(), yes).await
             }

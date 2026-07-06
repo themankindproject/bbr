@@ -92,9 +92,10 @@ impl BitbucketClient {
     ) -> Result<Vec<Deployment>> {
         let pagelen = limit.min(100);
         let path = format!("/repositories/{workspace}/{slug}/deployments?pagelen={pagelen}");
-        let page: super::Paginated<Deployment> =
-            self.send(reqwest::Method::GET, &path, None).await?;
-        Ok(page.values)
+        let all = self
+            .fetch_all_pages::<Deployment>(&path, limit as usize)
+            .await?;
+        Ok(all)
     }
 
     pub async fn list_environments(
@@ -103,9 +104,10 @@ impl BitbucketClient {
         slug: &str,
     ) -> Result<Vec<DeploymentEnvironment>> {
         let path = format!("/repositories/{workspace}/{slug}/environments?pagelen=100");
-        let page: super::Paginated<DeploymentEnvironment> =
-            self.send(reqwest::Method::GET, &path, None).await?;
-        Ok(page.values)
+        let all = self
+            .fetch_all_pages::<DeploymentEnvironment>(&path, usize::MAX)
+            .await?;
+        Ok(all)
     }
 
     pub async fn create_environment(

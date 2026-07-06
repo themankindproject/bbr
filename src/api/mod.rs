@@ -9,6 +9,9 @@ pub mod source;
 pub mod status;
 pub mod webhook;
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
+use futures::{StreamExt, TryStreamExt};
 use reqwest::header::{ACCEPT, AUTHORIZATION};
 use reqwest::{Client, Method, StatusCode};
 use serde::de::DeserializeOwned;
@@ -95,7 +98,8 @@ impl BitbucketClient {
 
     /// Issue a request and return the deserialized body.
     /// Automatically retries up to 2 times on HTTP 429 (rate-limit) with
-    /// linear back-off (5 s, 10 s) + jitter.
+    /// linear back-off (5 s, 10 s) + jitter, honoring the Retry-After header
+    /// when present.
     pub async fn send<T: DeserializeOwned>(
         &self,
         method: Method,
@@ -117,12 +121,24 @@ impl BitbucketClient {
                     .body(b.to_owned());
             }
             let resp = req.send().await.map_err(BitbucketError::Http)?;
+
+            // Extract Retry-After header before consuming the response body
+            let retry_after_secs = resp
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse::<u64>().ok());
+
             match self.decode(resp).await {
                 Err(BitbucketError::RateLimit(_msg)) if attempt < MAX_RETRIES => {
                     attempt += 1;
-                    let base = u64::from(attempt) * 5;
-                    let jitter = rand_jitter();
-                    let wait = std::time::Duration::from_secs(base + jitter);
+                    let wait = if let Some(ra) = retry_after_secs {
+                        std::time::Duration::from_secs(ra)
+                    } else {
+                        let base = u64::from(attempt) * 5;
+                        let jitter = rand_jitter();
+                        std::time::Duration::from_secs(base + jitter)
+                    };
                     tracing::warn!("rate limited, retrying in {:?} (attempt {attempt})", wait);
                     tokio::time::sleep(wait).await;
                 }
@@ -131,10 +147,61 @@ impl BitbucketClient {
         }
     }
 
-    /// Issue a request expecting no body (returns `()` on success).
+    /// Issue a request expecting no meaningful response body (returns `()` on success).
+    /// Only checks the HTTP status code; does not attempt to deserialize the body.
     pub async fn send_empty(&self, method: Method, path: &str, body: Option<&str>) -> Result<()> {
-        let _: serde_json::Value = self.send(method, path, body).await?;
-        Ok(())
+        self.send_no_body(method, path, body).await
+    }
+
+    /// Internal method that makes a request, checks the status code, handles errors,
+    /// but does not deserialize the response body.
+    async fn send_no_body(&self, method: Method, path: &str, body: Option<&str>) -> Result<()> {
+        const MAX_RETRIES: u8 = 2;
+        let mut attempt: u8 = 0;
+        let url = self.url(path);
+        loop {
+            let mut req = self
+                .inner
+                .request(method.clone(), &url)
+                .header(AUTHORIZATION, &self.auth_header)
+                .header(ACCEPT, "application/json");
+            if let Some(b) = body {
+                req = req
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(b.to_owned());
+            }
+            let resp = req.send().await.map_err(BitbucketError::Http)?;
+            let status = resp.status();
+
+            // Extract Retry-After header before consuming the response body
+            let retry_after_secs = resp
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse::<u64>().ok());
+
+            if status.is_success() {
+                return Ok(());
+            }
+
+            let text = resp.text().await.map_err(BitbucketError::Http)?;
+            let err = map_error(status, &text);
+            match err {
+                BitbucketError::RateLimit(_) if attempt < MAX_RETRIES => {
+                    attempt += 1;
+                    let wait = if let Some(ra) = retry_after_secs {
+                        std::time::Duration::from_secs(ra)
+                    } else {
+                        let base = u64::from(attempt) * 5;
+                        let jitter = rand_jitter();
+                        std::time::Duration::from_secs(base + jitter)
+                    };
+                    tracing::warn!("rate limited, retrying in {:?} (attempt {attempt})", wait);
+                    tokio::time::sleep(wait).await;
+                }
+                other => return Err(other),
+            }
+        }
     }
 
     /// POST a serializable body.
@@ -170,6 +237,12 @@ impl BitbucketClient {
             loop {
                 let page: crate::api::Paginated<T> =
                     self.send(Method::GET, &next_path, None).await?;
+
+                // Guard: break if the page returned no values to prevent infinite loop
+                if page.values.is_empty() {
+                    break;
+                }
+
                 let remaining = limit.saturating_sub(all.len());
                 all.extend(page.values.into_iter().take(remaining));
                 if all.len() >= limit {
@@ -207,7 +280,12 @@ impl BitbucketClient {
             });
         }
 
-        let results = futures::future::try_join_all(futures).await?;
+        // Cap parallel page fetches to 10 concurrent requests
+        let results: Vec<crate::api::Paginated<T>> = futures::stream::iter(futures)
+            .buffer_unordered(10)
+            .try_collect()
+            .await?;
+
         for page in results {
             all.extend(page.values);
         }
@@ -232,15 +310,27 @@ impl BitbucketClient {
                 .await
                 .map_err(BitbucketError::Http)?;
             let status = resp.status();
+
+            // Extract Retry-After header before consuming the response body
+            let retry_after_secs = resp
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse::<u64>().ok());
+
             let body = resp.text().await.map_err(BitbucketError::Http)?;
             if !status.is_success() {
                 let err = map_error(status, &body);
                 match err {
                     BitbucketError::RateLimit(_msg) if attempt < MAX_RETRIES => {
                         attempt += 1;
-                        let base = u64::from(attempt) * 5;
-                        let jitter = rand_jitter();
-                        let wait = std::time::Duration::from_secs(base + jitter);
+                        let wait = if let Some(ra) = retry_after_secs {
+                            std::time::Duration::from_secs(ra)
+                        } else {
+                            let base = u64::from(attempt) * 5;
+                            let jitter = rand_jitter();
+                            std::time::Duration::from_secs(base + jitter)
+                        };
                         tracing::warn!("rate limited, retrying in {:?} (attempt {attempt})", wait);
                         tokio::time::sleep(wait).await;
                         continue;
@@ -454,31 +544,9 @@ fn rand_jitter() -> u64 {
     (pid.wrapping_add(n).wrapping_mul(6364136223846793005) >> 33) % 5
 }
 
-/// Minimal base64 encoder (RFC 4648) — avoids pulling in a base64 crate just
-/// for HTTP Basic auth.
+/// Base64 encoder using the `base64` crate (RFC 4648 standard alphabet).
 pub(crate) fn base64_encode(input: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
-    for chunk in input.chunks(3) {
-        let b = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
-        out.push(TABLE[(b[0] >> 2) as usize] as char);
-        out.push(TABLE[(((b[0] & 0x03) << 4) | (b[1] >> 4)) as usize] as char);
-        if chunk.len() > 1 {
-            out.push(TABLE[(((b[1] & 0x0f) << 2) | (b[2] >> 6)) as usize] as char);
-        } else {
-            out.push('=');
-        }
-        if chunk.len() > 2 {
-            out.push(TABLE[(b[2] & 0x3f) as usize] as char);
-        } else {
-            out.push('=');
-        }
-    }
-    out
+    STANDARD.encode(input)
 }
 
 #[cfg(test)]

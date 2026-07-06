@@ -141,13 +141,13 @@ pub fn detect_repo() -> Result<RepoIdentity> {
         }
     }
     Err(BitbucketError::Git(
-        "no bitbucket.org remote found in this repository".into(),
+        "no git remote found in this repository".into(),
     ))
 }
 
 /// Fetch a branch from origin.
 pub fn fetch_branch(branch: &str) -> Result<()> {
-    git_with_timeout(&["fetch", "origin", branch], GIT_WRITE_TIMEOUT)?;
+    git_with_timeout(&["fetch", "origin", "--", branch], GIT_WRITE_TIMEOUT)?;
     Ok(())
 }
 
@@ -157,9 +157,10 @@ pub fn checkout_branch(branch: &str) -> Result<()> {
     let exists = git(&["rev-parse", "--verify", branch]).is_ok();
 
     if exists {
-        git(&["switch", branch]).map(|_| ())
+        git(&["switch", "--", branch]).map(|_| ())
     } else {
-        git(&["switch", "-c", branch, &format!("origin/{branch}")]).map(|_| ())
+        let remote_ref = format!("origin/{branch}");
+        git(&["switch", "-c", branch, "--", &remote_ref]).map(|_| ())
     }
 }
 
@@ -183,14 +184,14 @@ pub fn is_working_tree_clean() -> Result<bool> {
 
 /// Git push a branch to origin.
 pub fn push_branch(branch: &str) -> Result<()> {
-    git_with_timeout(&["push", "origin", branch], GIT_WRITE_TIMEOUT)?;
+    git_with_timeout(&["push", "origin", "--", branch], GIT_WRITE_TIMEOUT)?;
     Ok(())
 }
 
 /// Git push --force-with-lease to origin.
 pub fn push_force_with_lease(branch: &str) -> Result<()> {
     git_with_timeout(
-        &["push", "--force-with-lease", "origin", branch],
+        &["push", "--force-with-lease", "origin", "--", branch],
         GIT_WRITE_TIMEOUT,
     )?;
     Ok(())
@@ -198,28 +199,100 @@ pub fn push_force_with_lease(branch: &str) -> Result<()> {
 
 /// Delete a branch locally.
 pub fn delete_branch_local(branch: &str) -> Result<()> {
-    git(&["branch", "-D", branch])?;
+    git(&["branch", "-D", "--", branch])?;
     Ok(())
 }
 
 /// Delete a branch locally, checking if it is fully merged (safe delete).
 pub fn delete_branch_local_safe(branch: &str) -> Result<()> {
-    git(&["branch", "-d", branch])?;
+    git(&["branch", "-d", "--", branch])?;
     Ok(())
 }
 
 /// Delete a remote branch on origin.
 pub fn delete_branch_remote(branch: &str) -> Result<()> {
-    git_with_timeout(&["push", "origin", "--delete", branch], GIT_WRITE_TIMEOUT)?;
+    git_with_timeout(
+        &["push", "origin", "--delete", "--", branch],
+        GIT_WRITE_TIMEOUT,
+    )?;
     Ok(())
 }
 
 /// Rebase branch onto another branch.
 pub fn rebase_branch(branch: &str, onto: &str) -> Result<()> {
     // switch to the target branch first, then rebase onto the parent
-    git(&["switch", branch])?;
-    git_with_timeout(&["rebase", onto], GIT_WRITE_TIMEOUT)?;
+    git(&["switch", "--", branch])?;
+    git_with_timeout(&["rebase", "--", onto], GIT_WRITE_TIMEOUT)?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Async wrappers using spawn_blocking for git write operations
+// ---------------------------------------------------------------------------
+
+/// Async version of [`fetch_branch`] — runs on the blocking thread pool.
+pub async fn fetch_branch_async(branch: &str) -> Result<()> {
+    let branch = branch.to_string();
+    tokio::task::spawn_blocking(move || fetch_branch(&branch))
+        .await
+        .map_err(|e| BitbucketError::Git(format!("spawn_blocking join error: {e}")))?
+}
+
+/// Async version of [`checkout_branch`] — runs on the blocking thread pool.
+pub async fn checkout_branch_async(branch: &str) -> Result<()> {
+    let branch = branch.to_string();
+    tokio::task::spawn_blocking(move || checkout_branch(&branch))
+        .await
+        .map_err(|e| BitbucketError::Git(format!("spawn_blocking join error: {e}")))?
+}
+
+/// Async version of [`push_branch`] — runs on the blocking thread pool.
+pub async fn push_branch_async(branch: &str) -> Result<()> {
+    let branch = branch.to_string();
+    tokio::task::spawn_blocking(move || push_branch(&branch))
+        .await
+        .map_err(|e| BitbucketError::Git(format!("spawn_blocking join error: {e}")))?
+}
+
+/// Async version of [`push_force_with_lease`] — runs on the blocking thread pool.
+pub async fn push_force_with_lease_async(branch: &str) -> Result<()> {
+    let branch = branch.to_string();
+    tokio::task::spawn_blocking(move || push_force_with_lease(&branch))
+        .await
+        .map_err(|e| BitbucketError::Git(format!("spawn_blocking join error: {e}")))?
+}
+
+/// Async version of [`delete_branch_local`] — runs on the blocking thread pool.
+pub async fn delete_branch_local_async(branch: &str) -> Result<()> {
+    let branch = branch.to_string();
+    tokio::task::spawn_blocking(move || delete_branch_local(&branch))
+        .await
+        .map_err(|e| BitbucketError::Git(format!("spawn_blocking join error: {e}")))?
+}
+
+/// Async version of [`delete_branch_local_safe`] — runs on the blocking thread pool.
+pub async fn delete_branch_local_safe_async(branch: &str) -> Result<()> {
+    let branch = branch.to_string();
+    tokio::task::spawn_blocking(move || delete_branch_local_safe(&branch))
+        .await
+        .map_err(|e| BitbucketError::Git(format!("spawn_blocking join error: {e}")))?
+}
+
+/// Async version of [`delete_branch_remote`] — runs on the blocking thread pool.
+pub async fn delete_branch_remote_async(branch: &str) -> Result<()> {
+    let branch = branch.to_string();
+    tokio::task::spawn_blocking(move || delete_branch_remote(&branch))
+        .await
+        .map_err(|e| BitbucketError::Git(format!("spawn_blocking join error: {e}")))?
+}
+
+/// Async version of [`rebase_branch`] — runs on the blocking thread pool.
+pub async fn rebase_branch_async(branch: &str, onto: &str) -> Result<()> {
+    let branch = branch.to_string();
+    let onto = onto.to_string();
+    tokio::task::spawn_blocking(move || rebase_branch(&branch, &onto))
+        .await
+        .map_err(|e| BitbucketError::Git(format!("spawn_blocking join error: {e}")))?
 }
 
 #[cfg(test)]

@@ -419,7 +419,7 @@ pub async fn cleanup_merged_branches(
             }
         } else {
             run_spinner.set_message(format!("Deleting local branch {}...", act.branch_name));
-            match crate::git::delete_branch_local_safe(&act.branch_name) {
+            match crate::git::delete_branch_local_safe_async(&act.branch_name).await {
                 Ok(_) => succeeded.push(BatchActionOutcome {
                     id: format!("local/{}", act.branch_name),
                     description: format!("Deleted local branch {}", act.branch_name),

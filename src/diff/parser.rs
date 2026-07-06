@@ -137,24 +137,17 @@ pub fn parse(raw: &str) -> Vec<DiffFile> {
 
         // Hunk header
         if let Some(header) = parse_hunk_header(line) {
-            // Flush previous hunk
-            if let Some(ref mut _file) = current_file {
-                if let Some(_hunk) = current_hunk.take() {
-                    // We need to push the old hunk to the file
-                    // But we can't borrow both - flush via replace
-                }
-            }
             if let Some(file) = current_file.as_mut() {
-                let old_hunk = current_hunk.replace(DiffHunkBuilder::new(header));
-                if let Some(hunk) = old_hunk {
-                    // Add counts to file
-                    file.add_hunk_counts(&hunk);
+                // Flush the previous hunk: add its counts AND push it to the file
+                if let Some(prev_hunk) = current_hunk.take() {
+                    file.add_hunk_counts(&prev_hunk);
+                    file.push_hunk(prev_hunk);
                 }
+                current_hunk = Some(DiffHunkBuilder::new(header));
             } else {
                 // Orphan hunk without a file header - create a minimal file
-                let file = DiffFileBuilder::new_from_hunk();
+                current_file = Some(DiffFileBuilder::new_from_hunk());
                 current_hunk = Some(DiffHunkBuilder::new(header));
-                current_file = Some(file);
             }
             continue;
         }
@@ -437,6 +430,17 @@ impl DiffFileBuilder {
         }
     }
 
+    fn push_hunk(&mut self, hunk: DiffHunkBuilder) {
+        self.hunks.push(DiffHunk {
+            old_start: hunk.old_start,
+            old_lines: hunk.old_lines,
+            new_start: hunk.new_start,
+            new_lines: hunk.new_lines,
+            header: hunk.header,
+            lines: hunk.lines,
+        });
+    }
+
     fn finish(mut self, last_hunk: Option<DiffHunkBuilder>) -> DiffFile {
         if let Some(hunk_builder) = last_hunk {
             // Add counts from this hunk
@@ -690,5 +694,46 @@ diff --git a/src/main.rs b/src/main.rs
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].additions, 4);
         assert_eq!(files[0].deletions, 2);
+    }
+
+    #[test]
+    fn test_parse_multiple_hunks_preserved() {
+        let diff = "\
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,4 +1,4 @@
+ fn first() {
+-    old1();
++    new1();
+ }
+@@ -10,4 +10,4 @@
+ fn second() {
+-    old2();
++    new2();
+ }
+@@ -20,4 +20,4 @@
+ fn third() {
+-    old3();
++    new3();
+ }
+";
+        let files = parse(diff);
+        assert_eq!(files.len(), 1, "should parse one file");
+
+        let file = &files[0];
+        assert_eq!(file.hunks.len(), 3, "all three hunks should be preserved");
+        assert_eq!(file.additions, 3);
+        assert_eq!(file.deletions, 3);
+
+        // Verify each hunk has the correct start lines
+        assert_eq!(file.hunks[0].old_start, 1);
+        assert_eq!(file.hunks[1].old_start, 10);
+        assert_eq!(file.hunks[2].old_start, 20);
+
+        // Verify each hunk has lines (not empty)
+        assert_eq!(file.hunks[0].lines.len(), 4);
+        assert_eq!(file.hunks[1].lines.len(), 4);
+        assert_eq!(file.hunks[2].lines.len(), 4);
     }
 }

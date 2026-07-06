@@ -336,18 +336,34 @@ impl BitbucketClient {
             q_parts.push(format!("state%3D%22{s}%22"));
         }
         if let Some(a) = author {
+            if a.contains('"') {
+                return Err(BitbucketError::Other(
+                    "invalid --author filter value: double-quotes are not allowed".to_string(),
+                ));
+            }
             q_parts.push(format!(
                 "author.display_name%3D%22{}%22",
                 super::url_encode(a)
             ));
         }
         if let Some(b) = source_branch {
+            if b.contains('"') {
+                return Err(BitbucketError::Other(
+                    "invalid --source-branch filter value: double-quotes are not allowed"
+                        .to_string(),
+                ));
+            }
             q_parts.push(format!(
                 "source.branch.name%3D%22{}%22",
                 super::url_encode(b)
             ));
         }
         if let Some(r) = reviewer {
+            if r.contains('"') {
+                return Err(BitbucketError::Other(
+                    "invalid --reviewer filter value: double-quotes are not allowed".to_string(),
+                ));
+            }
             q_parts.push(format!(
                 "reviewers.display_name%3D%22{}%22",
                 super::url_encode(r)
@@ -383,10 +399,12 @@ impl BitbucketClient {
                     let mut next = page.next;
                     while all.len() < limit as usize {
                         if let Some(ref url) = next {
-                            let next_path =
-                                url.strip_prefix(&self.base_url).unwrap_or(url).to_string();
+                            let next_path = super::strip_base(url, &self.base_url)?;
                             let next_page: super::Paginated<PullRequest> =
                                 self.send(reqwest::Method::GET, &next_path, None).await?;
+                            if next_page.values.is_empty() {
+                                break;
+                            }
                             let remaining = limit as usize - all.len();
                             all.extend(next_page.values.into_iter().take(remaining));
                             next = next_page.next;

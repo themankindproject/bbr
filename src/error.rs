@@ -54,7 +54,10 @@ pub enum BitbucketError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("pipeline failed")]
+    #[error("pipeline{} failed{}",
+        build_number.map(|n| format!(" #{n}")).unwrap_or_default(),
+        branch.as_ref().map(|b| format!(" on {b}")).unwrap_or_default()
+    )]
     PipelineFailed {
         build_number: Option<u64>,
         branch: Option<String>,

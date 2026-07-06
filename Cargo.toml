@@ -1,6 +1,6 @@
 [package]
 name = "bbr"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 description = "BitBucket Remote — a fast, single-binary Bitbucket Cloud CLI for coding agents and humans"
 license = "MIT"
@@ -53,6 +53,10 @@ dirs = "5"
 xdg = "2"
 rpassword = "=7.3.1"
 
+# Date/time parsing (ISO 8601, relative time)
+# Pinned: time-macros >=0.2.19 requires edition 2024 (Rust 1.85+)
+time = { version = ">=0.3, <=0.3.36", features = ["parsing", "formatting"] }
+
 # Diff rendering
 similar = "2"
 unicode-width = "0.1"
@@ -60,6 +64,13 @@ unicode-width = "0.1"
 # Self-update
 flate2 = "1"
 tar = "0.4"
+sha2 = "0.10"
+
+# Safe atomic temp files for self-update
+tempfile = "3"
+
+# Base64 encoding (HTTP Basic auth)
+base64 = "0.22"
 
 [target.'cfg(unix)'.dependencies]
 # Terminal width detection (ioctl TIOCGWINSZ on Unix)

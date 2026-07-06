@@ -101,27 +101,42 @@ pub struct IssueComment {
     pub updated_on: Option<String>,
 }
 
+/// Validate that a BBQL filter value does not contain double-quotes,
+/// which would break the query syntax or allow injection.
+fn validate_bbql_value(value: &str, field: &str) -> crate::error::Result<()> {
+    if value.contains('"') {
+        return Err(crate::error::BitbucketError::Other(format!(
+            "invalid {field} filter value: double-quotes are not allowed (got \"{value}\")"
+        )));
+    }
+    Ok(())
+}
+
 /// Build a BBQL query string from optional filters.
 fn build_issue_query(
     status: Option<&str>,
     kind: Option<&str>,
     priority: Option<&str>,
     assignee: Option<&str>,
-) -> String {
+) -> crate::error::Result<String> {
     let mut parts: Vec<String> = Vec::new();
     if let Some(s) = status {
+        validate_bbql_value(s, "state")?;
         parts.push(format!("state=\"{s}\""));
     }
     if let Some(k) = kind {
+        validate_bbql_value(k, "kind")?;
         parts.push(format!("kind=\"{k}\""));
     }
     if let Some(p) = priority {
+        validate_bbql_value(p, "priority")?;
         parts.push(format!("priority=\"{p}\""));
     }
     if let Some(a) = assignee {
+        validate_bbql_value(a, "assignee")?;
         parts.push(format!("assignee.nickname=\"{a}\""));
     }
-    parts.join(" AND ")
+    Ok(parts.join(" AND "))
 }
 
 impl BitbucketClient {
@@ -138,9 +153,10 @@ impl BitbucketClient {
         raw_query: Option<&str>,
     ) -> Result<Vec<Issue>> {
         let pagelen = limit.min(50);
-        let q = raw_query
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| build_issue_query(status, kind, priority, assignee));
+        let q = match raw_query {
+            Some(s) => s.to_string(),
+            None => build_issue_query(status, kind, priority, assignee)?,
+        };
         let path = if q.is_empty() {
             format!("/repositories/{workspace}/{slug}/issues?pagelen={pagelen}&sort=-updated_on")
         } else {
@@ -262,21 +278,40 @@ mod tests {
 
     #[test]
     fn build_query_empty() {
-        assert_eq!(build_issue_query(None, None, None, None), "");
+        assert_eq!(build_issue_query(None, None, None, None).unwrap(), "");
     }
 
     #[test]
     fn build_query_single() {
         assert_eq!(
-            build_issue_query(Some("open"), None, None, None),
+            build_issue_query(Some("open"), None, None, None).unwrap(),
             r#"state="open""#
         );
     }
 
     #[test]
     fn build_query_multiple() {
-        let q = build_issue_query(Some("open"), Some("bug"), Some("major"), None);
+        let q = build_issue_query(Some("open"), Some("bug"), Some("major"), None).unwrap();
         assert_eq!(q, r#"state="open" AND kind="bug" AND priority="major""#);
+    }
+
+    #[test]
+    fn build_query_rejects_double_quotes() {
+        let err =
+            build_issue_query(Some(r#"open" OR state="closed"#), None, None, None).unwrap_err();
+        assert!(format!("{err}").contains("double-quotes are not allowed"));
+    }
+
+    #[test]
+    fn build_query_rejects_quotes_in_kind() {
+        let err = build_issue_query(None, Some("bug\""), None, None).unwrap_err();
+        assert!(format!("{err}").contains("double-quotes are not allowed"));
+    }
+
+    #[test]
+    fn build_query_rejects_quotes_in_assignee() {
+        let err = build_issue_query(None, None, None, Some("user\"hack")).unwrap_err();
+        assert!(format!("{err}").contains("double-quotes are not allowed"));
     }
 
     #[test]

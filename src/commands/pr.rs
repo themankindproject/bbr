@@ -651,9 +651,9 @@ pub async fn checkout(g: &GlobalArgs, id: u64) -> Result<()> {
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message(format!("Fetching '{branch}'..."));
-    git::fetch_branch(&branch)?;
+    git::fetch_branch_async(&branch).await?;
     spinner.set_message(format!("Checking out '{branch}'..."));
-    git::checkout_branch(&branch)?;
+    git::checkout_branch_async(&branch).await?;
     spinner.finish();
 
     let fmt = Formatter::from_json_flag(g.json);

@@ -24,8 +24,8 @@ pub struct Webhook {
 impl BitbucketClient {
     pub async fn list_webhooks(&self, workspace: &str, slug: &str) -> Result<Vec<Webhook>> {
         let path = format!("/repositories/{workspace}/{slug}/hooks?pagelen=100");
-        let page: super::Paginated<Webhook> = self.send(reqwest::Method::GET, &path, None).await?;
-        Ok(page.values)
+        let all = self.fetch_all_pages::<Webhook>(&path, usize::MAX).await?;
+        Ok(all)
     }
 
     pub async fn get_webhook(&self, workspace: &str, slug: &str, uid: &str) -> Result<Webhook> {
