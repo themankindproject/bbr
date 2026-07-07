@@ -55,7 +55,7 @@ rpassword = "=7.3.1"
 
 # Date/time parsing (ISO 8601, relative time)
 # Pinned: time 0.3.42+ requires Rust 1.81+, time 0.3.47+ (vuln fix) requires 1.88+
-time = { version = ">=0.3, <=0.3.41", features = ["parsing", "formatting"] }
+time = { version = ">=0.3, <=0.3.47", features = ["parsing", "formatting"] }
 
 # Diff rendering
 similar = "2"
