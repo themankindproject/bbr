@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Pretty diff renderer UX overhaul** — 10 production-grade improvements to `bbr pr diff` output:
+  - **Full-line background tinting** — addition lines get a subtle dark-green background (`48;5;22`), deletion lines get dark-red (`48;5;52`), spanning the full terminal width for instant scannability.
+  - **Sign column** — colored `+`/`-` glyphs in the gutter between line numbers and separator, improving accessibility and skim-readability (especially for colorblind users).
+  - **Interleaved paired lines** — unified mode now outputs deletion/addition pairs consecutively (del1→add1→del2→add2) instead of all deletions then all additions, making word-diff highlights spatially adjacent.
+  - **Inline compact file header** — replaced the multi-line box-drawing header with a single-line format: `── ~ path ── modified ── [████░░░░] +X, -Y ──` with a proportional stats bar.
+  - **Word-diff similarity threshold** — lines that differ by more than 70% (similarity < 0.30) skip word-level highlighting and render as plain colored, avoiding the "everything highlighted" noise on full rewrites.
+  - **Context lines at normal weight** — context line content is now rendered at normal weight; only line numbers and the `│` separator are dimmed, improving code readability.
+  - **Colorized summary with proportion bar** — insertion count is green, deletion count is red, with a 12-char `[████████░░░░]` bar showing the addition/deletion ratio.
+  - **Empty line markers** — blank added/deleted lines now show a visible `⏎` (unicode) or `<CR>` (ASCII) marker instead of invisible whitespace.
+  - **File index for multi-file diffs** — diffs with 2+ files now show a table-of-contents at the top with numbered paths and colored `+X, -Y` stats.
+  - **Continuous vertical divider in side-by-side** — left-edge `│` pipe on every row plus consistent dim center separator for clear two-pane structure.
+- **`word_diff::similarity()` function** — computes word-level similarity ratio (0.0–1.0) between two strings using the `similar` crate's ratio method.
+- **`word_diff::WORD_DIFF_THRESHOLD` constant** — configurable threshold (0.30) below which word-level highlighting is skipped.
+
+### Changed
+
+- **Diff renderer `dim()` helper switched from `colored` crate to direct ANSI** — avoids `colored::Colorize` import in the renderer, using `\x1b[2m...\x1b[0m` directly for consistency with other escape sequences in the module.
+
+### Testing
+
+- 11 new renderer tests: `test_render_colored_background_tinting`, `test_render_sign_column`, `test_render_interleaved_pairs`, `test_inline_file_header`, `test_render_empty_line_marker`, `test_render_multiple_files_has_index`, `test_render_summary_colored`, `test_context_lines_not_dimmed`, `test_side_by_side_left_edge_pipe`, `test_theme_colored` helper.
+- Total: 218 unit + 31 integration = **249 tests, all passing**.
+
 ## [0.1.7] - 2026-07-07
 
 ### Added

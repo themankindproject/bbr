@@ -50,6 +50,22 @@ pub fn word_changes(old: &str, new: &str) -> Vec<WordSegment> {
     segments
 }
 
+/// Minimum similarity ratio (0.0–1.0) below which word-level highlighting
+/// should be skipped in favour of showing the entire line as changed.
+/// A value of 0.30 means lines that share fewer than 30% of their words
+/// are considered too different for useful intra-line highlighting.
+pub const WORD_DIFF_THRESHOLD: f64 = 0.30;
+
+/// Compute the similarity ratio between two strings using word-level diffing.
+///
+/// Returns a value between 0.0 (completely different) and 1.0 (identical).
+/// Uses the `similar` crate's `TextDiff::from_words` ratio method which
+/// computes `2 * matching_words / total_words`.
+pub fn similarity(old: &str, new: &str) -> f64 {
+    let diff = TextDiff::from_words(old, new);
+    diff.ratio().into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
