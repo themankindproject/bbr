@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **MSRV bumped from 1.75 to 1.88** — enables use of latest dependency versions without pinning; aligns with the edition 2024 ecosystem.
+- **`time` crate unpinned (0.3.36 → 0.3.53)** — resolves RUSTSEC-2026-0009 (DoS via stack exhaustion in time parsing).
+- **`tempfile` crate unpinned (3.15 → 3.27)** — no longer blocked by `getrandom` 0.4 requiring edition 2024.
+- **Clippy `is_none_or` lint fix** — replaced `map_or(true, …)` with idiomatic `is_none_or(…)` in API error field filtering.
 - **`CLICOLOR` / `CLICOLOR_FORCE` support** — the theme color detection now implements the full CLICOLOR spec: `CLICOLOR_FORCE` (non-"0") forces colors on; `NO_COLOR` disables; `CLICOLOR=0` disables; otherwise colors are enabled only on TTY. Previously only `NO_COLOR` was checked.
 - **Custom base64 replaced with `base64` crate** — HTTP Basic auth encoding now uses the well-tested `base64` 0.22 crate instead of a hand-rolled implementation, eliminating maintenance risk in auth-critical code.
 - **Rate limit retry honors `Retry-After` header** — when Bitbucket returns a 429 with a `Retry-After` header, the retry delay now uses the server-specified duration instead of fixed linear backoff.
