@@ -387,7 +387,7 @@ pub fn map_error(status: StatusCode, body: &str) -> BitbucketError {
     let fields = parsed
         .as_ref()
         .and_then(|e| e.error.fields.as_ref())
-        .filter(|f| !f.is_null() && !f.as_object().map_or(true, |o| o.is_empty()));
+        .filter(|f| !f.is_null() && !f.as_object().is_none_or(|o| o.is_empty()));
 
     let mut full = msg;
     if let Some(d) = detail {

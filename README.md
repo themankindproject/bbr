@@ -2,7 +2,7 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/themankindproject/bbr/ci.yml?branch=main&label=CI)](https://github.com/themankindproject/bbr/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/github/v/release/themankindproject/bbr)](https://github.com/themankindproject/bbr/releases/latest)
-![Rust Version](https://img.shields.io/badge/rust-1.75%2B-blue)
+![Rust Version](https://img.shields.io/badge/rust-1.88%2B-blue)
 [![License](https://img.shields.io/crates/l/bbr)](LICENSE)
 
 A fast, single-binary Bitbucket Cloud CLI. **Agent-first** (`--json` everywhere, stable schemas, zero-config env auth) with pretty human output.
@@ -69,7 +69,7 @@ The breaking point: **coding agents** (Claude, Cursor, Copilot) need a reliable,
 
 | Layer | Technology |
 |-------|-----------|
-| **Language** | Rust 2021 Edition, MSRV 1.75+ |
+| **Language** | Rust 2021 Edition, MSRV 1.88+ |
 | **CLI Framework** | `clap` 4.5 (derive macros, env overrides, `wrap_help`) |
 | **Async Runtime** | `tokio` 1 (multi-threaded) + `futures` 0.3 |
 | **HTTP Client** | `reqwest` 0.12 with `rustls-tls` |
@@ -110,7 +110,7 @@ bbr batch merge-approved      # merge all fully-approved PRs
 - **A Bitbucket Cloud account** (Bitbucket Server/Data Center is not supported)
 - **An Atlassian API token** — generate one at `https://id.atlassian.com/manage-profile/security/api-tokens`
 - **A git repository** (cloned locally) — `bbr` auto-detects workspace, repo slug, and current branch from git remotes
-- **Rust 1.75+** (only if building from source)
+- **Rust 1.88+** (only if building from source)
 
 ---
 
@@ -633,7 +633,7 @@ bbr/
 
 ### Prerequisites
 
-- Rust 1.75+ (`rustup` recommended)
+- Rust 1.88+ (`rustup` recommended)
 - No system dependencies — `rustls` means no OpenSSL needed
 - No database, no Docker, no services
 
@@ -669,7 +669,7 @@ cargo watch -x 'test'                 # Re-test on changes
 
 ### Code Conventions
 
-- **MSRV 1.75** — avoid features requiring newer Rust
+- **MSRV 1.88** — avoid features requiring newer Rust
 - **Max width 100** — enforced by `rustfmt.toml`
 - **`too-many-arguments` threshold 8** — enforced by `clippy.toml`
 - **`-D warnings`** in CI — clippy warnings are errors
@@ -743,7 +743,7 @@ The project uses GitHub Actions with two workflows:
 | `fmt` | `cargo fmt --check` |
 | `clippy` | `cargo clippy --all-targets --all-features -- -D warnings` |
 | `test` | `cargo test --all-features` on Linux, macOS, Windows |
-| `msrv` | Verifies minimum supported Rust version (1.75) |
+| `msrv` | Verifies minimum supported Rust version (1.88) |
 | `nextest` | `cargo nextest run --all-features` |
 | `audit` | `cargo audit` for security vulnerabilities |
 
