@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-07-10
+
 ### Added
 
 - **`bbr variable` top-level command** — manage repository pipeline variables with `bbr variable list|set|delete`. Provides a more discoverable entry point to the same operations available via `bbr ci vars`. (#38)
