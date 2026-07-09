@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`bbr variable` top-level command** — manage repository pipeline variables with `bbr variable list|set|delete`. Provides a more discoverable entry point to the same operations available via `bbr ci vars`. (#38)
+- **`bbr deploy-keys` command group** — full CRUD for repository SSH deploy keys: `list`, `add --key <pubkey> --label <name>`, `view <key_id>`, `delete <key_id> [--yes]`. All subcommands support `--json`. (#19)
+- **`bbr ci schedules` command group** — manage pipeline schedules (cron-based triggers) with 6 subcommands: `list`, `create --cron <expr> --branch <name>`, `view <uuid>`, `update <uuid> [--cron] [--enabled]`, `delete <uuid> [--yes]`, `executions <uuid>`. (#12)
+- **`--max` safety cap on batch operations** — all `bbr batch` subcommands (`merge-approved`, `rerun-failed`, `cleanup-merged-branches`) now accept `--max <n>` to limit the number of items processed, preventing accidental bulk operations in automation.
+- **`secrecy` crate for credential storage** — `Credentials.secret` is now a `SecretString` that is automatically zeroized on drop, preventing credential leakage in memory dumps or core files.
+- **Terminal escape sequence sanitization** — diff content from the API is now sanitized to strip ANSI/CSI/OSC escape sequences at parse time, preventing terminal escape injection attacks via malicious diffs.
+- **Cached terminal width** — `terminal_width()` is now queried once per process via `OnceLock` instead of per-line during diff rendering, eliminating repeated `ioctl` syscalls.
+
+### Changed
+
+- **`cli.rs` split into `cli.rs` + `dispatch.rs`** — the 1802-line monolithic CLI file has been split into type definitions (1247 lines) and dispatch routing (600+ lines) for better maintainability.
+- **Self-update integrity warning** — when no checksums asset is available in a GitHub release, `bbr update` now prints a visible warning to the user instead of silently skipping verification.
+
+### Fixed
+
+- **[SECURITY] Orphan git process leak** — `git_with_timeout` now uses a polling loop with explicit `child.kill()` on timeout instead of spawning a thread that could never reap the child process.
+- **[SECURITY] URL path injection in source endpoints** — `git_ref` and `path` parameters in `get_file_raw` and `list_src` are now properly URL-encoded segment-by-segment.
+- **Serialization error in `merge_pr`** — previously swallowed with `unwrap_or_else(|_| "{}".into())`; now propagates the error via `Result`.
+- **Redundant `client()` construction in `run_overview`** — the API client is now reused from the initial `fetch_branch_status` call instead of being reconstructed.
+- **Redundant `&` in `format!` arguments** — fixed 4 `clippy::useless_borrows_in_formatting` lint errors caught by Rust 1.97.
+
+### Testing
+
+- 3 new escape sanitization tests (`test_sanitizes_terminal_escape_sequences`, `test_sanitizes_osc_sequences`, `test_sanitize_preserves_clean_content`).
+- 4 new pipeline variable tests (`list_repo_pipeline_variables`, `create_repo_pipeline_variable`, `update_repo_pipeline_variable`, `delete_repo_pipeline_variable`).
+- 6 new deploy-keys tests (`list_deploy_keys`, `add_deploy_key`, `get_deploy_key`, `delete_deploy_key`, + 2 more).
+- 4 new CI schedules tests (`list_schedules`, `create_schedule`, `get_schedule`, `delete_schedule`).
+- Total: 221 unit + 41 integration = **262 tests, all passing**.
+
 - **Pretty diff renderer UX overhaul** — 10 production-grade improvements to `bbr pr diff` output:
   - **Full-line background tinting** — addition lines get a subtle dark-green background (`48;5;22`), deletion lines get dark-red (`48;5;52`), spanning the full terminal width for instant scannability.
   - **Sign column** — colored `+`/`-` glyphs in the gutter between line numbers and separator, improving accessibility and skim-readability (especially for colorblind users).
