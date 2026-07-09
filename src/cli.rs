@@ -226,6 +226,11 @@ pub enum Command {
         #[command(subcommand)]
         action: WorkspaceAction,
     },
+    /// Manage pipeline variables (list, set, delete).
+    Variable {
+        #[command(subcommand)]
+        action: VariableAction,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -238,6 +243,34 @@ pub enum WorkspaceAction {
         /// Max results.
         #[arg(long, default_value_t = 25)]
         limit: u32,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum VariableAction {
+    /// List pipeline variables for the repository.
+    List {
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Set a pipeline variable (creates or updates).
+    Set {
+        /// Variable key name.
+        key: String,
+        /// Variable value.
+        value: String,
+        /// Mark variable as secured/encrypted (value hidden after creation).
+        #[arg(long)]
+        secured: bool,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Delete a pipeline variable by key name.
+    Delete {
+        /// Variable key name to delete.
+        key: String,
         #[command(flatten)]
         g: GlobalArgs,
     },

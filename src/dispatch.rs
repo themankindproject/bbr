@@ -8,8 +8,8 @@ use clap_complete::{generate, Shell};
 use crate::cli::{
     AuthAction, BatchAction, CiAction, CiVarsAction, Cli, Command, CommitAction,
     CommitStatusAction, ConfigAction, DeployAction, DeployEnvAction, DeployEnvVarsAction,
-    GlobalArgs, IssueAction, PrAction, RepoAction, SrcAction, StackAction, WebhookAction,
-    WorkspaceAction,
+    GlobalArgs, IssueAction, PrAction, RepoAction, SrcAction, StackAction, VariableAction,
+    WebhookAction, WorkspaceAction,
 };
 use crate::commands;
 use crate::error::Result;
@@ -102,6 +102,7 @@ pub(crate) async fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Schema { model, g }) => commands::schema::run(&g, model.as_deref()),
         Some(Command::Update { check, g }) => commands::update::run(&g, check).await,
         Some(Command::Workspace { action }) => dispatch_workspace(action).await,
+        Some(Command::Variable { action }) => dispatch_variable(action).await,
     }
 }
 
@@ -584,5 +585,18 @@ async fn dispatch_issue(action: IssueAction) -> Result<()> {
         IssueAction::Comments { id, limit, g } => {
             commands::issue::list_comments(&g, id, limit).await
         }
+    }
+}
+
+async fn dispatch_variable(action: VariableAction) -> Result<()> {
+    match action {
+        VariableAction::List { g } => commands::ci_vars::list(&g).await,
+        VariableAction::Set {
+            key,
+            value,
+            secured,
+            g,
+        } => commands::ci_vars::set(&g, &key, &value, secured).await,
+        VariableAction::Delete { key, g } => commands::ci_vars::delete(&g, &key).await,
     }
 }
