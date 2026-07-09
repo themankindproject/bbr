@@ -104,7 +104,14 @@ async fn update_repo_pipeline_variable() {
 
     let c = client(&server.uri()).await;
     let var = c
-        .update_pipeline_variable("ws", "repo", "{var-uuid-1}", "MY_VAR", "updated_value", false)
+        .update_pipeline_variable(
+            "ws",
+            "repo",
+            "{var-uuid-1}",
+            "MY_VAR",
+            "updated_value",
+            false,
+        )
         .await
         .unwrap();
 

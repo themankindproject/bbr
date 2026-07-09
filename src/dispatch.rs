@@ -428,15 +428,8 @@ async fn dispatch_batch(g: &GlobalArgs, action: BatchAction) -> Result<()> {
             yes,
             max,
         } => {
-            commands::batch::cleanup_merged_branches(
-                g,
-                repo.as_deref(),
-                remote,
-                dry_run,
-                yes,
-                max,
-            )
-            .await
+            commands::batch::cleanup_merged_branches(g, repo.as_deref(), remote, dry_run, yes, max)
+                .await
         }
     }
 }

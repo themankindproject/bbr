@@ -65,7 +65,9 @@ impl BitbucketClient {
         let endpoint = if path_encoded.is_empty() {
             format!("/repositories/{workspace}/{slug}/src/{ref_encoded}/?pagelen=100")
         } else {
-            format!("/repositories/{workspace}/{slug}/src/{ref_encoded}/{path_encoded}/?pagelen=100")
+            format!(
+                "/repositories/{workspace}/{slug}/src/{ref_encoded}/{path_encoded}/?pagelen=100"
+            )
         };
         let page: super::Paginated<SourceEntry> =
             self.send(reqwest::Method::GET, &endpoint, None).await?;
