@@ -134,7 +134,10 @@ struct BranchStatus {
 
 /// Fetch the PR, pipeline, and commit statuses for the current branch.
 /// This is the shared core of `run_inner()` and `run_overview()`.
-async fn fetch_branch_status(g: &GlobalArgs) -> Result<BranchStatus> {
+/// Returns both the status data and the API client for reuse.
+async fn fetch_branch_status(
+    g: &GlobalArgs,
+) -> Result<(BranchStatus, crate::api::BitbucketClient)> {
     let repo_id = resolve_repo(g)?;
     let head = current_head()?;
     let client = client(g)?;
@@ -182,17 +185,20 @@ async fn fetch_branch_status(g: &GlobalArgs) -> Result<BranchStatus> {
         })
         .collect();
 
-    Ok(BranchStatus {
-        repo: RepoSummary {
-            workspace: repo_id.workspace.clone(),
-            slug: repo_id.slug.clone(),
-            full_name: format!("{}/{}", repo_id.workspace, repo_id.slug),
+    Ok((
+        BranchStatus {
+            repo: RepoSummary {
+                workspace: repo_id.workspace.clone(),
+                slug: repo_id.slug.clone(),
+                full_name: format!("{}/{}", repo_id.workspace, repo_id.slug),
+            },
+            head,
+            pr_summary,
+            pipeline_summary,
+            commit_statuses,
         },
-        head,
-        pr_summary,
-        pipeline_summary,
-        commit_statuses,
-    })
+        client,
+    ))
 }
 
 pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
@@ -250,16 +256,18 @@ pub async fn run_short(g: &GlobalArgs) -> Result<()> {
 }
 
 pub async fn run_overview(g: &GlobalArgs) -> Result<()> {
-    let BranchStatus {
-        repo,
-        head,
-        pr_summary,
-        pipeline_summary,
-        commit_statuses,
-    } = fetch_branch_status(g).await?;
+    let (
+        BranchStatus {
+            repo,
+            head,
+            pr_summary,
+            pipeline_summary,
+            commit_statuses,
+        },
+        api_client,
+    ) = fetch_branch_status(g).await?;
 
     // Fetch additional overview data (recent PRs + pipelines) concurrently.
-    let api_client = client(g)?;
     let (recent_prs, recent_ci) = tokio::try_join!(
         api_client.list_prs(
             &repo.workspace,
@@ -314,13 +322,16 @@ pub async fn run_overview(g: &GlobalArgs) -> Result<()> {
 }
 
 pub async fn run_inner(g: &GlobalArgs) -> Result<StatusOut> {
-    let BranchStatus {
-        repo,
-        head,
-        pr_summary,
-        pipeline_summary,
-        commit_statuses,
-    } = fetch_branch_status(g).await?;
+    let (
+        BranchStatus {
+            repo,
+            head,
+            pr_summary,
+            pipeline_summary,
+            commit_statuses,
+        },
+        _client,
+    ) = fetch_branch_status(g).await?;
 
     let suggested_commands = suggested_commands(&pr_summary, &pipeline_summary);
 
@@ -812,7 +823,7 @@ fn render_human(out: &StatusOut) -> String {
         theme.label("Branch:"),
         theme.bold(&out.branch)
     ));
-    s.push_str(&format!("{} {}\n", theme.label("Commit:"), &out.commit));
+    s.push_str(&format!("{} {}\n", theme.label("Commit:"), out.commit));
 
     render_pr_section(&mut s, theme, &out.pr, &out.pipeline);
     render_pipeline_section(&mut s, theme, &out.pipeline);

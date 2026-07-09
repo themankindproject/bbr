@@ -53,6 +53,9 @@ dirs = "5"
 xdg = "2"
 rpassword = "=7.3.1"
 
+# Credential safety (zeroize on drop)
+secrecy = "0.10"
+
 # Date/time parsing (ISO 8601, relative time)
 time = { version = "0.3", features = ["parsing", "formatting"] }
 

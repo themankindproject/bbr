@@ -67,7 +67,8 @@ impl BitbucketClient {
     pub fn with_timeout(base_url: &str, creds: Credentials, timeout_secs: u64) -> Result<Self> {
         let auth_header = match creds.kind {
             CredentialKind::ApiToken => {
-                let raw = format!("{}:{}", creds.username, creds.secret);
+                use secrecy::ExposeSecret;
+                let raw = format!("{}:{}", creds.username, creds.secret.expose_secret());
                 let encoded = base64_encode(raw.as_bytes());
                 format!("Basic {encoded}")
             }

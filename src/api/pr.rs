@@ -552,7 +552,12 @@ impl BitbucketClient {
         body: Option<&MergePrRequest>,
     ) -> Result<PullRequest> {
         let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}/merge");
-        let raw = body.map(|b| serde_json::to_string(b).unwrap_or_else(|_| "{}".into()));
+        let raw = match body {
+            Some(b) => Some(serde_json::to_string(b).map_err(|e| {
+                BitbucketError::Other(format!("failed to serialize merge request: {e}"))
+            })?),
+            None => None,
+        };
         self.send(reqwest::Method::POST, &path, raw.as_deref().or(Some("{}")))
             .await
     }

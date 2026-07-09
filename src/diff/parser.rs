@@ -296,9 +296,65 @@ impl DiffHunkBuilder {
             kind,
             old_lineno,
             new_lineno,
-            content: content.to_string(),
+            content: sanitize_terminal_escapes(content),
         });
     }
+}
+
+/// Strip ANSI/OSC escape sequences from untrusted diff content to prevent
+/// terminal escape injection attacks. Malicious diffs from the API could
+/// contain sequences that clear screen, change title, or exfiltrate data.
+fn sanitize_terminal_escapes(s: &str) -> String {
+    // Fast path: no escape character present (vast majority of lines)
+    if !s.contains('\x1b') && !s.contains('\u{9b}') {
+        return s.to_string();
+    }
+    // Slow path: strip escape sequences
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            match chars.peek() {
+                Some('[') | Some(']') => {
+                    let opener = chars.next().unwrap();
+                    if opener == '[' {
+                        // CSI: consume until 0x40-0x7E
+                        for c in chars.by_ref() {
+                            if ('\x40'..='\x7e').contains(&c) {
+                                break;
+                            }
+                        }
+                    } else {
+                        // OSC: consume until ST (ESC \ or BEL)
+                        for c in chars.by_ref() {
+                            if c == '\x07' {
+                                break;
+                            }
+                            if c == '\x1b' {
+                                if chars.peek() == Some(&'\\') {
+                                    chars.next();
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+                Some(_) => {
+                    chars.next();
+                }
+                None => {}
+            }
+        } else if ch == '\u{9b}' {
+            for c in chars.by_ref() {
+                if ('\x40'..='\x7e').contains(&c) {
+                    break;
+                }
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 /// Check if a line is `rename from` or `rename to`.
@@ -735,5 +791,48 @@ diff --git a/src/lib.rs b/src/lib.rs
         assert_eq!(file.hunks[0].lines.len(), 4);
         assert_eq!(file.hunks[1].lines.len(), 4);
         assert_eq!(file.hunks[2].lines.len(), 4);
+    }
+
+    #[test]
+    fn test_sanitizes_terminal_escape_sequences() {
+        // Diff content containing malicious ANSI escape sequences
+        let diff = "diff --git a/evil.rs b/evil.rs\n\
+--- a/evil.rs\n\
++++ b/evil.rs\n\
+@@ -1,1 +1,3 @@\n \
+normal line\n\
++\x1b[2J\x1b[Hinjected clear screen\n\
++safe line\n";
+        let files = parse(diff);
+        assert_eq!(files.len(), 1);
+        let hunk = &files[0].hunks[0];
+        // The escape sequences should be stripped from content
+        assert_eq!(hunk.lines[1].content, "injected clear screen");
+        assert_eq!(hunk.lines[2].content, "safe line");
+    }
+
+    #[test]
+    fn test_sanitizes_osc_sequences() {
+        let diff = "diff --git a/osc.rs b/osc.rs\n\
+--- a/osc.rs\n\
++++ b/osc.rs\n\
+@@ -1,1 +1,1 @@\n\
+-old\n\
++\x1b]0;pwned title\x07new content\n";
+        let files = parse(diff);
+        let hunk = &files[0].hunks[0];
+        // OSC sequence (set terminal title) should be stripped
+        assert_eq!(hunk.lines[1].content, "new content");
+    }
+
+    #[test]
+    fn test_sanitize_preserves_clean_content() {
+        // Normal content without escape sequences should pass through unchanged
+        assert_eq!(
+            sanitize_terminal_escapes("fn main() { println!(\"hello\"); }"),
+            "fn main() { println!(\"hello\"); }"
+        );
+        assert_eq!(sanitize_terminal_escapes(""), "");
+        assert_eq!(sanitize_terminal_escapes("tabs\there"), "tabs\there");
     }
 }

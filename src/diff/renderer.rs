@@ -45,6 +45,14 @@ pub enum RenderMode {
 // Main entry point
 // ---------------------------------------------------------------------------
 
+/// Cached terminal width to avoid repeated ioctl syscalls per rendered line.
+/// The width is determined once per process and reused for all subsequent renders.
+fn cached_term_width() -> usize {
+    use std::sync::OnceLock;
+    static WIDTH: OnceLock<usize> = OnceLock::new();
+    *WIDTH.get_or_init(|| crate::output::theme::terminal_width().unwrap_or(80))
+}
+
 /// Render a parsed diff into a formatted terminal string.
 pub fn render(files: &[DiffFile], options: &DiffRenderOptions, theme: &Theme) -> String {
     let mut out = String::new();
@@ -132,7 +140,7 @@ fn render_file(file: &DiffFile, options: &DiffRenderOptions, theme: &Theme, out:
 
 /// Render the file header as a single compact line with stats bar.
 fn render_file_header(file: &DiffFile, theme: &Theme, out: &mut String) {
-    let width = crate::output::theme::terminal_width().unwrap_or(80);
+    let width = cached_term_width();
 
     let (icon, status_text) = match file.status {
         FileStatus::Added => ("+", "new file"),
@@ -368,7 +376,7 @@ fn render_hunk_unified(
 // ---------------------------------------------------------------------------
 
 fn render_paired_line(line: &DiffLine, pair: Option<&DiffLine>, theme: &Theme, out: &mut String) {
-    let term_width = crate::output::theme::terminal_width().unwrap_or(80);
+    let term_width = cached_term_width();
 
     let old = line
         .old_lineno
@@ -544,7 +552,7 @@ fn render_paired_line(line: &DiffLine, pair: Option<&DiffLine>, theme: &Theme, o
 
 /// Render a single context/addition/deletion line.
 fn render_line(line: &DiffLine, theme: &Theme, out: &mut String) {
-    let term_width = crate::output::theme::terminal_width().unwrap_or(80);
+    let term_width = cached_term_width();
 
     let old = line
         .old_lineno
@@ -676,7 +684,7 @@ fn render_hunk_side_by_side(
     theme: &Theme,
     out: &mut String,
 ) {
-    let width = crate::output::theme::terminal_width().unwrap_or(80);
+    let width = cached_term_width();
     // Reserved: left_edge(2) + left_lineno(4) + sep(3) + middle_sep(3) + right_lineno(4) + sep(3) + right_edge(0)
     // Total overhead: 2 + 4 + 3 + 3 + 4 + 3 = 19
     let code_width = width.saturating_sub(19) / 2;
@@ -920,13 +928,13 @@ fn render_side_by_side_row(
             "{}{}{}{}{}{}{}{}{}{}",
             pipe,
             left_lineno,
-            &sep,
+            sep,
             left_sign,
             " ",
             left_content,
-            &sep,
+            sep,
             right_lineno,
-            &format!("{}{}{}\n", &sep, right_sign, right_content),
+            &format!("{}{}{}\n", sep, right_sign, right_content),
             "",
         ));
     }
