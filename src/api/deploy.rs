@@ -1,7 +1,27 @@
-//! Deployment and environment endpoints.
+//! Deployment, environment, and deploy-key endpoints.
 use super::BitbucketClient;
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
+
+// ---- Deploy Keys ----------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DeployKey {
+    #[serde(default)]
+    pub id: u64,
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default, rename = "type")]
+    pub key_type: Option<String>,
+    #[serde(default)]
+    pub created_on: Option<String>,
+    #[serde(default)]
+    pub comment: Option<String>,
+    #[serde(default)]
+    pub last_used: Option<String>,
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DeploymentEnvironment {
@@ -197,5 +217,40 @@ impl BitbucketClient {
             }
         });
         self.post(&path, &body).await
+    }
+
+    // ---- Deploy Keys ------------------------------------------------------
+
+    pub async fn list_deploy_keys(&self, workspace: &str, slug: &str) -> Result<Vec<DeployKey>> {
+        let path = format!("/repositories/{workspace}/{slug}/deploy-keys?pagelen=100");
+        let all = self.fetch_all_pages::<DeployKey>(&path, usize::MAX).await?;
+        Ok(all)
+    }
+
+    pub async fn add_deploy_key(
+        &self,
+        workspace: &str,
+        slug: &str,
+        key: &str,
+        label: &str,
+    ) -> Result<DeployKey> {
+        let path = format!("/repositories/{workspace}/{slug}/deploy-keys");
+        let body = serde_json::json!({ "key": key, "label": label });
+        self.post(&path, &body).await
+    }
+
+    pub async fn get_deploy_key(
+        &self,
+        workspace: &str,
+        slug: &str,
+        key_id: u64,
+    ) -> Result<DeployKey> {
+        let path = format!("/repositories/{workspace}/{slug}/deploy-keys/{key_id}");
+        self.send(reqwest::Method::GET, &path, None).await
+    }
+
+    pub async fn delete_deploy_key(&self, workspace: &str, slug: &str, key_id: u64) -> Result<()> {
+        let path = format!("/repositories/{workspace}/{slug}/deploy-keys/{key_id}");
+        self.send_empty(reqwest::Method::DELETE, &path, None).await
     }
 }

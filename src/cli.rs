@@ -231,6 +231,12 @@ pub enum Command {
         #[command(subcommand)]
         action: VariableAction,
     },
+    /// Manage repository deploy keys.
+    #[command(name = "deploy-keys")]
+    DeployKeys {
+        #[command(subcommand)]
+        action: DeployKeysAction,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -271,6 +277,43 @@ pub enum VariableAction {
     Delete {
         /// Variable key name to delete.
         key: String,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DeployKeysAction {
+    /// List deploy keys for the current repository.
+    List {
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Add a new deploy key to the repository.
+    Add {
+        /// SSH public key (e.g. ssh-rsa AAAA...).
+        #[arg(long)]
+        key: String,
+        /// Human-readable label for the key.
+        #[arg(long)]
+        label: String,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// View a specific deploy key by ID.
+    View {
+        /// Deploy key ID.
+        key_id: u64,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Delete a deploy key by ID.
+    Delete {
+        /// Deploy key ID.
+        key_id: u64,
+        /// Skip confirmation prompt.
+        #[arg(long, short)]
+        yes: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },
