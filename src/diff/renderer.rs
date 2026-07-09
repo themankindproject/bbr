@@ -928,13 +928,13 @@ fn render_side_by_side_row(
             "{}{}{}{}{}{}{}{}{}{}",
             pipe,
             left_lineno,
-            &sep,
+            sep,
             left_sign,
             " ",
             left_content,
-            &sep,
+            sep,
             right_lineno,
-            &format!("{}{}{}\n", &sep, right_sign, right_content),
+            &format!("{}{}{}\n", sep, right_sign, right_content),
             "",
         ));
     }

@@ -823,7 +823,7 @@ fn render_human(out: &StatusOut) -> String {
         theme.label("Branch:"),
         theme.bold(&out.branch)
     ));
-    s.push_str(&format!("{} {}\n", theme.label("Commit:"), &out.commit));
+    s.push_str(&format!("{} {}\n", theme.label("Commit:"), out.commit));
 
     render_pr_section(&mut s, theme, &out.pr, &out.pipeline);
     render_pipeline_section(&mut s, theme, &out.pipeline);
