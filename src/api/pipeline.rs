@@ -55,7 +55,7 @@ impl Pipeline {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PipelineState {
     #[serde(default)]
     pub name: String,
@@ -65,7 +65,7 @@ pub struct PipelineState {
     pub result: Option<PipelineResult>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PipelineResult {
     #[serde(default)]
     pub name: String,
@@ -74,7 +74,7 @@ pub struct PipelineResult {
     pub type_: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Named {
     #[serde(default)]
     pub name: String,
@@ -453,6 +453,160 @@ impl BitbucketClient {
         let path = format!("/repositories/{workspace}/{slug}/pipelines_config/variables/{uuid}");
         self.send_empty(reqwest::Method::DELETE, &path, None).await
     }
+
+    // ---- Pipeline schedules ------------------------------------------------
+
+    /// `GET /repositories/{ws}/{slug}/pipelines_config/schedules`
+    pub async fn list_schedules(
+        &self,
+        workspace: &str,
+        slug: &str,
+    ) -> Result<Vec<PipelineSchedule>> {
+        let path =
+            format!("/repositories/{workspace}/{slug}/pipelines_config/schedules/?pagelen=100");
+        let page: super::Paginated<PipelineSchedule> =
+            self.send(reqwest::Method::GET, &path, None).await?;
+        Ok(page.values)
+    }
+
+    /// `POST /repositories/{ws}/{slug}/pipelines_config/schedules`
+    pub async fn create_schedule(
+        &self,
+        workspace: &str,
+        slug: &str,
+        cron: &str,
+        branch: &str,
+        pipeline_name: Option<&str>,
+    ) -> Result<PipelineSchedule> {
+        let path = format!("/repositories/{workspace}/{slug}/pipelines_config/schedules/");
+        let mut target = serde_json::json!({
+            "ref_name": branch,
+            "ref_type": "branch",
+            "selector": {
+                "type": pipeline_name.unwrap_or("branches"),
+            }
+        });
+        if let Some(pattern) = pipeline_name {
+            target["selector"]["pattern"] = serde_json::json!(pattern);
+        }
+        let body = serde_json::json!({
+            "target": target,
+            "enabled": true,
+            "cron_pattern": cron,
+        });
+        self.post(&path, &body).await
+    }
+
+    /// `GET /repositories/{ws}/{slug}/pipelines_config/schedules/{uuid}`
+    pub async fn get_schedule(
+        &self,
+        workspace: &str,
+        slug: &str,
+        uuid: &str,
+    ) -> Result<PipelineSchedule> {
+        let path = format!("/repositories/{workspace}/{slug}/pipelines_config/schedules/{uuid}");
+        self.send(reqwest::Method::GET, &path, None).await
+    }
+
+    /// `PUT /repositories/{ws}/{slug}/pipelines_config/schedules/{uuid}`
+    pub async fn update_schedule(
+        &self,
+        workspace: &str,
+        slug: &str,
+        uuid: &str,
+        cron: Option<&str>,
+        enabled: Option<bool>,
+    ) -> Result<PipelineSchedule> {
+        let path = format!("/repositories/{workspace}/{slug}/pipelines_config/schedules/{uuid}");
+        let mut body = serde_json::Map::new();
+        if let Some(c) = cron {
+            body.insert(
+                "cron_pattern".to_string(),
+                serde_json::Value::String(c.to_string()),
+            );
+        }
+        if let Some(e) = enabled {
+            body.insert("enabled".to_string(), serde_json::Value::Bool(e));
+        }
+        let raw = serde_json::to_string(&body)?;
+        self.send(reqwest::Method::PUT, &path, Some(&raw)).await
+    }
+
+    /// `DELETE /repositories/{ws}/{slug}/pipelines_config/schedules/{uuid}`
+    pub async fn delete_schedule(&self, workspace: &str, slug: &str, uuid: &str) -> Result<()> {
+        let path = format!("/repositories/{workspace}/{slug}/pipelines_config/schedules/{uuid}");
+        self.send_empty(reqwest::Method::DELETE, &path, None).await
+    }
+
+    /// `GET /repositories/{ws}/{slug}/pipelines_config/schedules/{uuid}/executions`
+    pub async fn schedule_executions(
+        &self,
+        workspace: &str,
+        slug: &str,
+        uuid: &str,
+        limit: u32,
+    ) -> Result<Vec<ScheduleExecution>> {
+        let pagelen = limit.min(100);
+        let path = format!(
+            "/repositories/{workspace}/{slug}/pipelines_config/schedules/{uuid}/executions?\
+             pagelen={pagelen}"
+        );
+        let page: super::Paginated<ScheduleExecution> =
+            self.send(reqwest::Method::GET, &path, None).await?;
+        Ok(page.values)
+    }
+}
+
+// ---- Schedule types --------------------------------------------------------
+
+/// A pipeline schedule configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PipelineSchedule {
+    #[serde(default)]
+    pub uuid: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub cron_pattern: String,
+    #[serde(default)]
+    pub target: Option<ScheduleTarget>,
+    #[serde(default)]
+    pub created_on: Option<String>,
+    #[serde(default)]
+    pub updated_on: Option<String>,
+}
+
+/// Target of a pipeline schedule (branch + optional selector).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ScheduleTarget {
+    #[serde(default)]
+    pub ref_name: Option<String>,
+    #[serde(default)]
+    pub ref_type: Option<String>,
+    #[serde(default)]
+    pub selector: Option<ScheduleSelector>,
+}
+
+/// Selector within a schedule target.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ScheduleSelector {
+    #[serde(rename = "type", default)]
+    pub selector_type: String,
+    #[serde(default)]
+    pub pattern: Option<String>,
+}
+
+/// A single execution of a pipeline schedule.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ScheduleExecution {
+    #[serde(rename = "type", default)]
+    pub execution_type: String,
+    #[serde(default)]
+    pub uuid: Option<String>,
+    #[serde(default)]
+    pub state: Option<PipelineState>,
+    #[serde(default)]
+    pub created_on: Option<String>,
 }
 
 #[cfg(test)]
