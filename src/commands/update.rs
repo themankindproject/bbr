@@ -442,9 +442,13 @@ async fn download_and_install(release: &GithubRelease, _latest: &str) -> Result<
             }
         }
     } else {
-        tracing::debug!(
-            "No checksums asset in release; skipping integrity verification. \
+        tracing::warn!(
+            "No checksums asset in release; proceeding without integrity verification. \
              Consider adding a checksums.txt asset to releases for supply-chain security."
+        );
+        eprintln!(
+            "  ⚠ Warning: No checksum available for this release. \
+             Binary integrity could not be verified."
         );
     }
 

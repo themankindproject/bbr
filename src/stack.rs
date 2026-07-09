@@ -3,7 +3,6 @@
 use crate::error::{BitbucketError, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StackConfig {
@@ -28,13 +27,21 @@ pub struct StackPr {
 
 impl StackConfig {
     pub fn config_path() -> PathBuf {
-        if let Ok(output) = Command::new("git")
+        // Use a short timeout for git rev-parse (read-only, fast)
+        use std::process::Command;
+
+        let result = Command::new("git")
             .args(["rev-parse", "--show-toplevel"])
-            .output()
-        {
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output();
+
+        if let Ok(output) = result {
             if output.status.success() {
                 let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                return PathBuf::from(root).join(".bbr").join("stack.toml");
+                if !root.is_empty() {
+                    return PathBuf::from(root).join(".bbr").join("stack.toml");
+                }
             }
         }
         PathBuf::from(".bbr").join("stack.toml")

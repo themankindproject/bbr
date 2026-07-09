@@ -58,6 +58,7 @@ pub async fn merge_approved(
     dry_run: bool,
     strategy: Option<&str>,
     yes: bool,
+    max: Option<usize>,
 ) -> Result<()> {
     let client = client(g)?;
     let repo = resolve_repo(g)?;
@@ -104,6 +105,20 @@ pub async fn merge_approved(
     }
 
     spinner.finish();
+
+    // Apply --max safety cap
+    if let Some(cap) = max {
+        if approved_actions.len() > cap {
+            let original = approved_actions.len();
+            approved_actions.truncate(cap);
+            if !g.json {
+                eprintln!(
+                    "  Note: {} approved PRs found, capped to --max {}",
+                    original, cap
+                );
+            }
+        }
+    }
 
     let plan = BatchPlan {
         dry_run,
@@ -194,6 +209,7 @@ pub async fn rerun_failed(
     repo_arg: Option<&str>,
     dry_run: bool,
     yes: bool,
+    max: Option<usize>,
 ) -> Result<()> {
     let client = client(g)?;
     let repo = resolve_repo(g)?;
@@ -229,6 +245,20 @@ pub async fn rerun_failed(
     }
 
     spinner.finish();
+
+    // Apply --max safety cap
+    if let Some(cap) = max {
+        if failed_actions.len() > cap {
+            let original = failed_actions.len();
+            failed_actions.truncate(cap);
+            if !g.json {
+                eprintln!(
+                    "  Note: {} failed pipelines found, capped to --max {}",
+                    original, cap
+                );
+            }
+        }
+    }
 
     let plan = BatchPlan {
         dry_run,
@@ -315,6 +345,7 @@ pub async fn cleanup_merged_branches(
     remote: bool,
     dry_run: bool,
     yes: bool,
+    max: Option<usize>,
 ) -> Result<()> {
     let client = client(g)?;
     let repo = resolve_repo(g)?;
@@ -351,6 +382,20 @@ pub async fn cleanup_merged_branches(
     }
 
     spinner.finish();
+
+    // Apply --max safety cap
+    if let Some(cap) = max {
+        if cleanup_actions.len() > cap {
+            let original = cleanup_actions.len();
+            cleanup_actions.truncate(cap);
+            if !g.json {
+                eprintln!(
+                    "  Note: {} branch actions found, capped to --max {}",
+                    original, cap
+                );
+            }
+        }
+    }
 
     let plan = BatchPlan {
         dry_run,

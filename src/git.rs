@@ -32,31 +32,58 @@ fn git(args: &[&str]) -> Result<String> {
 }
 
 /// Run a `git` command with a specific timeout, returning trimmed stdout.
+///
+/// Spawns the child process and waits with a timeout. On timeout, the child
+/// is explicitly killed to prevent orphaned git processes from leaking.
 fn git_with_timeout(args: &[&str], timeout: Duration) -> Result<String> {
-    let args_owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    let mut child = Command::new("git")
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| BitbucketError::Git(format!("failed to spawn git: {e}")))?;
 
-    let (tx, rx) = std::sync::mpsc::channel();
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                // Process exited — read output
+                let stdout = child.stdout.take().map(|mut s| {
+                    let mut buf = Vec::new();
+                    std::io::Read::read_to_end(&mut s, &mut buf).ok();
+                    buf
+                }).unwrap_or_default();
+                let stderr = child.stderr.take().map(|mut s| {
+                    let mut buf = Vec::new();
+                    std::io::Read::read_to_end(&mut s, &mut buf).ok();
+                    buf
+                }).unwrap_or_default();
 
-    std::thread::spawn(move || {
-        let out = Command::new("git").args(&args_owned).output();
-
-        let _ = tx.send(out);
-    });
-
-    match rx.recv_timeout(timeout) {
-        Ok(Ok(out)) => {
-            if !out.status.success() {
-                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-                return Err(BitbucketError::Git(stderr));
+                if !status.success() {
+                    let msg = String::from_utf8_lossy(&stderr).trim().to_string();
+                    return Err(BitbucketError::Git(msg));
+                }
+                return Ok(String::from_utf8_lossy(&stdout).trim().to_string());
             }
-            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+            Ok(None) => {
+                // Still running — check timeout
+                if start.elapsed() >= timeout {
+                    // Kill the child to prevent orphaned processes
+                    let _ = child.kill();
+                    let _ = child.wait(); // reap the zombie
+                    return Err(BitbucketError::Git(format!(
+                        "git command timed out after {}s: git {}",
+                        timeout.as_secs(),
+                        args.join(" ")
+                    )));
+                }
+                // Sleep briefly to avoid busy-waiting
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                return Err(BitbucketError::Git(format!("failed to wait on git: {e}")));
+            }
         }
-        Ok(Err(e)) => Err(BitbucketError::Git(format!("failed to run git: {e}"))),
-        Err(_) => Err(BitbucketError::Git(format!(
-            "git command timed out after {}s: git {}",
-            timeout.as_secs(),
-            args.join(" ")
-        ))),
     }
 }
 

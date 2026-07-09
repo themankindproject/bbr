@@ -134,7 +134,10 @@ struct BranchStatus {
 
 /// Fetch the PR, pipeline, and commit statuses for the current branch.
 /// This is the shared core of `run_inner()` and `run_overview()`.
-async fn fetch_branch_status(g: &GlobalArgs) -> Result<BranchStatus> {
+/// Returns both the status data and the API client for reuse.
+async fn fetch_branch_status(
+    g: &GlobalArgs,
+) -> Result<(BranchStatus, crate::api::BitbucketClient)> {
     let repo_id = resolve_repo(g)?;
     let head = current_head()?;
     let client = client(g)?;
@@ -182,7 +185,7 @@ async fn fetch_branch_status(g: &GlobalArgs) -> Result<BranchStatus> {
         })
         .collect();
 
-    Ok(BranchStatus {
+    Ok((BranchStatus {
         repo: RepoSummary {
             workspace: repo_id.workspace.clone(),
             slug: repo_id.slug.clone(),
@@ -192,7 +195,7 @@ async fn fetch_branch_status(g: &GlobalArgs) -> Result<BranchStatus> {
         pr_summary,
         pipeline_summary,
         commit_statuses,
-    })
+    }, client))
 }
 
 pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
@@ -250,16 +253,15 @@ pub async fn run_short(g: &GlobalArgs) -> Result<()> {
 }
 
 pub async fn run_overview(g: &GlobalArgs) -> Result<()> {
-    let BranchStatus {
+    let (BranchStatus {
         repo,
         head,
         pr_summary,
         pipeline_summary,
         commit_statuses,
-    } = fetch_branch_status(g).await?;
+    }, api_client) = fetch_branch_status(g).await?;
 
     // Fetch additional overview data (recent PRs + pipelines) concurrently.
-    let api_client = client(g)?;
     let (recent_prs, recent_ci) = tokio::try_join!(
         api_client.list_prs(
             &repo.workspace,
@@ -314,13 +316,13 @@ pub async fn run_overview(g: &GlobalArgs) -> Result<()> {
 }
 
 pub async fn run_inner(g: &GlobalArgs) -> Result<StatusOut> {
-    let BranchStatus {
+    let (BranchStatus {
         repo,
         head,
         pr_summary,
         pipeline_summary,
         commit_statuses,
-    } = fetch_branch_status(g).await?;
+    }, _client) = fetch_branch_status(g).await?;
 
     let suggested_commands = suggested_commands(&pr_summary, &pipeline_summary);
 

@@ -36,8 +36,14 @@ impl BitbucketClient {
         git_ref: &str,
         path: &str,
     ) -> Result<String> {
-        let path_encoded = path.trim_start_matches('/');
-        let endpoint = format!("/repositories/{workspace}/{slug}/src/{git_ref}/{path_encoded}");
+        let path_clean = path.trim_start_matches('/');
+        let ref_encoded = super::url_encode(git_ref);
+        let path_encoded = path_clean
+            .split('/')
+            .map(super::url_encode)
+            .collect::<Vec<_>>()
+            .join("/");
+        let endpoint = format!("/repositories/{workspace}/{slug}/src/{ref_encoded}/{path_encoded}");
         self.send_raw(reqwest::Method::GET, &endpoint, "*/*").await
     }
 
@@ -49,11 +55,17 @@ impl BitbucketClient {
         git_ref: &str,
         path: &str,
     ) -> Result<Vec<SourceEntry>> {
-        let path_encoded = path.trim_start_matches('/');
+        let path_clean = path.trim_start_matches('/');
+        let ref_encoded = super::url_encode(git_ref);
+        let path_encoded = path_clean
+            .split('/')
+            .map(super::url_encode)
+            .collect::<Vec<_>>()
+            .join("/");
         let endpoint = if path_encoded.is_empty() {
-            format!("/repositories/{workspace}/{slug}/src/{git_ref}/?pagelen=100")
+            format!("/repositories/{workspace}/{slug}/src/{ref_encoded}/?pagelen=100")
         } else {
-            format!("/repositories/{workspace}/{slug}/src/{git_ref}/{path_encoded}/?pagelen=100")
+            format!("/repositories/{workspace}/{slug}/src/{ref_encoded}/{path_encoded}/?pagelen=100")
         };
         let page: super::Paginated<SourceEntry> =
             self.send(reqwest::Method::GET, &endpoint, None).await?;

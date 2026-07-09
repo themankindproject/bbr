@@ -7,6 +7,7 @@
 //! All credentials use Atlassian API tokens (from id.atlassian.com) with
 //! HTTP Basic authentication — no legacy PAT or AppPassword support.
 
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use crate::config::load_credentials;
@@ -17,10 +18,12 @@ pub const ENV_USERNAME: &str = "BITBUCKET_USERNAME";
 pub const ENV_TOKEN: &str = "BITBUCKET_TOKEN";
 
 /// Resolved credentials ready to attach to HTTP requests.
+/// The `secret` field is zeroized on drop to prevent credential leakage
+/// in memory dumps or core files.
 #[derive(Clone)]
 pub struct Credentials {
     pub username: String,
-    pub secret: String,
+    pub secret: SecretString,
     pub kind: CredentialKind,
 }
 
@@ -56,8 +59,8 @@ fn from_env() -> Option<Credentials> {
     let username = std::env::var(ENV_USERNAME).ok()?;
     let token = std::env::var(ENV_TOKEN).ok()?;
     let username = username.trim().to_string();
-    let token = token.trim().to_string();
-    if token.is_empty() {
+    let token_trimmed = token.trim().to_string();
+    if token_trimmed.is_empty() {
         tracing::warn!(
             "{ENV_TOKEN} is set but empty or whitespace-only; ignoring environment credentials. \
              Set a valid Atlassian API token from https://id.atlassian.com/manage-profile/security/api-tokens"
@@ -73,7 +76,7 @@ fn from_env() -> Option<Credentials> {
     }
     Some(Credentials {
         username,
-        secret: token,
+        secret: SecretString::from(token_trimmed),
         kind: CredentialKind::ApiToken,
     })
 }
@@ -92,7 +95,7 @@ fn from_config() -> Result<Option<Credentials>> {
     }
     Ok(Some(Credentials {
         username: username.to_string(),
-        secret: secret.to_string(),
+        secret: SecretString::from(secret.to_string()),
         kind: CredentialKind::ApiToken,
     }))
 }
