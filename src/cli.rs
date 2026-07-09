@@ -669,6 +669,11 @@ pub enum CiAction {
         #[command(subcommand)]
         action: CiVarsAction,
     },
+    /// Manage pipeline schedules.
+    Schedules {
+        #[command(subcommand)]
+        action: CiSchedulesAction,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1129,6 +1134,72 @@ pub enum CiVarsAction {
     /// Delete a pipeline variable.
     Delete {
         key: String,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CiSchedulesAction {
+    /// List pipeline schedules.
+    List {
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Create a pipeline schedule.
+    Create {
+        /// Cron expression (e.g. "0 2 * * *").
+        #[arg(long)]
+        cron: String,
+        /// Branch to run the schedule on.
+        #[arg(long)]
+        branch: String,
+        /// Pipeline selector name (optional).
+        #[arg(long)]
+        pipeline: Option<String>,
+        /// Whether the schedule is enabled (default: true).
+        #[arg(long, default_value_t = true)]
+        enabled: bool,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// View a pipeline schedule.
+    View {
+        /// Schedule UUID.
+        uuid: String,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Update a pipeline schedule.
+    Update {
+        /// Schedule UUID.
+        uuid: String,
+        /// New cron expression.
+        #[arg(long)]
+        cron: Option<String>,
+        /// Enable or disable the schedule.
+        #[arg(long)]
+        enabled: Option<bool>,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Delete a pipeline schedule.
+    Delete {
+        /// Schedule UUID.
+        uuid: String,
+        /// Skip confirmation prompt.
+        #[arg(long, short)]
+        yes: bool,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// List executions for a pipeline schedule.
+    Executions {
+        /// Schedule UUID.
+        uuid: String,
+        /// Max results to return.
+        #[arg(long, default_value_t = 25)]
+        limit: u32,
         #[command(flatten)]
         g: GlobalArgs,
     },

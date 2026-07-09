@@ -6,7 +6,7 @@ use clap::CommandFactory;
 use clap_complete::{generate, Shell};
 
 use crate::cli::{
-    AuthAction, BatchAction, CiAction, CiVarsAction, Cli, Command, CommitAction,
+    AuthAction, BatchAction, CiAction, CiSchedulesAction, CiVarsAction, Cli, Command, CommitAction,
     CommitStatusAction, ConfigAction, DeployAction, DeployEnvAction, DeployEnvVarsAction,
     GlobalArgs, IssueAction, PrAction, RepoAction, SrcAction, StackAction, VariableAction,
     WebhookAction, WorkspaceAction,
@@ -333,6 +333,32 @@ async fn dispatch_ci(action: CiAction) -> Result<()> {
                 g,
             } => commands::ci_vars::set(&g, &key, &value, secured).await,
             CiVarsAction::Delete { key, g } => commands::ci_vars::delete(&g, &key).await,
+        },
+        CiAction::Schedules { action } => match action {
+            CiSchedulesAction::List { g } => commands::ci_schedules::list(&g).await,
+            CiSchedulesAction::Create {
+                cron,
+                branch,
+                pipeline,
+                enabled,
+                g,
+            } => {
+                commands::ci_schedules::create(&g, &cron, &branch, pipeline.as_deref(), enabled)
+                    .await
+            }
+            CiSchedulesAction::View { uuid, g } => commands::ci_schedules::view(&g, &uuid).await,
+            CiSchedulesAction::Update {
+                uuid,
+                cron,
+                enabled,
+                g,
+            } => commands::ci_schedules::update(&g, &uuid, cron.as_deref(), enabled).await,
+            CiSchedulesAction::Delete { uuid, yes, g } => {
+                commands::ci_schedules::delete(&g, &uuid, yes).await
+            }
+            CiSchedulesAction::Executions { uuid, limit, g } => {
+                commands::ci_schedules::executions(&g, &uuid, limit).await
+            }
         },
     }
 }
