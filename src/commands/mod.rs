@@ -12,6 +12,7 @@ pub mod completion;
 pub mod config;
 pub mod dashboard;
 pub mod deploy;
+pub mod deploy_keys;
 pub mod export;
 pub mod issue;
 pub mod open;
