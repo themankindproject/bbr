@@ -6,6 +6,7 @@ pub mod auth;
 pub mod batch;
 pub mod ci;
 pub mod ci_compare;
+pub mod ci_schedules;
 pub mod ci_vars;
 pub mod commit;
 pub mod completion;
