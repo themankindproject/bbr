@@ -8,8 +8,8 @@ use clap_complete::{generate, Shell};
 use crate::cli::{
     AuthAction, BatchAction, CiAction, CiVarsAction, Cli, Command, CommitAction,
     CommitStatusAction, ConfigAction, DeployAction, DeployEnvAction, DeployEnvVarsAction,
-    GlobalArgs, IssueAction, PrAction, RepoAction, SrcAction, StackAction, VariableAction,
-    WebhookAction, WorkspaceAction,
+    DeployKeysAction, GlobalArgs, IssueAction, PrAction, RepoAction, SrcAction, StackAction,
+    VariableAction, WebhookAction, WorkspaceAction,
 };
 use crate::commands;
 use crate::error::Result;
@@ -103,6 +103,7 @@ pub(crate) async fn dispatch(cli: Cli) -> Result<()> {
         Some(Command::Update { check, g }) => commands::update::run(&g, check).await,
         Some(Command::Workspace { action }) => dispatch_workspace(action).await,
         Some(Command::Variable { action }) => dispatch_variable(action).await,
+        Some(Command::DeployKeys { action }) => dispatch_deploy_keys(action).await,
     }
 }
 
@@ -591,5 +592,18 @@ async fn dispatch_variable(action: VariableAction) -> Result<()> {
             g,
         } => commands::ci_vars::set(&g, &key, &value, secured).await,
         VariableAction::Delete { key, g } => commands::ci_vars::delete(&g, &key).await,
+    }
+}
+
+async fn dispatch_deploy_keys(action: DeployKeysAction) -> Result<()> {
+    match action {
+        DeployKeysAction::List { g } => commands::deploy_keys::list(&g).await,
+        DeployKeysAction::Add { key, label, g } => {
+            commands::deploy_keys::add(&g, &key, &label).await
+        }
+        DeployKeysAction::View { key_id, g } => commands::deploy_keys::view(&g, key_id).await,
+        DeployKeysAction::Delete { key_id, yes, g } => {
+            commands::deploy_keys::delete(&g, key_id, yes).await
+        }
     }
 }
