@@ -17,8 +17,12 @@ stable across v0.1.x (breaking changes are reserved for v0.2+).
     "source": "feat/x",
     "destination": "main",
     "url": "https://bitbucket.org/.../pull-requests/467",
-    "author": "bravo1goingdark"
+    "author": "bravo1goingdark",
+    "reviewers": [
+      { "display_name": "bob", "approved": true, "state": "approved" }
+    ]
   },
+  "open_prs": [],
   "pipeline": {
     "uuid": "{abc-123}",
     "state": "SUCCESSFUL",
@@ -32,7 +36,7 @@ stable across v0.1.x (breaking changes are reserved for v0.2+).
 }
 ```
 
-`pr` and `pipeline` are `null` when absent.
+`pr` is the latest open PR for the branch (or `null`). `open_prs` lists all open PRs for the branch (includes `pr` when present). `pipeline` is `null` when absent.
 
 ## `bbr pr list --json`
 
@@ -235,13 +239,14 @@ On failure, `success` is `false` and the process exits with code `5`.
   "credential_kind": "atlassian_api_token",
   "display_name": "Your Name",
   "account_id": "{...}",
-  "source": "environment"
+  "source": "environment",
+  "rate_limit_remaining": 950
 }
 ```
 
 `credential_kind` is `"atlassian_api_token"` or `null` when not authenticated.
 `source` is `"environment"`, `"config-file"`, or `"none"`.
-
+`rate_limit_remaining` is omitted until at least one API response has returned the header.
 ## `bbr repo info --json`
 
 ```json

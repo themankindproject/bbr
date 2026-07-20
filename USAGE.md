@@ -11,6 +11,8 @@
   - [`bbr pr`](#bbr-pr)
   - [`bbr batch`](#bbr-batch)
   - [`bbr ci`](#bbr-ci)
+  - [`bbr variable`](#bbr-variable)
+  - [`bbr deploy-keys`](#bbr-deploy-keys)
   - [`bbr search`](#bbr-search)
   - [`bbr repo`](#bbr-repo)
   - [`bbr commit`](#bbr-commit)
@@ -80,9 +82,12 @@ These flags are available on **every** subcommand:
 
 ### `bbr status`
 
-PR + CI overview for the current branch — the killer feature. Running `bbr` with no subcommand shows a workspace-level overview.
+PR + CI overview for the current branch — the killer feature. Running `bbr` with no subcommand shows a workspace-level overview (current-branch PRs with reviewers/approvals, recent open PRs, recent CI).
+
+When the branch has multiple open PRs, each is listed with its own reviewers and approval counts.
 
 ```bash
+bbr                                 # overview (current branch + recent PRs/CI)
 bbr status                          # full PR + CI view
 bbr status --short                  # compact single-line
 bbr status --watch [--interval N]   # live refresh every N seconds (default 5)
@@ -91,6 +96,7 @@ bbr status --export slack           # Slack mrkdwn standup snippet
 bbr status --export markdown        # GitHub-flavored Markdown snippet
 ```
 
+`--json` includes `pr` (latest open PR for the branch), `open_prs` (all open PRs for the branch), plus pipeline and commit statuses.
 #### `--short`
 
 One-line summary ideal for scripts and status bars:
@@ -385,7 +391,7 @@ bbr pr stack abort --yes              # skip confirmation
 
 ### `bbr batch`
 
-Safe bulk operations with a **Plan/Apply** pattern — always shows a table of what will happen before executing. Supports `--dry-run` to stop after the plan, and `--yes` to skip the confirmation prompt.
+Safe bulk operations with a **Plan/Apply** pattern — always shows a table of what will happen before executing. Supports `--dry-run` to stop after the plan, `--yes` to skip the confirmation prompt, and `--max <n>` to cap how many items are processed.
 
 #### `bbr batch merge-approved`
 
@@ -397,6 +403,7 @@ bbr batch merge-approved --repo other-slug       # specific repo slug
 bbr batch merge-approved --strategy squash       # merge strategy
 bbr batch merge-approved --dry-run               # plan only, no changes
 bbr batch merge-approved --yes                   # skip confirmation
+bbr batch merge-approved --max 10                # process at most 10 PRs
 bbr batch merge-approved --json                  # machine-readable plan/result
 ```
 
@@ -447,10 +454,11 @@ Pipeline / CI operations.
 bbr ci list                          # latest pipelines for current branch
 bbr ci list --branch main            # specific branch
 bbr ci list --limit 20               # max results (default 10)
+bbr ci list --no-steps               # skip per-pipeline step fetches (faster)
 bbr ci list --json
 ```
 
-Output: table with columns `#  State  Step  Duration`. Each step is its own row.
+Output: table with columns `#  State  Step  Duration`. Non-terminal pipelines include step rows; use `--no-steps` for a pipeline-only listing.
 
 #### `bbr ci status`
 
@@ -588,6 +596,44 @@ Test Results
 ```
 
 The step with the largest absolute duration delta is highlighted with `←`. If no test reports exist for either pipeline the test section is omitted.
+
+#### `bbr ci schedules`
+
+Manage cron-based pipeline schedules.
+
+```bash
+bbr ci schedules list
+bbr ci schedules create --cron "0 2 * * *" --branch main
+bbr ci schedules view <uuid>
+bbr ci schedules update <uuid> [--cron ...] [--enabled true|false]
+bbr ci schedules delete <uuid> [--yes]
+bbr ci schedules executions <uuid>
+```
+
+---
+
+### `bbr variable`
+
+Manage repository pipeline variables (alias of `bbr ci vars`).
+
+```bash
+bbr variable list
+bbr variable set KEY value [--secured]
+bbr variable delete KEY
+```
+
+---
+
+### `bbr deploy-keys`
+
+Manage repository SSH deploy keys.
+
+```bash
+bbr deploy-keys list
+bbr deploy-keys add --key "ssh-rsa AAAA..." --label "ci-runner"
+bbr deploy-keys view <key_id>
+bbr deploy-keys delete <key_id> [--yes]
+```
 
 ---
 
@@ -829,8 +875,14 @@ Credential management.
 bbr auth setup                     # interactive credential setup
 bbr auth setup --username u --token t  # non-interactive (for CI scripts)
 bbr auth test                      # validate credentials against /user
-bbr auth status                    # show current auth method
+bbr auth status                    # show auth method + rate-limit remaining
 bbr auth logout                    # remove stored credentials
+```
+
+`bbr auth status` output:
+```
+Authenticated as Your Name (you@example.com) via config-file
+API rate limit remaining: 950
 ```
 
 `bbr auth test` output:
@@ -993,9 +1045,11 @@ All data commands accept `--json`. Output is stable and suitable for scripting.
 ### Common patterns
 
 ```bash
-bbr status --json         # { branch, commit, repo, pr?, pipeline?, commit_statuses }
+bbr status --json         # { branch, commit, repo, pr?, open_prs, pipeline?, commit_statuses }
+bbr auth status --json    # { authenticated, username, source, rate_limit_remaining? }
 bbr pr list --json        # { workspace, slug, state, pull_requests: [...] }
 bbr ci status --json      # { branch, pipeline: { uuid, state, steps, ... } }
+bbr ci list --json        # { branch, pipelines: [...] }  # add --no-steps to skip step detail
 bbr pr dashboard --json   # { workspace, user, needs_review, my_prs, recent_activity, repo_count }
 bbr batch merge-approved --dry-run --json  # { dry_run, action_count, actions: [...] }
 bbr ci compare 42 57 --json  # { a, b, step_deltas, test_deltas }
