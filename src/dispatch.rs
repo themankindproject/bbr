@@ -304,9 +304,12 @@ async fn dispatch_ci(action: CiAction) -> Result<()> {
             )
             .await
         }
-        CiAction::List { branch, limit, g } => {
-            commands::ci::list(&g, branch.as_deref(), limit).await
-        }
+        CiAction::List {
+            branch,
+            limit,
+            no_steps,
+            g,
+        } => commands::ci::list(&g, branch.as_deref(), limit, no_steps).await,
         CiAction::Rerun { branch, g } => commands::ci::rerun(&g, branch.as_deref()).await,
         CiAction::Trigger {
             branch,

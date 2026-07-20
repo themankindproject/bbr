@@ -260,6 +260,7 @@ mod tests {
             branch: "main".into(),
             commit: "abc123".into(),
             pr: None,
+            open_prs: vec![],
             pipeline: None,
             commit_statuses: vec![],
             suggested_commands: vec![],

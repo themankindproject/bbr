@@ -4,6 +4,8 @@
 use std::process::Command;
 use std::time::Duration;
 
+use wait_timeout::ChildExt;
+
 use crate::error::{BitbucketError, Result};
 
 /// Default timeout for git read operations (30 seconds).
@@ -33,8 +35,8 @@ fn git(args: &[&str]) -> Result<String> {
 
 /// Run a `git` command with a specific timeout, returning trimmed stdout.
 ///
-/// Spawns the child process and waits with a timeout. On timeout, the child
-/// is explicitly killed to prevent orphaned git processes from leaking.
+/// Spawns the child process and waits with a true deadline via `wait_timeout`.
+/// On timeout, the child is explicitly killed to prevent orphaned git processes.
 fn git_with_timeout(args: &[&str], timeout: Duration) -> Result<String> {
     let mut child = Command::new("git")
         .args(args)
@@ -43,55 +45,43 @@ fn git_with_timeout(args: &[&str], timeout: Duration) -> Result<String> {
         .spawn()
         .map_err(|e| BitbucketError::Git(format!("failed to spawn git: {e}")))?;
 
-    let start = std::time::Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                // Process exited — read output
-                let stdout = child
-                    .stdout
-                    .take()
-                    .map(|mut s| {
-                        let mut buf = Vec::new();
-                        std::io::Read::read_to_end(&mut s, &mut buf).ok();
-                        buf
-                    })
-                    .unwrap_or_default();
-                let stderr = child
-                    .stderr
-                    .take()
-                    .map(|mut s| {
-                        let mut buf = Vec::new();
-                        std::io::Read::read_to_end(&mut s, &mut buf).ok();
-                        buf
-                    })
-                    .unwrap_or_default();
+    match child.wait_timeout(timeout) {
+        Ok(Some(status)) => {
+            let stdout = child
+                .stdout
+                .take()
+                .map(|mut s| {
+                    let mut buf = Vec::new();
+                    std::io::Read::read_to_end(&mut s, &mut buf).ok();
+                    buf
+                })
+                .unwrap_or_default();
+            let stderr = child
+                .stderr
+                .take()
+                .map(|mut s| {
+                    let mut buf = Vec::new();
+                    std::io::Read::read_to_end(&mut s, &mut buf).ok();
+                    buf
+                })
+                .unwrap_or_default();
 
-                if !status.success() {
-                    let msg = String::from_utf8_lossy(&stderr).trim().to_string();
-                    return Err(BitbucketError::Git(msg));
-                }
-                return Ok(String::from_utf8_lossy(&stdout).trim().to_string());
+            if !status.success() {
+                let msg = String::from_utf8_lossy(&stderr).trim().to_string();
+                return Err(BitbucketError::Git(msg));
             }
-            Ok(None) => {
-                // Still running — check timeout
-                if start.elapsed() >= timeout {
-                    // Kill the child to prevent orphaned processes
-                    let _ = child.kill();
-                    let _ = child.wait(); // reap the zombie
-                    return Err(BitbucketError::Git(format!(
-                        "git command timed out after {}s: git {}",
-                        timeout.as_secs(),
-                        args.join(" ")
-                    )));
-                }
-                // Sleep briefly to avoid busy-waiting
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(e) => {
-                return Err(BitbucketError::Git(format!("failed to wait on git: {e}")));
-            }
+            Ok(String::from_utf8_lossy(&stdout).trim().to_string())
         }
+        Ok(None) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(BitbucketError::Git(format!(
+                "git command timed out after {}s: git {}",
+                timeout.as_secs(),
+                args.join(" ")
+            )))
+        }
+        Err(e) => Err(BitbucketError::Git(format!("failed to wait on git: {e}"))),
     }
 }
 

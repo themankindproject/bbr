@@ -1,6 +1,7 @@
 //! Batch operations (`bbr batch`).
 
 use crate::api::pr::{MergePrRequest, PrState};
+use crate::api::BitbucketClient;
 use crate::cli::GlobalArgs;
 use crate::commands::{client, confirm, make_spinner, resolve_repo, SpinnerGuard};
 use crate::error::Result;
@@ -8,6 +9,20 @@ use crate::output::table::Table;
 use crate::output::theme::Theme;
 use crate::output::Formatter;
 use serde::Serialize;
+
+/// Delay between batch API calls to avoid burning the hourly rate limit.
+const BATCH_CALL_DELAY: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// Pause between batch mutations; back off harder when quota is low.
+async fn batch_pace(client: &BitbucketClient) {
+    if let Some(remaining) = client.rate_limit_remaining() {
+        if remaining < 50 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            return;
+        }
+    }
+    tokio::time::sleep(BATCH_CALL_DELAY).await;
+}
 
 #[derive(Debug, Serialize)]
 pub struct BatchPlan<T: Serialize> {
@@ -86,9 +101,9 @@ pub async fn merge_approved(
     for pr in prs {
         // Count approvals from reviewers (preferred) or all participants
         let approval_count = if !pr.reviewers.is_empty() {
-            pr.reviewers.iter().filter(|r| r.approved).count()
+            pr.reviewers.iter().filter(|r| r.is_approved()).count()
         } else {
-            pr.participants.iter().filter(|p| p.approved).count()
+            pr.participants.iter().filter(|p| p.is_approved()).count()
         };
 
         let is_approved = approval_count > 0;
@@ -173,7 +188,10 @@ pub async fn merge_approved(
     let mut failed = Vec::new();
 
     let run_spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
-    for act in approved_actions {
+    for (i, act) in approved_actions.into_iter().enumerate() {
+        if i > 0 {
+            batch_pace(&client).await;
+        }
         run_spinner.set_message(format!("Merging PR #{}...", act.pr_id));
         let merge_req = MergePrRequest {
             close_source_branch: Some(true),
@@ -311,7 +329,10 @@ pub async fn rerun_failed(
     let mut failed = Vec::new();
 
     let run_spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
-    for act in failed_actions {
+    for (i, act) in failed_actions.into_iter().enumerate() {
+        if i > 0 {
+            batch_pace(&client).await;
+        }
         run_spinner.set_message(format!("Rerunning pipeline #{}...", act.build_number));
         match client
             .rerun_pipeline(&repo.workspace, slug, &act.pipeline_uuid)
@@ -360,14 +381,10 @@ pub async fn cleanup_merged_branches(
 
     let mut cleanup_actions = Vec::new();
     for branch in branches {
-        if branch.merged
-            && !protected_branches.iter().any(|&p| {
-                branch.name == p
-                    || branch.name.starts_with("release/")
-                    || branch.name.starts_with("hotfix/")
-            })
-        {
-            // Local cleanup is always proposed
+        let is_protected = protected_branches.iter().any(|&p| branch.name == p)
+            || branch.name.starts_with("release/")
+            || branch.name.starts_with("hotfix/");
+        if branch.merged && !is_protected {
             cleanup_actions.push(CleanupAction {
                 branch_name: branch.name.clone(),
                 is_remote: false,
@@ -444,7 +461,10 @@ pub async fn cleanup_merged_branches(
     let mut failed = Vec::new();
 
     let run_spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
-    for act in cleanup_actions {
+    for (i, act) in cleanup_actions.into_iter().enumerate() {
+        if i > 0 {
+            batch_pace(&client).await;
+        }
         if act.is_remote {
             run_spinner.set_message(format!("Deleting remote branch {}...", act.branch_name));
             match client

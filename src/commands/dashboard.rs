@@ -165,7 +165,7 @@ pub async fn run_dashboard(
     for (slug, open, merged) in results {
         for pr in open {
             // Count approvals from participants only (reviewers are a subset)
-            let approvals = pr.participants.iter().filter(|p| p.approved).count();
+            let approvals = pr.participants.iter().filter(|p| p.is_approved()).count();
 
             let matches_me = |p: &Participant| {
                 if let (Some(u1), Some(u2)) = (&p.uuid, &user.uuid) {
@@ -193,12 +193,12 @@ pub async fn run_dashboard(
                 .reviewers
                 .iter()
                 .find(|r| matches_me(r))
-                .is_some_and(|r| r.approved)
+                .is_some_and(|r| r.is_approved())
                 || pr
                     .participants
                     .iter()
                     .find(|p| matches_me(p))
-                    .is_some_and(|p| p.approved);
+                    .is_some_and(|p| p.is_approved());
 
             let d_pr = DashboardPr {
                 repo: slug.clone(),

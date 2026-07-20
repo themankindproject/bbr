@@ -21,6 +21,8 @@ pub struct AuthStatusOut {
     pub display_name: Option<String>,
     pub account_id: Option<String>,
     pub source: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limit_remaining: Option<u64>,
 }
 
 /// Credential setup (interactive or non-interactive).
@@ -106,12 +108,24 @@ pub async fn status(g: &GlobalArgs) -> Result<()> {
     };
 
     let client = client(g);
-    let (authenticated, display_name, account_id, error_msg) = match client {
+    let (authenticated, display_name, account_id, error_msg, rate_limit_remaining) = match client {
         Ok(c) => match c.current_user().await {
-            Ok(u) => (true, Some(u.display_name), u.uuid, None),
-            Err(e) => (false, None, None, Some(e.to_string())),
+            Ok(u) => (
+                true,
+                Some(u.display_name),
+                u.uuid,
+                None,
+                c.rate_limit_remaining(),
+            ),
+            Err(e) => (
+                false,
+                None,
+                None,
+                Some(e.to_string()),
+                c.rate_limit_remaining(),
+            ),
         },
-        Err(e) => (false, None, None, Some(e.to_string())),
+        Err(e) => (false, None, None, Some(e.to_string()), None),
     };
 
     let out = AuthStatusOut {
@@ -123,16 +137,24 @@ pub async fn status(g: &GlobalArgs) -> Result<()> {
         display_name,
         account_id,
         source,
+        rate_limit_remaining,
     };
 
     let fmt = Formatter::from_json_flag(g.json);
     let human = if out.authenticated {
-        format!(
+        let mut msg = format!(
             "Authenticated as {} ({}) via {}",
             out.display_name.as_deref().unwrap_or(&out.username),
             out.username,
             out.source
-        )
+        );
+        if let Some(remaining) = out.rate_limit_remaining {
+            msg.push_str(&format!("\nAPI rate limit remaining: {remaining}"));
+            if remaining < 50 {
+                msg.push_str(" (low — consider slowing batch operations)");
+            }
+        }
+        msg
     } else {
         let mut msg = String::new();
         if let Some(err) = &error_msg {

@@ -163,6 +163,23 @@ pub struct Participant {
     pub state: Option<String>,
 }
 
+impl Participant {
+    /// True when the participant has approved (bool flag or Bitbucket `state`).
+    pub fn is_approved(&self) -> bool {
+        self.approved
+            || self
+                .state
+                .as_deref()
+                .is_some_and(|s| s.eq_ignore_ascii_case("approved"))
+    }
+
+    pub fn is_changes_requested(&self) -> bool {
+        self.state
+            .as_deref()
+            .is_some_and(|s| s.eq_ignore_ascii_case("changes_requested"))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
     pub display_name: String,
@@ -376,12 +393,16 @@ impl BitbucketClient {
             format!("&q={}", q_parts.join("+AND+"))
         };
 
-        // Try with fields= first for smaller payloads, fallback without if it fails
+        // Try with fields= first for smaller payloads, fallback without if it fails.
+        // Include next/size/pagelen so pagination metadata survives the fields filter.
         let fields = "values.id,values.state,values.title,\
              values.source.branch.name,values.destination.branch.name,\
              values.author.display_name,values.links.html.href,\
              values.comment_count,values.task_count,values.close_source_branch,\
-             values.updated_on,values.reviewers,values.participants";
+             values.updated_on,\
+             values.reviewers.display_name,values.reviewers.role,values.reviewers.approved,values.reviewers.state,\
+             values.participants.display_name,values.participants.role,values.participants.approved,values.participants.state,\
+             size,page,pagelen,next,previous";
 
         let path_with_fields = format!(
             "/repositories/{workspace}/{slug}/pullrequests?\
@@ -394,44 +415,22 @@ impl BitbucketClient {
 
         match result {
             Ok(page) => {
-                if limit > 100 {
-                    let mut all = page.values;
-                    let mut next = page.next;
-                    while all.len() < limit as usize {
-                        if let Some(ref url) = next {
-                            let next_path = super::strip_base(url, &self.base_url)?;
-                            let next_page: super::Paginated<PullRequest> =
-                                self.send(reqwest::Method::GET, &next_path, None).await?;
-                            if next_page.values.is_empty() {
-                                break;
-                            }
-                            let remaining = limit as usize - all.len();
-                            all.extend(next_page.values.into_iter().take(remaining));
-                            next = next_page.next;
-                        } else {
-                            break;
-                        }
-                    }
-                    Ok(all)
-                } else {
-                    Ok(page.values)
-                }
+                self.paginate_from(page, &path_with_fields, limit as usize)
+                    .await
             }
             Err(BitbucketError::BadRequest(_)) => {
-                // Fallback: retry without fields= and with smaller pagelen
+                // Fallback: retry without fields= and with smaller pagelen.
+                // Fetch page 1 once, then paginate from that page (no double-fetch).
                 let safe_pagelen = pagelen.min(50);
                 let path_no_fields = format!(
                     "/repositories/{workspace}/{slug}/pullrequests?\
                      pagelen={safe_pagelen}&sort={sort_prefix}{sort_field}{q_param}"
                 );
-                if limit > safe_pagelen {
-                    self.fetch_all_pages(&path_no_fields, limit as usize).await
-                } else {
-                    let page: super::Paginated<PullRequest> = self
-                        .send(reqwest::Method::GET, &path_no_fields, None)
-                        .await?;
-                    Ok(page.values)
-                }
+                let page: super::Paginated<PullRequest> = self
+                    .send(reqwest::Method::GET, &path_no_fields, None)
+                    .await?;
+                self.paginate_from(page, &path_no_fields, limit as usize)
+                    .await
             }
             Err(e) => Err(e),
         }
@@ -445,58 +444,82 @@ impl BitbucketClient {
              source.branch.name,destination.branch.name,\
              author.display_name,links.html.href,\
              comment_count,task_count,close_source_branch,\
-             participants.display_name,participants.role,participants.approved,\
-             reviewers.display_name,reviewers.role,reviewers.approved"
+             participants.display_name,participants.role,participants.approved,participants.state,\
+             reviewers.display_name,reviewers.role,reviewers.approved,reviewers.state"
         );
         self.send(reqwest::Method::GET, &path, None).await
     }
 
-    /// Look up the open PR whose source branch is `branch`, if any.
-    /// Like `pr_for_branch` but omits `participants`/`reviewers` fields —
-    /// lighter and faster when you only need the PR identity.
+    /// Look up open PRs whose source branch is `branch`.
+    /// Like [`prs_for_branch`] but omits `participants`/`reviewers` fields —
+    /// lighter and faster when you only need PR identity.
     pub async fn pr_for_branch_light(
         &self,
         workspace: &str,
         slug: &str,
         branch: &str,
     ) -> Result<Option<PullRequest>> {
-        let path = format!(
-            "/repositories/{workspace}/{slug}/pullrequests?\
-             fields=values.id,values.state,values.title,\
-             values.source.branch.name,values.destination.branch.name,\
-             values.author.display_name,values.links.html.href,\
-             values.comment_count,values.task_count,values.close_source_branch,\
-             values.updated_on&\
-             pagelen=1&sort=-updated_on&q=source.branch.name%3D%22{}%22+AND+state%3D%22OPEN%22",
-            super::url_encode(branch),
-        );
-        let page: super::Paginated<PullRequest> =
-            self.send(reqwest::Method::GET, &path, None).await?;
-        Ok(page.values.into_iter().next())
+        Ok(self
+            .prs_for_branch_inner(workspace, slug, branch, false, 1)
+            .await?
+            .into_iter()
+            .next())
     }
 
+    /// Look up the latest open PR whose source branch is `branch`, if any.
     pub async fn pr_for_branch(
         &self,
         workspace: &str,
         slug: &str,
         branch: &str,
     ) -> Result<Option<PullRequest>> {
-        // Bitbucket supports filtering by source branch name.
+        Ok(self
+            .prs_for_branch(workspace, slug, branch)
+            .await?
+            .into_iter()
+            .next())
+    }
+
+    /// Look up all open PRs whose source branch is `branch`.
+    pub async fn prs_for_branch(
+        &self,
+        workspace: &str,
+        slug: &str,
+        branch: &str,
+    ) -> Result<Vec<PullRequest>> {
+        self.prs_for_branch_inner(workspace, slug, branch, true, 50)
+            .await
+    }
+
+    async fn prs_for_branch_inner(
+        &self,
+        workspace: &str,
+        slug: &str,
+        branch: &str,
+        include_reviewers: bool,
+        pagelen: u32,
+    ) -> Result<Vec<PullRequest>> {
+        let reviewer_fields = if include_reviewers {
+            ",values.participants.display_name,values.participants.role,\
+             values.participants.approved,values.participants.state,\
+             values.reviewers.display_name,values.reviewers.role,\
+             values.reviewers.approved,values.reviewers.state"
+        } else {
+            ""
+        };
         let path = format!(
             "/repositories/{workspace}/{slug}/pullrequests?\
              fields=values.id,values.state,values.title,\
              values.source.branch.name,values.destination.branch.name,\
              values.author.display_name,values.links.html.href,\
              values.comment_count,values.task_count,values.close_source_branch,\
-             values.updated_on,\
-             values.participants.display_name,values.participants.role,values.participants.approved,\
-             values.reviewers.display_name,values.reviewers.role,values.reviewers.approved&\
-             pagelen=1&sort=-updated_on&q=source.branch.name%3D%22{}%22+AND+state%3D%22OPEN%22",
+             values.updated_on,values.created_on,values.description,\
+             size,page,pagelen,next{reviewer_fields}&\
+             pagelen={pagelen}&sort=-updated_on&\
+             q=source.branch.name%3D%22{}%22+AND+state%3D%22OPEN%22",
             super::url_encode(branch),
         );
-        let page: super::Paginated<PullRequest> =
-            self.send(reqwest::Method::GET, &path, None).await?;
-        Ok(page.values.into_iter().next())
+        self.fetch_paginated(&path, pagelen as usize).await
     }
 
     /// `POST /repositories/{ws}/{slug}/pullrequests`
@@ -552,14 +575,15 @@ impl BitbucketClient {
         body: Option<&MergePrRequest>,
     ) -> Result<PullRequest> {
         let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}/merge");
-        let raw = match body {
-            Some(b) => Some(serde_json::to_string(b).map_err(|e| {
-                BitbucketError::Other(format!("failed to serialize merge request: {e}"))
-            })?),
-            None => None,
-        };
-        self.send(reqwest::Method::POST, &path, raw.as_deref().or(Some("{}")))
-            .await
+        match body {
+            Some(b) => {
+                let raw = serde_json::to_string(b).map_err(|e| {
+                    BitbucketError::Other(format!("failed to serialize merge request: {e}"))
+                })?;
+                self.send(reqwest::Method::POST, &path, Some(&raw)).await
+            }
+            None => self.send(reqwest::Method::POST, &path, None).await,
+        }
     }
 
     /// `POST /repositories/{ws}/{slug}/pullrequests/{id}/approve`
@@ -585,8 +609,12 @@ impl BitbucketClient {
     /// `GET /repositories/{ws}/{slug}/pullrequests/{id}/diff`
     pub async fn pr_diff(&self, workspace: &str, slug: &str, id: u64) -> Result<String> {
         let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}/diff");
-        self.send_raw(reqwest::Method::GET, &path, "text/plain")
-            .await
+        self.send_raw(
+            reqwest::Method::GET,
+            &path,
+            "application/x-diff, text/plain",
+        )
+        .await
     }
 
     /// `GET /repositories/{ws}/{slug}/pullrequests/{id}/diffstat`
@@ -603,8 +631,12 @@ impl BitbucketClient {
     /// `GET /repositories/{ws}/{slug}/pullrequests/{id}/patch`
     pub async fn pr_patch(&self, workspace: &str, slug: &str, id: u64) -> Result<String> {
         let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}/patch");
-        self.send_raw(reqwest::Method::GET, &path, "text/plain")
-            .await
+        self.send_raw(
+            reqwest::Method::GET,
+            &path,
+            "application/x-patch, text/plain",
+        )
+        .await
     }
 
     /// `POST /repositories/{ws}/{slug}/pullrequests/{id}/approve`
@@ -632,13 +664,7 @@ impl BitbucketClient {
         let path = format!(
             "/repositories/{workspace}/{slug}/pullrequests/{id}/comments?pagelen={pagelen}"
         );
-        if limit > 100 {
-            self.fetch_all_pages(&path, limit as usize).await
-        } else {
-            let page: super::Paginated<PullRequestComment> =
-                self.send(reqwest::Method::GET, &path, None).await?;
-            Ok(page.values)
-        }
+        self.fetch_paginated(&path, limit as usize).await
     }
 
     /// `GET /repositories/{ws}/{slug}/pullrequests/{id}/tasks`
@@ -652,13 +678,7 @@ impl BitbucketClient {
         let pagelen = limit.min(100);
         let path =
             format!("/repositories/{workspace}/{slug}/pullrequests/{id}/tasks?pagelen={pagelen}");
-        if limit > 100 {
-            self.fetch_all_pages(&path, limit as usize).await
-        } else {
-            let page: super::Paginated<PullRequestTask> =
-                self.send(reqwest::Method::GET, &path, None).await?;
-            Ok(page.values)
-        }
+        self.fetch_paginated(&path, limit as usize).await
     }
 
     /// `GET /repositories/{ws}/{slug}/pullrequests/{id}/commits`
@@ -672,13 +692,7 @@ impl BitbucketClient {
         let pagelen = limit.min(100);
         let path =
             format!("/repositories/{workspace}/{slug}/pullrequests/{id}/commits?pagelen={pagelen}");
-        if limit > 100 {
-            self.fetch_all_pages(&path, limit as usize).await
-        } else {
-            let page: super::Paginated<super::repo::Commit> =
-                self.send(reqwest::Method::GET, &path, None).await?;
-            Ok(page.values)
-        }
+        self.fetch_paginated(&path, limit as usize).await
     }
 
     /// `GET /repositories/{ws}/{slug}/pullrequests/{id}/statuses`
@@ -693,13 +707,7 @@ impl BitbucketClient {
         let path = format!(
             "/repositories/{workspace}/{slug}/pullrequests/{id}/statuses?pagelen={pagelen}"
         );
-        if limit > 100 {
-            self.fetch_all_pages(&path, limit as usize).await
-        } else {
-            let page: super::Paginated<super::status::BuildStatus> =
-                self.send(reqwest::Method::GET, &path, None).await?;
-            Ok(page.values)
-        }
+        self.fetch_paginated(&path, limit as usize).await
     }
 
     /// `GET /repositories/{ws}/{slug}/pullrequests/{id}/conflicts`
@@ -714,13 +722,7 @@ impl BitbucketClient {
         let path = format!(
             "/repositories/{workspace}/{slug}/pullrequests/{id}/conflicts?pagelen={pagelen}"
         );
-        if limit > 100 {
-            self.fetch_all_pages(&path, limit as usize).await
-        } else {
-            let page: super::Paginated<PullRequestConflict> =
-                self.send(reqwest::Method::GET, &path, None).await?;
-            Ok(page.values)
-        }
+        self.fetch_paginated(&path, limit as usize).await
     }
 
     /// `POST /repositories/{ws}/{slug}/pullrequests/{id}/request-changes`
@@ -894,6 +896,31 @@ mod tests {
         assert!(json.get("description").is_none());
         assert!(json.get("close_source_branch").is_none());
         assert!(json.get("reviewers").is_none());
+    }
+
+    #[test]
+    fn participant_is_approved_from_bool_or_state() {
+        let via_bool = Participant {
+            approved: true,
+            state: None,
+            ..Default::default()
+        };
+        assert!(via_bool.is_approved());
+
+        let via_state = Participant {
+            approved: false,
+            state: Some("approved".into()),
+            ..Default::default()
+        };
+        assert!(via_state.is_approved());
+
+        let pending = Participant {
+            approved: false,
+            state: Some("changes_requested".into()),
+            ..Default::default()
+        };
+        assert!(!pending.is_approved());
+        assert!(pending.is_changes_requested());
     }
 
     #[test]

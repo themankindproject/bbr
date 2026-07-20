@@ -30,7 +30,7 @@ clap_complete = "=4.5.4"
 
 # HTTP / async
 futures = "0.3"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip", "http2"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 
 # Serde / JSON
@@ -73,6 +73,9 @@ tempfile = "3"
 
 # Base64 encoding (HTTP Basic auth)
 base64 = "0.22"
+
+# Timed wait for child processes (git)
+wait-timeout = "0.2"
 
 [target.'cfg(unix)'.dependencies]
 # Terminal width detection (ioctl TIOCGWINSZ on Unix)

@@ -219,10 +219,11 @@ pub fn normalize_uuid(s: &str) -> String {
 /// Ensure braces are present for API URLs (Bitbucket requires `%7B`/`%7D`).
 pub fn ensure_uuid_braces(s: &str) -> String {
     let trimmed = s.trim();
-    if !trimmed.starts_with('{') && !trimmed.ends_with('}') {
-        format!("{{{trimmed}}}")
-    } else {
+    if trimmed.starts_with('{') && trimmed.ends_with('}') && trimmed.len() >= 2 {
         trimmed.to_string()
+    } else {
+        let inner = trimmed.trim_matches(|c| c == '{' || c == '}');
+        format!("{{{inner}}}")
     }
 }
 
@@ -248,13 +249,7 @@ impl BitbucketClient {
                 super::url_encode(b)
             ));
         }
-        if limit > 100 {
-            self.fetch_all_pages(&path, limit as usize).await
-        } else {
-            let page: super::Paginated<Pipeline> =
-                self.send(reqwest::Method::GET, &path, None).await?;
-            Ok(page.values)
-        }
+        self.fetch_paginated(&path, limit as usize).await
     }
 
     pub async fn latest_pipeline(
@@ -296,8 +291,7 @@ impl BitbucketClient {
     ) -> Result<super::Paginated<PipelineStep>> {
         let path = format!(
             "/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/?\
-             fields=values.uuid,values.name,values.state,values.duration_in_seconds&\
-             sort=order"
+             fields=values.uuid,values.name,values.state,values.duration_in_seconds"
         );
         self.send(reqwest::Method::GET, &path, None).await
     }
@@ -395,13 +389,7 @@ impl BitbucketClient {
             "/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/{step}/test_cases?\
              pagelen={pagelen}"
         );
-        if limit > 100 {
-            self.fetch_all_pages(&path, limit as usize).await
-        } else {
-            let page: super::Paginated<TestCase> =
-                self.send(reqwest::Method::GET, &path, None).await?;
-            Ok(page.values)
-        }
+        self.fetch_paginated(&path, limit as usize).await
     }
 
     pub async fn list_pipeline_variables(
@@ -780,6 +768,12 @@ mod tests {
     #[test]
     fn ensure_uuid_braces_trims_whitespace() {
         assert_eq!(ensure_uuid_braces("  {abc-123}  "), "{abc-123}");
+    }
+
+    #[test]
+    fn ensure_uuid_braces_fixes_partial_braces() {
+        assert_eq!(ensure_uuid_braces("{abc-123"), "{abc-123}");
+        assert_eq!(ensure_uuid_braces("abc-123}"), "{abc-123}");
     }
 
     #[test]

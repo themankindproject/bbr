@@ -105,13 +105,7 @@ impl BitbucketClient {
         let path = format!(
             "/repositories/{workspace}/{slug}/refs/branches?pagelen={pagelen}&sort=target.date"
         );
-        if limit > 100 {
-            self.fetch_all_pages(&path, limit as usize).await
-        } else {
-            let page: super::Paginated<Branch> =
-                self.send(reqwest::Method::GET, &path, None).await?;
-            Ok(page.values)
-        }
+        self.fetch_paginated(&path, limit as usize).await
     }
 
     /// `GET /repositories/{ws}/{slug}/refs/tags`
@@ -120,12 +114,7 @@ impl BitbucketClient {
         let path = format!(
             "/repositories/{workspace}/{slug}/refs/tags?pagelen={pagelen}&sort=-target.date"
         );
-        if limit > 100 {
-            self.fetch_all_pages(&path, limit as usize).await
-        } else {
-            let page: super::Paginated<Tag> = self.send(reqwest::Method::GET, &path, None).await?;
-            Ok(page.values)
-        }
+        self.fetch_paginated(&path, limit as usize).await
     }
 
     /// `GET /repositories/{ws}/{slug}/commits?pagelen=N&include=branch`
@@ -141,13 +130,7 @@ impl BitbucketClient {
         if let Some(b) = branch {
             path.push_str(&format!("&include={}", super::url_encode(b)));
         }
-        if limit > 100 {
-            self.fetch_all_pages(&path, limit as usize).await
-        } else {
-            let page: super::Paginated<Commit> =
-                self.send(reqwest::Method::GET, &path, None).await?;
-            Ok(page.values)
-        }
+        self.fetch_paginated(&path, limit as usize).await
     }
 
     /// `GET /user` — verifies auth and returns the current user.
@@ -251,13 +234,7 @@ impl BitbucketClient {
     pub async fn list_repos(&self, workspace: &str, limit: u32) -> Result<Vec<Repository>> {
         let pagelen = limit.min(100);
         let path = format!("/repositories/{workspace}?pagelen={pagelen}&sort=-updated_on");
-        if limit > 100 {
-            self.fetch_all_pages(&path, limit as usize).await
-        } else {
-            let page: super::Paginated<Repository> =
-                self.send(reqwest::Method::GET, &path, None).await?;
-            Ok(page.values)
-        }
+        self.fetch_paginated(&path, limit as usize).await
     }
 
     /// `GET /repositories/{ws}/{slug}/branch-restrictions` — list branch restrictions.
@@ -267,9 +244,7 @@ impl BitbucketClient {
         slug: &str,
     ) -> Result<Vec<BranchRestriction>> {
         let path = format!("/repositories/{workspace}/{slug}/branch-restrictions?pagelen=100");
-        let page: super::Paginated<BranchRestriction> =
-            self.send(reqwest::Method::GET, &path, None).await?;
-        Ok(page.values)
+        self.fetch_all_pages(&path, usize::MAX).await
     }
 
     /// `GET /repositories/{ws}/{slug}/default-reviewers` — list default reviewers.
@@ -278,10 +253,8 @@ impl BitbucketClient {
         workspace: &str,
         slug: &str,
     ) -> Result<Vec<DefaultReviewer>> {
-        let path = format!("/repositories/{workspace}/{slug}/default-reviewers");
-        let page: super::Paginated<DefaultReviewer> =
-            self.send(reqwest::Method::GET, &path, None).await?;
-        Ok(page.values)
+        let path = format!("/repositories/{workspace}/{slug}/default-reviewers?pagelen=100");
+        self.fetch_all_pages(&path, usize::MAX).await
     }
 
     /// `GET /repositories/{ws}/{slug}/permissions-config/users` — list user permissions.
@@ -291,9 +264,7 @@ impl BitbucketClient {
         slug: &str,
     ) -> Result<Vec<PermissionEntry>> {
         let path = format!("/repositories/{workspace}/{slug}/permissions-config/users?pagelen=100");
-        let page: super::Paginated<PermissionEntry> =
-            self.send(reqwest::Method::GET, &path, None).await?;
-        Ok(page.values)
+        self.fetch_all_pages(&path, usize::MAX).await
     }
 
     /// `GET /repositories/{ws}/{slug}/permissions-config/groups` — list group permissions.
@@ -304,9 +275,7 @@ impl BitbucketClient {
     ) -> Result<Vec<PermissionEntry>> {
         let path =
             format!("/repositories/{workspace}/{slug}/permissions-config/groups?pagelen=100");
-        let page: super::Paginated<PermissionEntry> =
-            self.send(reqwest::Method::GET, &path, None).await?;
-        Ok(page.values)
+        self.fetch_all_pages(&path, usize::MAX).await
     }
 }
 

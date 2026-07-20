@@ -61,7 +61,7 @@ pub struct CiLogsOut {
     pub log: String,
 }
 
-pub async fn list(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> Result<()> {
+pub async fn list(g: &GlobalArgs, branch: Option<&str>, limit: u32, no_steps: bool) -> Result<()> {
     let repo = resolve_repo(g)?;
     let branch = match branch {
         Some(b) => b.to_string(),
@@ -86,21 +86,33 @@ pub async fn list(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> Result<()
         return fmt.print(&out, &human);
     }
 
-    use futures::StreamExt;
+    let all_steps: Vec<Vec<PipelineStep>> = if no_steps {
+        pipelines.iter().map(|_| Vec::new()).collect()
+    } else {
+        use futures::StreamExt;
 
-    let step_futures = pipelines.iter().map(|p| {
-        let client = &client;
-        let workspace = &repo.workspace;
-        let slug = &repo.slug;
-        async move { steps_for_pipeline(client, workspace, slug, &p.uuid).await }
-    });
-    let all_steps: Vec<Vec<PipelineStep>> = futures::stream::iter(step_futures)
-        .buffer_unordered(5)
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .map(|r| r.unwrap_or_default())
-        .collect();
+        // Only fetch steps for non-terminal pipelines — terminal results are
+        // stable and the pipeline-level state row is enough for listing.
+        let step_futures = pipelines.iter().map(|p| {
+            let client = &client;
+            let workspace = &repo.workspace;
+            let slug = &repo.slug;
+            async move {
+                if p.is_terminal() {
+                    Ok(Vec::new())
+                } else {
+                    steps_for_pipeline(client, workspace, slug, &p.uuid).await
+                }
+            }
+        });
+        futures::stream::iter(step_futures)
+            .buffer_unordered(5)
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map(|r| r.unwrap_or_default())
+            .collect()
+    };
 
     let pips: Vec<PipelineOut> = pipelines
         .iter()

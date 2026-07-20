@@ -145,11 +145,15 @@ pub fn make_spinner(json: bool, quiet: bool) -> ProgressBar {
         ProgressBar::hidden()
     } else {
         let pb = ProgressBar::new_spinner();
-        pb.enable_steady_tick(Duration::from_millis(120));
+        // Force stderr so the spinner is visible even when stdout is redirected
+        // or when the default draw-target auto-hides on some terminals.
+        pb.set_draw_target(indicatif::ProgressDrawTarget::stderr_with_hz(20));
+        pb.enable_steady_tick(Duration::from_millis(80));
         pb.set_style(
-            ProgressStyle::with_template("{spinner} {msg}")
+            ProgressStyle::with_template("{spinner:.cyan} {msg}")
                 .unwrap_or_else(|_| ProgressStyle::default_spinner()),
         );
+        pb.tick();
         pb
     }
 }
@@ -207,27 +211,29 @@ pub fn human_duration(secs: u64) -> String {
     }
 }
 
-/// Truncate a string to `n` characters, appending an ellipsis if truncated.
+/// Truncate a string to `n` display columns, appending an ellipsis if truncated.
 pub fn truncate(s: &str, n: usize) -> String {
-    // Fast path: if the string is ASCII and fits, return as-is
-    if s.is_ascii() {
-        return if s.len() <= n {
-            s.to_string()
-        } else {
-            let mut out = String::with_capacity(n + 4);
-            out.push_str(&s[..n]);
-            out.push('…');
-            out
-        };
+    use unicode_width::UnicodeWidthStr;
+
+    if n == 0 {
+        return String::new();
     }
-    // Slow path: Unicode-aware character counting
-    if s.chars().count() <= n {
-        s.to_string()
-    } else {
-        let mut out: String = s.chars().take(n).collect();
-        out.push('…');
-        out
+    if UnicodeWidthStr::width(s) <= n {
+        return s.to_string();
     }
+
+    let mut out = String::new();
+    let mut width = 0;
+    for ch in s.chars() {
+        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if width + cw > n {
+            break;
+        }
+        out.push(ch);
+        width += cw;
+    }
+    out.push('…');
+    out
 }
 
 /// Prompt the user for a yes/no confirmation on stderr.
@@ -301,8 +307,16 @@ mod tests {
     #[test]
     fn truncate_handles_unicode() {
         let result = truncate("héllo wörld", 6);
-        assert!(result.starts_with("héllo "));
         assert!(result.ends_with('…'));
+        assert!(unicode_width::UnicodeWidthStr::width(result.as_str()) <= 7);
+    }
+
+    #[test]
+    fn truncate_handles_wide_cjk() {
+        // Each CJK ideograph is 2 columns wide
+        let result = truncate("日本語テスト", 5);
+        assert!(result.ends_with('…'));
+        assert!(unicode_width::UnicodeWidthStr::width(result.as_str()) <= 6);
     }
 
     #[test]

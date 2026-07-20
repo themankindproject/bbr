@@ -92,11 +92,18 @@ pub fn load_credentials() -> Result<Option<CredentialsFile>> {
         let mode = meta.permissions().mode();
         if mode & 0o077 != 0 {
             eprintln!(
-                "bbr: warning: {} has overly permissive file mode {:o}. Consider running `chmod 600 {}`",
+                "bbr: warning: {} has overly permissive file mode {:o}; fixing to 0600",
                 path.display(),
-                mode & 0o777,
-                path.display()
+                mode & 0o777
             );
+            let mut perms = meta.permissions();
+            perms.set_mode(0o600);
+            if let Err(e) = fs::set_permissions(&path, perms) {
+                eprintln!(
+                    "bbr: warning: failed to fix permissions on {}: {e}",
+                    path.display()
+                );
+            }
         }
     }
 

@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-07-20
+
+### Added
+
+- **`bbr ci list --no-steps`** — skip per-pipeline step fetches for a fast listing path.
+- **HTTP/2 + gzip** — reqwest client enables `http2` and `gzip` for lower latency and smaller payloads.
+- **ETag conditional GETs** — in-process ETag + body cache with `If-None-Match` for watch/poll loops.
+- **Rate-limit tracking** — parses `X-RateLimit-Remaining`; warns when low; exposed via `bbr auth status`.
+- **`fetch_paginated` / `paginate_from` helpers** — shared pagination with parallel `page=N` only when the API `next` URL proves numeric paging (and `size` is known).
+- **`prs_for_branch`** — fetch all open PRs for a branch (status/overview render each one).
+- **Batch API pacing** — 200ms between batch mutations (1s when quota is low).
+
+### Changed
+
+- **Overview / status** — full reviewer payload (no light-PR path for overview); spinner covers the whole fetch; recent open PRs list up to 25.
+- **Retry path** — shared `with_retries` helper; retries 502/503/504 as well as 429.
+- **`auth_header` stored as `SecretString`** — zeroized on drop like the credential secret.
+- **Git timeouts** — `wait-timeout` instead of a 50ms busy-wait poll loop.
+- **`truncate`** — uses Unicode display width (CJK-safe) via `unicode-width`.
+- **Watch clear-screen** — gated on stdout TTY, not `colors_enabled` / `CLICOLOR_FORCE`.
+
+### Fixed
+
+- **`ensure_uuid_braces`** — partial braces (`{abc` / `abc}`) are normalized instead of left malformed.
+- **`merge_pr`** — sends no body when merge options are absent (no forced `{}`).
+- **Empty JSON success bodies** — deserialize via `null` then `{}` instead of hard-failing.
+- **Approvals display** — honors Bitbucket `state: "approved"` in addition to the `approved` bool; reviewer `state` included in API `fields`.
+- **`list_prs` BadRequest fallback** — reuses the first fetched page (no double-fetch); pagination metadata kept in `fields=`.
+- **Protected-branch cleanup logic** — `release/` / `hotfix/` checks are no longer incorrectly nested inside the named-branch `.any()`.
+- **Permissive credentials file** — auto-fixes mode to `0600` after warning instead of only suggesting `chmod`.
+- **Diff/patch Accept headers** — negotiate `application/x-diff` / `application/x-patch` with `text/plain` fallback.
+- **Pipeline steps sort** — dropped non-standard `sort=order`.
+
 ## [0.1.8] - 2026-07-10
 
 ### Added
@@ -517,7 +550,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credentials file opened with mode `0o600` at creation time on Unix, closing TOCTOU window.
 - No system keyring dependency (avoids 671 MB texlive pull).
 
-[Unreleased]: https://github.com/themankindproject/bbr/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/themankindproject/bbr/compare/v0.1.9...HEAD
+[0.1.9]: https://github.com/themankindproject/bbr/releases/tag/v0.1.9
+[0.1.8]: https://github.com/themankindproject/bbr/releases/tag/v0.1.8
+[0.1.7]: https://github.com/themankindproject/bbr/releases/tag/v0.1.7
 [0.1.6]: https://github.com/themankindproject/bbr/releases/tag/v0.1.6
 [0.1.5]: https://github.com/themankindproject/bbr/releases/tag/v0.1.5
 [0.1.4]: https://github.com/themankindproject/bbr/releases/tag/v0.1.4

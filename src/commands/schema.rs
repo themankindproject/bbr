@@ -17,7 +17,8 @@ const SCHEMAS: &[(&str, &str, &str)] = &[
     "credential_kind": { "type": ["string", "null"] },
     "display_name": { "type": ["string", "null"] },
     "account_id": { "type": ["string", "null"] },
-    "source": { "type": "string", "enum": ["environment", "config-file", "none"] }
+    "source": { "type": "string", "enum": ["environment", "config-file", "none"] },
+    "rate_limit_remaining": { "type": ["integer", "null"], "minimum": 0 }
   }
 }"#,
     ),

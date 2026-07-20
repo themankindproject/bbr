@@ -6,7 +6,9 @@ use time::OffsetDateTime;
 use crate::api::pipeline::{Pipeline, PipelineStep, StepSummary};
 use crate::api::pr::{Participant, PrState, PullRequest};
 use crate::cli::GlobalArgs;
-use crate::commands::{client, current_head, human_duration, resolve_repo, truncate};
+use crate::commands::{
+    client, current_head, human_duration, make_spinner, resolve_repo, truncate, SpinnerGuard,
+};
 use crate::error::Result;
 use crate::git::Head;
 use crate::output::table::Table;
@@ -27,6 +29,9 @@ pub struct StatusOut {
     pub commit: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr: Option<PrSummary>,
+    /// All open PRs for the current branch (includes `pr` when present).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_prs: Vec<PrSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pipeline: Option<PipelineSummary>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -111,6 +116,9 @@ pub struct OverviewOut {
     pub commit: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr: Option<PrSummary>,
+    /// All open PRs for the current branch (includes `pr` when present).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_prs: Vec<PrSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pipeline: Option<PipelineSummary>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -127,49 +135,81 @@ pub struct OverviewOut {
 struct BranchStatus {
     repo: RepoSummary,
     head: Head,
-    pr_summary: Option<PrSummary>,
+    pr_summaries: Vec<PrSummary>,
     pipeline_summary: Option<PipelineSummary>,
     commit_statuses: Vec<BuildStatusSummary>,
 }
 
-/// Fetch the PR, pipeline, and commit statuses for the current branch.
+/// Fetch the PR(s), pipeline, and commit statuses for the current branch.
 /// This is the shared core of `run_inner()` and `run_overview()`.
 /// Returns both the status data and the API client for reuse.
+///
+/// `spinner` is optional so callers (overview) can own a longer-lived spinner.
 async fn fetch_branch_status(
     g: &GlobalArgs,
+    spinner: Option<&SpinnerGuard>,
 ) -> Result<(BranchStatus, crate::api::BitbucketClient)> {
     let repo_id = resolve_repo(g)?;
     let head = current_head()?;
     let client = client(g)?;
 
-    let (pr, pipeline, commit_statuses_page) = tokio::try_join!(
-        client.pr_for_branch(&repo_id.workspace, &repo_id.slug, &head.branch),
+    if let Some(s) = spinner {
+        s.set_message("Fetching branch status...");
+    }
+
+    let (prs, pipeline, commit_statuses_page) = tokio::try_join!(
+        client.prs_for_branch(&repo_id.workspace, &repo_id.slug, &head.branch),
         client.latest_pipeline(&repo_id.workspace, &repo_id.slug, Some(&head.branch)),
         client.commit_statuses(&repo_id.workspace, &repo_id.slug, &head.commit),
     )?;
 
-    let raw_steps = match &pipeline {
-        Some(p) => client
-            .list_steps(&repo_id.workspace, &repo_id.slug, &p.uuid)
-            .await
-            .map(|page| page.values)
-            .unwrap_or_default(),
-        None => Vec::new(),
-    };
+    if let Some(s) = spinner {
+        s.set_message("Fetching PR details & CI steps...");
+    }
 
-    let mut pr_summary = pr.as_ref().map(pr_summary);
-    if let Some(ref mut summary) = pr_summary {
-        let (diffstat, conflicts) = tokio::join!(
-            client.pr_diffstat(&repo_id.workspace, &repo_id.slug, summary.id),
-            client.pr_conflicts(&repo_id.workspace, &repo_id.slug, summary.id, 10),
-        );
-        if let Ok(stat) = diffstat {
-            let (added, removed) = parse_diffstat(&stat);
-            summary.lines_added = Some(added);
-            summary.lines_removed = Some(removed);
-        }
-        if let Ok(conflicts) = conflicts {
-            summary.conflicts = Some(!conflicts.is_empty());
+    // Steps are independent of diffstat/conflicts — fetch concurrently.
+    let (raw_steps, pr_extras) = tokio::join!(
+        async {
+            match &pipeline {
+                Some(p) => client
+                    .list_steps(&repo_id.workspace, &repo_id.slug, &p.uuid)
+                    .await
+                    .map(|page| page.values)
+                    .unwrap_or_default(),
+                None => Vec::new(),
+            }
+        },
+        async {
+            let futs = prs.iter().map(|p| {
+                let client = &client;
+                let workspace = &repo_id.workspace;
+                let slug = &repo_id.slug;
+                let id = p.id;
+                async move {
+                    let (diffstat, conflicts) = tokio::join!(
+                        client.pr_diffstat(workspace, slug, id),
+                        client.pr_conflicts(workspace, slug, id, 10),
+                    );
+                    (id, diffstat, conflicts)
+                }
+            });
+            futures::future::join_all(futs).await
+        },
+    );
+
+    let mut pr_summaries: Vec<PrSummary> = prs.iter().map(pr_summary).collect();
+    for summary in &mut pr_summaries {
+        if let Some((_, diffstat, conflicts)) =
+            pr_extras.iter().find(|(id, _, _)| *id == summary.id)
+        {
+            if let Ok(stat) = diffstat {
+                let (added, removed) = parse_diffstat(stat);
+                summary.lines_added = Some(added);
+                summary.lines_removed = Some(removed);
+            }
+            if let Ok(conflicts) = conflicts {
+                summary.conflicts = Some(!conflicts.is_empty());
+            }
         }
     }
 
@@ -193,7 +233,7 @@ async fn fetch_branch_status(
                 full_name: format!("{}/{}", repo_id.workspace, repo_id.slug),
             },
             head,
-            pr_summary,
+            pr_summaries,
             pipeline_summary,
             commit_statuses,
         },
@@ -202,6 +242,7 @@ async fn fetch_branch_status(
 }
 
 pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
+    use std::io::{self, IsTerminal};
     let theme = Theme::current();
     loop {
         // Run status and capture output
@@ -209,9 +250,9 @@ pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
         match result {
             Ok(out) => {
                 let human = render_human(&out);
-                // Clear screen only when colors/ANSI is enabled (i.e. we're on a TTY).
-                // When piped or --no-color, just print a separator instead.
-                if theme.colors_enabled() {
+                // Clear screen only when writing to a real TTY (not when piped,
+                // even if CLICOLOR_FORCE enables colors).
+                if io::stdout().is_terminal() {
                     eprint!("\x1B[H\x1B[J");
                 } else {
                     eprintln!("{}", theme.separator());
@@ -224,7 +265,7 @@ pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
                 fmt.print(&out, &human)?;
             }
             Err(e) => {
-                if theme.colors_enabled() {
+                if io::stdout().is_terminal() {
                     eprint!("\x1B[2J\x1B[H");
                 }
                 eprintln!("bbr: {e}");
@@ -256,40 +297,48 @@ pub async fn run_short(g: &GlobalArgs) -> Result<()> {
 }
 
 pub async fn run_overview(g: &GlobalArgs) -> Result<()> {
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
+    spinner.set_message("Fetching overview...");
+
     let (
         BranchStatus {
             repo,
             head,
-            pr_summary,
+            pr_summaries,
             pipeline_summary,
             commit_statuses,
         },
         api_client,
-    ) = fetch_branch_status(g).await?;
+    ) = fetch_branch_status(g, Some(&spinner)).await?;
 
-    // Fetch additional overview data (recent PRs + pipelines) concurrently.
+    spinner.set_message("Fetching recent PRs & CI...");
+
     let (recent_prs, recent_ci) = tokio::try_join!(
         api_client.list_prs(
             &repo.workspace,
             &repo.slug,
             PrState::Open,
-            5,
+            25,
             None,
             None,
             None,
             None,
             None
         ),
-        api_client.list_pipelines(&repo.workspace, &repo.slug, None, 5),
+        api_client.list_pipelines(&repo.workspace, &repo.slug, None, 10),
     )?;
 
-    let suggested = suggested_commands(&pr_summary, &pipeline_summary);
+    spinner.finish();
+
+    let pr = pr_summaries.first().cloned();
+    let suggested = suggested_commands(&pr, &pipeline_summary);
 
     let out = OverviewOut {
         repo,
         branch: head.branch.clone(),
         commit: head.commit.clone(),
-        pr: pr_summary,
+        pr,
+        open_prs: pr_summaries,
         pipeline: pipeline_summary,
         commit_statuses,
         recent_prs: recent_prs
@@ -322,24 +371,31 @@ pub async fn run_overview(g: &GlobalArgs) -> Result<()> {
 }
 
 pub async fn run_inner(g: &GlobalArgs) -> Result<StatusOut> {
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
+    spinner.set_message("Fetching status...");
+
     let (
         BranchStatus {
             repo,
             head,
-            pr_summary,
+            pr_summaries,
             pipeline_summary,
             commit_statuses,
         },
         _client,
-    ) = fetch_branch_status(g).await?;
+    ) = fetch_branch_status(g, Some(&spinner)).await?;
 
-    let suggested_commands = suggested_commands(&pr_summary, &pipeline_summary);
+    spinner.finish();
+
+    let pr = pr_summaries.first().cloned();
+    let suggested_commands = suggested_commands(&pr, &pipeline_summary);
 
     Ok(StatusOut {
         repo,
         branch: head.branch.clone(),
         commit: head.commit.clone(),
-        pr: pr_summary,
+        pr,
+        open_prs: pr_summaries,
         pipeline: pipeline_summary,
         commit_statuses,
         suggested_commands,
@@ -423,13 +479,13 @@ fn pr_summary(pr: &PullRequest) -> PrSummary {
 }
 
 fn reviewers(pr: &PullRequest) -> Vec<ReviewerSummary> {
-    let source = if pr.reviewers.is_empty() {
+    let source = if !pr.reviewers.is_empty() {
+        pr.reviewers.iter().collect::<Vec<_>>()
+    } else {
         pr.participants
             .iter()
             .filter(|p| p.role.eq_ignore_ascii_case("REVIEWER"))
             .collect::<Vec<_>>()
-    } else {
-        pr.reviewers.iter().collect::<Vec<_>>()
     };
     source.into_iter().map(reviewer_summary).collect()
 }
@@ -444,7 +500,7 @@ fn reviewer_summary(p: &Participant) -> ReviewerSummary {
         } else {
             p.display_name.clone()
         },
-        approved: p.approved,
+        approved: p.is_approved(),
         state: p.state.clone(),
     }
 }
@@ -486,10 +542,11 @@ fn suggested_commands(pr: &Option<PrSummary>, pipeline: &Option<PipelineSummary>
             } else {
                 let has_approvals =
                     !p.reviewers.is_empty() && p.reviewers.iter().any(|r| r.approved);
-                let has_changes_requested = p
-                    .reviewers
-                    .iter()
-                    .any(|r| r.state.as_deref() == Some("changes_requested"));
+                let has_changes_requested = p.reviewers.iter().any(|r| {
+                    r.state
+                        .as_deref()
+                        .is_some_and(|s| s.eq_ignore_ascii_case("changes_requested"))
+                });
 
                 let ci_failed = match pipeline {
                     Some(pl) => {
@@ -602,139 +659,143 @@ fn render_short(out: &StatusOut) -> String {
 fn render_pr_section(
     s: &mut String,
     theme: &Theme,
-    pr: &Option<PrSummary>,
+    open_prs: &[PrSummary],
     pipeline: &Option<PipelineSummary>,
 ) {
-    match pr {
-        Some(pr) => {
-            let rel_time = pr
-                .created_on
-                .as_ref()
-                .map(|t| relative_time(t))
-                .unwrap_or_default();
-            let rel_str = if rel_time.is_empty() {
-                String::new()
-            } else {
-                format!(" ({})", rel_time)
-            };
-            let diffstat_str = match (pr.lines_added, pr.lines_removed) {
-                (Some(a), Some(r)) => {
-                    let a_str = format!("+{a}");
-                    let r_str = format!("-{r}");
-                    let plus = theme.success(&a_str);
-                    let minus = theme.error(&r_str);
-                    format!(" ({plus}, {minus})")
-                }
-                _ => String::new(),
-            };
-            s.push_str(&format!(
-                "\n{} PR #{} — {}{}{}\n",
-                theme.bullet(),
-                pr.id,
-                pr.state.to_lowercase(),
-                diffstat_str,
-                rel_str
-            ));
-            s.push_str(&format!("{}\n", theme.separator()));
-            s.push_str(&format!(
-                "  {} {} → {}\n",
-                theme.label("Branches:"),
-                pr.source,
-                pr.destination
-            ));
-            s.push_str(&format!("  {}{}\n", theme.label("Title:"), pr.title));
-            if let Some(desc) = &pr.description {
-                let first_line = desc.lines().next().unwrap_or("").trim();
-                if !first_line.is_empty() {
-                    s.push_str(&format!(
-                        "  {}{}\n",
-                        theme.label("Description:"),
-                        truncate(first_line, 80)
-                    ));
-                }
-            }
-            if let Some(a) = &pr.author {
-                s.push_str(&format!("  {}{a}\n", theme.label("Author:")));
-            }
-            if !pr.reviewers.is_empty() {
-                let reviewers = pr
-                    .reviewers
-                    .iter()
-                    .map(|r| {
-                        let status = if r.approved {
-                            if theme.unicode_enabled() {
-                                " ✅"
-                            } else {
-                                " (approved)"
-                            }
-                        } else if r.state.as_deref() == Some("changes_requested") {
-                            if theme.unicode_enabled() {
-                                " ❌"
-                            } else {
-                                " (changes requested)"
-                            }
-                        } else {
-                            if theme.unicode_enabled() {
-                                " ⏳"
-                            } else {
-                                " (pending)"
-                            }
-                        };
-                        format!("{}{}", r.display_name, status)
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                s.push_str(&format!("  {}{reviewers}\n", theme.label("Reviewers:")));
-            }
-            s.push_str(&format!(
-                "  {} {}  |  {} {}\n",
-                theme.label("Comments:"),
-                pr.comment_count,
-                theme.label("Tasks:"),
-                pr.task_count
-            ));
-
-            let approved = pr.reviewers.iter().filter(|r| r.approved).count();
-            let total = pr.reviewers.len();
-            let approvals_str = format!("{approved}/{total} approvals");
-            let approvals_colored = if approved == total && total > 0 {
-                theme.success(&approvals_str).into_owned()
-            } else {
-                approvals_str
-            };
-
-            let ci_colored = match pipeline {
-                Some(p) => match p.state.to_ascii_uppercase().as_str() {
-                    "SUCCESSFUL" => theme.success("passing").into_owned(),
-                    "FAILED" => theme.error("failed").into_owned(),
-                    "INPROGRESS" | "RUNNING" => theme.warn("running").into_owned(),
-                    _ => "unknown".to_string(),
-                },
-                None => "none".to_string(),
-            };
-
-            let conflict_colored = match pr.conflicts {
-                Some(true) => theme.error("Conflicts detected").into_owned(),
-                Some(false) => theme.success("No conflicts").into_owned(),
-                None => "No conflicts".to_string(),
-            };
-
-            s.push_str(&format!(
-                "  {} {}  |  CI: {}  |  {}\n",
-                theme.label("Merge:"),
-                approvals_colored,
-                ci_colored,
-                conflict_colored
-            ));
-
-            if let Some(u) = &pr.url {
-                s.push_str(&format!("  {}{u}\n", theme.label("URL:")));
-            }
-        }
-        None => s.push_str(&format!(
+    if open_prs.is_empty() {
+        s.push_str(&format!(
             "\n  {} PR: none\n",
             theme.dim("(no open PR for this branch)")
-        )),
+        ));
+        return;
+    }
+
+    for pr in open_prs {
+        let rel_time = pr
+            .created_on
+            .as_ref()
+            .map(|t| relative_time(t))
+            .unwrap_or_default();
+        let rel_str = if rel_time.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", rel_time)
+        };
+        let diffstat_str = match (pr.lines_added, pr.lines_removed) {
+            (Some(a), Some(r)) => {
+                let a_str = format!("+{a}");
+                let r_str = format!("-{r}");
+                let plus = theme.success(&a_str);
+                let minus = theme.error(&r_str);
+                format!(" ({plus}, {minus})")
+            }
+            _ => String::new(),
+        };
+        s.push_str(&format!(
+            "\n{} PR #{} — {}{}{}\n",
+            theme.bullet(),
+            pr.id,
+            pr.state.to_lowercase(),
+            diffstat_str,
+            rel_str
+        ));
+        s.push_str(&format!("{}\n", theme.separator()));
+        s.push_str(&format!(
+            "  {} {} → {}\n",
+            theme.label("Branches:"),
+            pr.source,
+            pr.destination
+        ));
+        s.push_str(&format!("  {}{}\n", theme.label("Title:"), pr.title));
+        if let Some(desc) = &pr.description {
+            let first_line = desc.lines().next().unwrap_or("").trim();
+            if !first_line.is_empty() {
+                s.push_str(&format!(
+                    "  {}{}\n",
+                    theme.label("Description:"),
+                    truncate(first_line, 80)
+                ));
+            }
+        }
+        if let Some(a) = &pr.author {
+            s.push_str(&format!("  {}{a}\n", theme.label("Author:")));
+        }
+        if !pr.reviewers.is_empty() {
+            let reviewers = pr
+                .reviewers
+                .iter()
+                .map(|r| {
+                    let status = if r.approved {
+                        if theme.unicode_enabled() {
+                            " ✅"
+                        } else {
+                            " (approved)"
+                        }
+                    } else if r
+                        .state
+                        .as_deref()
+                        .is_some_and(|st| st.eq_ignore_ascii_case("changes_requested"))
+                    {
+                        if theme.unicode_enabled() {
+                            " ❌"
+                        } else {
+                            " (changes requested)"
+                        }
+                    } else if theme.unicode_enabled() {
+                        " ⏳"
+                    } else {
+                        " (pending)"
+                    };
+                    format!("{}{}", r.display_name, status)
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            s.push_str(&format!("  {}{reviewers}\n", theme.label("Reviewers:")));
+        }
+        s.push_str(&format!(
+            "  {} {}  |  {} {}\n",
+            theme.label("Comments:"),
+            pr.comment_count,
+            theme.label("Tasks:"),
+            pr.task_count
+        ));
+
+        let approved = pr.reviewers.iter().filter(|r| r.approved).count();
+        let total = pr.reviewers.len();
+        let approvals_str = format!("{approved}/{total} approvals");
+        let approvals_colored = if approved == total && total > 0 {
+            theme.success(&approvals_str).into_owned()
+        } else {
+            approvals_str
+        };
+
+        let ci_colored = match pipeline {
+            Some(p) => match p.state.to_ascii_uppercase().as_str() {
+                "SUCCESSFUL" => theme.success("passing").into_owned(),
+                "FAILED" => theme.error("failed").into_owned(),
+                "INPROGRESS" | "RUNNING" => theme.warn("running").into_owned(),
+                _ => "unknown".to_string(),
+            },
+            None => "none".to_string(),
+        };
+
+        let conflict_colored = match pr.conflicts {
+            Some(true) => theme.error("Conflicts detected").into_owned(),
+            Some(false) => theme.success("No conflicts").into_owned(),
+            None => "No conflicts".to_string(),
+        };
+
+        s.push_str(&format!(
+            "  {} {}  |  CI: {}  |  {}\n",
+            theme.label("Merge:"),
+            approvals_colored,
+            ci_colored,
+            conflict_colored
+        ));
+
+        if let Some(u) = &pr.url {
+            s.push_str(&format!("  {}{u}\n", theme.label("URL:")));
+        }
     }
 }
 
@@ -825,7 +886,7 @@ fn render_human(out: &StatusOut) -> String {
     ));
     s.push_str(&format!("{} {}\n", theme.label("Commit:"), out.commit));
 
-    render_pr_section(&mut s, theme, &out.pr, &out.pipeline);
+    render_pr_section(&mut s, theme, &out.open_prs, &out.pipeline);
     render_pipeline_section(&mut s, theme, &out.pipeline);
     render_build_statuses(&mut s, theme, &out.commit_statuses);
     render_suggested_commands(&mut s, theme, &out.suggested_commands);
@@ -844,7 +905,7 @@ fn render_overview_human(out: &OverviewOut) -> String {
     ));
     s.push_str(&format!("{}\n", theme.separator()));
 
-    render_pr_section(&mut s, theme, &out.pr, &out.pipeline);
+    render_pr_section(&mut s, theme, &out.open_prs, &out.pipeline);
     render_pipeline_section(&mut s, theme, &out.pipeline);
 
     if !out.recent_prs.is_empty() {
@@ -927,6 +988,23 @@ mod tests {
                 description: None,
                 conflicts: None,
             }),
+            open_prs: vec![PrSummary {
+                id: 42,
+                state: "OPEN".into(),
+                title: "Add stuff".into(),
+                source: "feat".into(),
+                destination: "main".into(),
+                url: Some("https://...".into()),
+                author: Some("Alice".into()),
+                comment_count: 3,
+                task_count: 1,
+                reviewers: vec![],
+                lines_added: None,
+                lines_removed: None,
+                created_on: None,
+                description: None,
+                conflicts: None,
+            }],
             pipeline: Some(PipelineSummary {
                 uuid: "p-1".into(),
                 state: "SUCCESSFUL".into(),
@@ -966,6 +1044,7 @@ mod tests {
             branch: "main".into(),
             commit: "abc".into(),
             pr: None,
+            open_prs: vec![],
             pipeline: None,
             commit_statuses: vec![],
             suggested_commands: vec![],
@@ -1375,6 +1454,23 @@ mod tests {
                 description: None,
                 conflicts: None,
             }),
+            open_prs: vec![PrSummary {
+                id: 1,
+                state: "OPEN".into(),
+                title: "fix".into(),
+                source: "f".into(),
+                destination: "m".into(),
+                url: None,
+                author: None,
+                comment_count: 0,
+                task_count: 0,
+                reviewers: vec![],
+                lines_added: None,
+                lines_removed: None,
+                created_on: None,
+                description: None,
+                conflicts: None,
+            }],
             pipeline: Some(PipelineSummary {
                 uuid: "p".into(),
                 state: "SUCCESSFUL".into(),
@@ -1404,6 +1500,7 @@ mod tests {
             branch: "main".into(),
             commit: "abc".into(),
             pr: None,
+            open_prs: vec![],
             pipeline: None,
             commit_statuses: vec![],
             suggested_commands: vec![],
@@ -1424,6 +1521,7 @@ mod tests {
             branch: "b".into(),
             commit: "c".into(),
             pr: None,
+            open_prs: vec![],
             pipeline: None,
             commit_statuses: vec![BuildStatusSummary {
                 state: "SUCCESSFUL".into(),

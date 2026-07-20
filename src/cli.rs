@@ -606,6 +606,9 @@ pub enum CiAction {
         branch: Option<String>,
         #[arg(long, help = "max results to return", default_value_t = 10)]
         limit: u32,
+        /// Skip fetching per-pipeline steps (faster listing).
+        #[arg(long)]
+        no_steps: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },
