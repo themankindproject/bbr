@@ -9,7 +9,7 @@ use crate::cli::GlobalArgs;
 use crate::commands::{
     client, current_head, human_duration, make_spinner, resolve_repo, truncate, SpinnerGuard,
 };
-use crate::error::Result;
+use crate::error::{BitbucketError, Result};
 use crate::git::Head;
 use crate::output::table::Table;
 use crate::output::theme::Theme;
@@ -160,7 +160,16 @@ async fn fetch_branch_status(
     let (prs, pipeline, commit_statuses_page) = tokio::try_join!(
         client.prs_for_branch(&repo_id.workspace, &repo_id.slug, &head.branch),
         client.latest_pipeline(&repo_id.workspace, &repo_id.slug, Some(&head.branch)),
-        client.commit_statuses(&repo_id.workspace, &repo_id.slug, &head.commit),
+        async {
+            match client
+                .commit_statuses(&repo_id.workspace, &repo_id.slug, &head.commit)
+                .await
+            {
+                // Local HEAD may not exist on Bitbucket yet (unpushed / rewritten).
+                Err(BitbucketError::NotFound(_)) => Ok(crate::api::Paginated::default()),
+                other => other,
+            }
+        },
     )?;
 
     if let Some(s) = spinner {

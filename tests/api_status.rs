@@ -18,6 +18,51 @@ async fn client(base: &str) -> BitbucketClient {
 const AUTH_BASIC: &str = "Basic dUBleGFtcGxlLmNvbTp0b2s=";
 
 #[tokio::test]
+async fn lists_commit_statuses() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/sdadev/bvrm/commit/abc123/statuses"))
+        .and(header("authorization", AUTH_BASIC))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1,
+            "pagelen": 100,
+            "values": [{
+                "state": "SUCCESSFUL",
+                "key": "lint",
+                "name": "Lint",
+                "url": "https://ci.example/lint"
+            }]
+        })))
+        .mount(&server)
+        .await;
+
+    let c = client(&server.uri()).await;
+    let page = c.commit_statuses("sdadev", "bvrm", "abc123").await.unwrap();
+    assert_eq!(page.values.len(), 1);
+    assert_eq!(page.values[0].key, "lint");
+}
+
+#[tokio::test]
+async fn commit_statuses_not_found_returns_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/sdadev/bvrm/commit/deadbeef/statuses"))
+        .respond_with(ResponseTemplate::new(404).set_body_json(json!({
+            "type": "error",
+            "error": { "message": "Commit not found" }
+        })))
+        .mount(&server)
+        .await;
+
+    let c = client(&server.uri()).await;
+    let err = c
+        .commit_statuses("sdadev", "bvrm", "deadbeef")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, bbr::error::BitbucketError::NotFound(_)));
+}
+
+#[tokio::test]
 async fn creates_commit_build_status() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

@@ -49,6 +49,19 @@ pub struct Paginated<T> {
     pub values: Vec<T>,
 }
 
+impl<T> Default for Paginated<T> {
+    fn default() -> Self {
+        Self {
+            size: 0,
+            page: 0,
+            pagelen: 0,
+            next: None,
+            previous: None,
+            values: Vec::new(),
+        }
+    }
+}
+
 /// Bitbucket Cloud REST API v2 wrapper.
 #[derive(Clone)]
 pub struct BitbucketClient {
