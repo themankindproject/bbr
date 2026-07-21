@@ -1182,8 +1182,6 @@ fn render_side_by_side_row(
     path: &str,
     out: &mut String,
 ) {
-    let _ = path; // reserved for per-row syntect (stateless) in colored solid paths
-
     let left_lineno = format_lineno(del.and_then(|l| l.old_lineno), lineno_width);
     let right_lineno = format_lineno(add.and_then(|l| l.new_lineno), lineno_width);
 
@@ -1196,6 +1194,22 @@ fn render_side_by_side_row(
         "\u{23ce}"
     } else {
         "<CR>"
+    };
+
+    let paint = |text: &str, fallback_fg: Option<&str>| -> (String, usize) {
+        if text.is_empty() {
+            return (String::new(), 0);
+        }
+        let w = text.width();
+        if options.syntax_highlight {
+            let spans = crate::diff::syntax::highlight_line(path, text);
+            let spans: Vec<_> = spans.iter().map(|(s, t)| (*s, t.clone())).collect();
+            (crate::diff::syntax::spans_to_ansi(&spans), w)
+        } else if let Some(fg) = fallback_fg {
+            (format!("\x1b[{fg}m{text}\x1b[0m"), w)
+        } else {
+            (text.to_string(), w)
+        }
     };
 
     if theme.colors_enabled() {
@@ -1218,8 +1232,9 @@ fn render_side_by_side_row(
                     col.push_str(&format!("\x1b[2m{}\x1b[0m", empty_marker));
                     left_w = empty_marker.width();
                 } else if sim < crate::diff::word_diff::WORD_DIFF_THRESHOLD {
-                    col.push_str(&format!("\x1b[31m{}\x1b[0m", left_visible));
-                    left_w = left_visible.width();
+                    let (painted, w) = paint(&left_visible, Some("31"));
+                    col.push_str(&painted);
+                    left_w = w;
                 } else {
                     let segments =
                         crate::diff::word_diff::word_changes(&left_visible, &right_visible);
@@ -1250,10 +1265,10 @@ fn render_side_by_side_row(
                     let left_visible =
                         truncate_code_raw(expand_tabs(&l.content).as_ref(), code_width);
                     let left_w = left_visible.width();
-                    let col = if l.kind == DiffLineKind::Context {
-                        left_visible.clone()
+                    let (col, _) = if l.kind == DiffLineKind::Context {
+                        paint(&left_visible, None)
                     } else {
-                        format!("\x1b[31m{}\x1b[0m", left_visible)
+                        paint(&left_visible, Some("31"))
                     };
                     let pad = code_width.saturating_sub(left_w);
                     format!("{}{}", col, " ".repeat(pad))
@@ -1276,8 +1291,9 @@ fn render_side_by_side_row(
                     col.push_str(&format!("\x1b[2m{}\x1b[0m", empty_marker));
                     right_w = empty_marker.width();
                 } else if sim < crate::diff::word_diff::WORD_DIFF_THRESHOLD {
-                    col.push_str(&format!("\x1b[32m{}\x1b[0m", right_visible));
-                    right_w = right_visible.width();
+                    let (painted, w) = paint(&right_visible, Some("32"));
+                    col.push_str(&painted);
+                    right_w = w;
                 } else {
                     let segments =
                         crate::diff::word_diff::word_changes(&left_visible, &right_visible);
@@ -1308,10 +1324,10 @@ fn render_side_by_side_row(
                     let right_visible =
                         truncate_code_raw(expand_tabs(&r.content).as_ref(), code_width);
                     let right_w = right_visible.width();
-                    let col = if r.kind == DiffLineKind::Context {
-                        right_visible.clone()
+                    let (col, _) = if r.kind == DiffLineKind::Context {
+                        paint(&right_visible, None)
                     } else {
-                        format!("\x1b[32m{}\x1b[0m", right_visible)
+                        paint(&right_visible, Some("32"))
                     };
                     let pad = code_width.saturating_sub(right_w);
                     format!("{}{}", col, " ".repeat(pad))
