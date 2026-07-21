@@ -18,8 +18,6 @@ pub struct DiffRenderOptions {
     pub context_lines: usize,
     /// Render mode (unified or side-by-side).
     pub mode: RenderMode,
-    /// Whether to apply syntax highlighting (deferred — currently a no-op).
-    pub syntax_highlight: bool,
 }
 
 impl Default for DiffRenderOptions {
@@ -27,7 +25,6 @@ impl Default for DiffRenderOptions {
         DiffRenderOptions {
             context_lines: 3,
             mode: RenderMode::Unified,
-            syntax_highlight: false,
         }
     }
 }
@@ -127,11 +124,68 @@ fn render_file_index(files: &[DiffFile], theme: &Theme, out: &mut String) {
 fn render_file(file: &DiffFile, options: &DiffRenderOptions, theme: &Theme, out: &mut String) {
     render_file_header(file, theme, out);
 
+    if file.binary {
+        let msg = "  (binary file changed)";
+        if theme.colors_enabled() {
+            out.push_str(&format!("\x1b[2m{}\x1b[0m\n", msg));
+        } else {
+            out.push_str(msg);
+            out.push('\n');
+        }
+        return;
+    }
+
     if !file.hunks.is_empty() {
+        let lineno_width = lineno_width_for_file(file);
         for hunk in &file.hunks {
-            render_hunk(hunk, options, theme, out);
+            render_hunk(hunk, options, theme, lineno_width, out);
         }
     }
+}
+
+/// Digits needed to display the largest line number in this file (min 1).
+fn lineno_width_for_file(file: &DiffFile) -> usize {
+    let mut max = 1u32;
+    for hunk in &file.hunks {
+        if hunk.old_lines > 0 {
+            max = max.max(
+                hunk.old_start
+                    .saturating_add(hunk.old_lines.saturating_sub(1)),
+            );
+        } else {
+            max = max.max(hunk.old_start);
+        }
+        if hunk.new_lines > 0 {
+            max = max.max(
+                hunk.new_start
+                    .saturating_add(hunk.new_lines.saturating_sub(1)),
+            );
+        } else {
+            max = max.max(hunk.new_start);
+        }
+        for line in &hunk.lines {
+            if let Some(n) = line.old_lineno {
+                max = max.max(n);
+            }
+            if let Some(n) = line.new_lineno {
+                max = max.max(n);
+            }
+        }
+    }
+    max.to_string().len().max(1)
+}
+
+fn format_lineno(n: Option<u32>, width: usize) -> String {
+    match n {
+        Some(n) => format!("{:>width$}", n, width = width),
+        None => " ".repeat(width),
+    }
+}
+
+/// Visible width of the unified-mode prefix: ` {old} {new} {sign} {sep} `
+fn unified_prefix_width(lineno_width: usize) -> usize {
+    // space + old + space + new + space + sign + space + sep + space
+    1 + lineno_width + 1 + lineno_width + 1 + 1 + 1 + 1 + 1
 }
 
 // ---------------------------------------------------------------------------
@@ -289,7 +343,13 @@ fn build_stats_bar(additions: u32, deletions: u32, bar_width: usize, theme: &The
 // ---------------------------------------------------------------------------
 
 /// Render a single hunk.
-fn render_hunk(hunk: &DiffHunk, options: &DiffRenderOptions, theme: &Theme, out: &mut String) {
+fn render_hunk(
+    hunk: &DiffHunk,
+    options: &DiffRenderOptions,
+    theme: &Theme,
+    lineno_width: usize,
+    out: &mut String,
+) {
     // Hunk header (dimmed)
     if theme.colors_enabled() {
         out.push_str(&format!(
@@ -304,9 +364,9 @@ fn render_hunk(hunk: &DiffHunk, options: &DiffRenderOptions, theme: &Theme, out:
     };
 
     if options.mode == RenderMode::SideBySide {
-        render_hunk_side_by_side(hunk, options, theme, out);
+        render_hunk_side_by_side(hunk, options, theme, lineno_width, out);
     } else {
-        render_hunk_unified(hunk, options, theme, out);
+        render_hunk_unified(hunk, options, theme, lineno_width, out);
     }
 }
 
@@ -318,6 +378,7 @@ fn render_hunk_unified(
     hunk: &DiffHunk,
     options: &DiffRenderOptions,
     theme: &Theme,
+    lineno_width: usize,
     out: &mut String,
 ) {
     let ranges = find_change_ranges(&hunk.lines, options.context_lines);
@@ -354,17 +415,17 @@ fn render_hunk_unified(
                     // Output deletion line j (paired with addition j for word-diff)
                     if let Some(del) = deletions.get(j) {
                         let pair = additions.get(j).copied();
-                        render_paired_line(del, pair, theme, out);
+                        render_paired_line(del, pair, theme, lineno_width, out);
                     }
                     // Output addition line j (paired with deletion j for word-diff)
                     if let Some(add) = additions.get(j) {
                         let pair = deletions.get(j).copied();
-                        render_paired_line(add, pair, theme, out);
+                        render_paired_line(add, pair, theme, lineno_width, out);
                     }
                 }
             } else {
                 // Context line
-                render_line(&hunk.lines[i], theme, out);
+                render_line(&hunk.lines[i], theme, lineno_width, out);
                 i += 1;
             }
         }
@@ -375,17 +436,17 @@ fn render_hunk_unified(
 // Paired line rendering (#1 bg tinting, #2 sign column, #5 threshold, #8 empty marker)
 // ---------------------------------------------------------------------------
 
-fn render_paired_line(line: &DiffLine, pair: Option<&DiffLine>, theme: &Theme, out: &mut String) {
+fn render_paired_line(
+    line: &DiffLine,
+    pair: Option<&DiffLine>,
+    theme: &Theme,
+    lineno_width: usize,
+    out: &mut String,
+) {
     let term_width = cached_term_width();
 
-    let old = line
-        .old_lineno
-        .map(|n| format!("{:>4}", n))
-        .unwrap_or_else(|| "    ".to_string());
-    let new = line
-        .new_lineno
-        .map(|n| format!("{:>4}", n))
-        .unwrap_or_else(|| "    ".to_string());
+    let old = format_lineno(line.old_lineno, lineno_width);
+    let new = format_lineno(line.new_lineno, lineno_width);
 
     let sep = if theme.unicode_enabled() {
         "\u{2502}"
@@ -440,8 +501,7 @@ fn render_paired_line(line: &DiffLine, pair: Option<&DiffLine>, theme: &Theme, o
                     format!("\x1b[32m{}\x1b[0m", line.content)
                 };
 
-                // Calculate visible width of prefix: " {old} {new} {sign} {sep} "
-                let prefix_visible_width = 1 + 4 + 1 + 4 + 1 + 1 + 1 + 1 + 1; // " XXXX XXXX + │ "
+                let prefix_visible_width = unified_prefix_width(lineno_width);
                 let content_visible_width = if line.content.is_empty() {
                     empty_marker.width()
                 } else {
@@ -510,7 +570,7 @@ fn render_paired_line(line: &DiffLine, pair: Option<&DiffLine>, theme: &Theme, o
                     format!("\x1b[31m{}\x1b[0m", line.content)
                 };
 
-                let prefix_visible_width = 1 + 4 + 1 + 4 + 1 + 1 + 1 + 1 + 1;
+                let prefix_visible_width = unified_prefix_width(lineno_width);
                 let content_visible_width = if line.content.is_empty() {
                     empty_marker.width()
                 } else {
@@ -541,7 +601,7 @@ fn render_paired_line(line: &DiffLine, pair: Option<&DiffLine>, theme: &Theme, o
             }
         }
         DiffLineKind::Context => {
-            render_line(line, theme, out);
+            render_line(line, theme, lineno_width, out);
         }
     }
 }
@@ -551,17 +611,11 @@ fn render_paired_line(line: &DiffLine, pair: Option<&DiffLine>, theme: &Theme, o
 // ---------------------------------------------------------------------------
 
 /// Render a single context/addition/deletion line.
-fn render_line(line: &DiffLine, theme: &Theme, out: &mut String) {
+fn render_line(line: &DiffLine, theme: &Theme, lineno_width: usize, out: &mut String) {
     let term_width = cached_term_width();
 
-    let old = line
-        .old_lineno
-        .map(|n| format!("{:>4}", n))
-        .unwrap_or_else(|| "    ".to_string());
-    let new = line
-        .new_lineno
-        .map(|n| format!("{:>4}", n))
-        .unwrap_or_else(|| "    ".to_string());
+    let old = format_lineno(line.old_lineno, lineno_width);
+    let new = format_lineno(line.new_lineno, lineno_width);
 
     let sep = if theme.unicode_enabled() {
         "\u{2502}"
@@ -601,7 +655,7 @@ fn render_line(line: &DiffLine, theme: &Theme, out: &mut String) {
                 } else {
                     format!("\x1b[32m{}\x1b[0m", line.content)
                 };
-                let prefix_visible_width = 1 + 4 + 1 + 4 + 1 + 1 + 1 + 1 + 1;
+                let prefix_visible_width = unified_prefix_width(lineno_width);
                 let content_visible_width = if line.content.is_empty() {
                     empty_marker.width()
                 } else {
@@ -642,7 +696,7 @@ fn render_line(line: &DiffLine, theme: &Theme, out: &mut String) {
                 } else {
                     format!("\x1b[31m{}\x1b[0m", line.content)
                 };
-                let prefix_visible_width = 1 + 4 + 1 + 4 + 1 + 1 + 1 + 1 + 1;
+                let prefix_visible_width = unified_prefix_width(lineno_width);
                 let content_visible_width = if line.content.is_empty() {
                     empty_marker.width()
                 } else {
@@ -682,12 +736,14 @@ fn render_hunk_side_by_side(
     hunk: &DiffHunk,
     options: &DiffRenderOptions,
     theme: &Theme,
+    lineno_width: usize,
     out: &mut String,
 ) {
     let width = cached_term_width();
-    // Reserved: left_edge(2) + left_lineno(4) + sep(3) + middle_sep(3) + right_lineno(4) + sep(3) + right_edge(0)
-    // Total overhead: 2 + 4 + 3 + 3 + 4 + 3 = 19
-    let code_width = width.saturating_sub(19) / 2;
+    // Reserved: left_edge(1) + left_lineno(w) + sep(3) + middle_sep(3) + right_lineno(w) + sep(3)
+    // Total overhead: 1 + w + 3 + 3 + w + 3 = 2*w + 10
+    let overhead = lineno_width * 2 + 10;
+    let code_width = width.saturating_sub(overhead) / 2;
 
     let ranges = find_change_ranges(&hunk.lines, options.context_lines);
 
@@ -724,11 +780,18 @@ fn render_hunk_side_by_side(
                 for j in 0..max_len {
                     let del = deletions.get(j).copied();
                     let add = additions.get(j).copied();
-                    render_side_by_side_row(del, add, code_width, theme, out);
+                    render_side_by_side_row(del, add, code_width, lineno_width, theme, out);
                 }
             } else {
                 let line = &hunk.lines[i];
-                render_side_by_side_row(Some(line), Some(line), code_width, theme, out);
+                render_side_by_side_row(
+                    Some(line),
+                    Some(line),
+                    code_width,
+                    lineno_width,
+                    theme,
+                    out,
+                );
                 i += 1;
             }
         }
@@ -739,18 +802,12 @@ fn render_side_by_side_row(
     del: Option<&DiffLine>,
     add: Option<&DiffLine>,
     code_width: usize,
+    lineno_width: usize,
     theme: &Theme,
     out: &mut String,
 ) {
-    let left_lineno = del
-        .and_then(|l| l.old_lineno)
-        .map(|n| format!("{:>4}", n))
-        .unwrap_or_else(|| "    ".to_string());
-
-    let right_lineno = add
-        .and_then(|l| l.new_lineno)
-        .map(|n| format!("{:>4}", n))
-        .unwrap_or_else(|| "    ".to_string());
+    let left_lineno = format_lineno(del.and_then(|l| l.old_lineno), lineno_width);
+    let right_lineno = format_lineno(add.and_then(|l| l.new_lineno), lineno_width);
 
     let pipe = if theme.unicode_enabled() {
         "\u{2502}"
@@ -1326,7 +1383,6 @@ diff --git a/a.rs b/a.rs
         let options = DiffRenderOptions {
             context_lines: 3,
             mode: RenderMode::SideBySide,
-            syntax_highlight: false,
         };
         let result = render(&files, &options, &test_theme());
         assert!(result.contains("a.rs"));
@@ -1571,7 +1627,6 @@ diff --git a/a.rs b/a.rs
         let options = DiffRenderOptions {
             context_lines: 3,
             mode: RenderMode::SideBySide,
-            syntax_highlight: false,
         };
 
         // Plain mode: should have | at left edge
@@ -1589,5 +1644,57 @@ diff --git a/a.rs b/a.rs
                 line
             );
         }
+    }
+
+    #[test]
+    fn test_render_binary_file_message() {
+        let diff = "\
+diff --git a/logo.png b/logo.png
+new file mode 100644
+index 0000000..abc1234
+Binary files /dev/null and b/logo.png differ
+";
+        let files = parse(diff);
+        assert!(files[0].binary);
+        let result = render(&files, &DiffRenderOptions::default(), &test_theme());
+        assert!(
+            result.contains("binary file changed"),
+            "binary files should show an explicit message, got:\n{result}"
+        );
+    }
+
+    #[test]
+    fn test_lineno_width_grows_for_large_line_numbers() {
+        let diff = "\
+diff --git a/big.rs b/big.rs
+--- a/big.rs
++++ b/big.rs
+@@ -9998,3 +9998,3 @@
+ context
+-old
++new
+";
+        let files = parse(diff);
+        // 9998 + 2 context lines → line 10000 → 5 digits
+        assert_eq!(lineno_width_for_file(&files[0]), 5);
+        let result = render(&files, &DiffRenderOptions::default(), &test_theme());
+        assert!(
+            result.contains("9998") || result.contains("9999") || result.contains("10000"),
+            "large line numbers should render fully, got:\n{result}"
+        );
+    }
+
+    #[test]
+    fn test_lineno_width_for_small_files_is_compact() {
+        let diff = "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1,1 +1,1 @@
+-foo
++bar
+";
+        let files = parse(diff);
+        assert_eq!(lineno_width_for_file(&files[0]), 1);
     }
 }

@@ -710,14 +710,14 @@ pub async fn update(
 
 pub async fn diff(
     g: &GlobalArgs,
-    id: u64,
+    id: Option<u64>,
     raw: bool,
     side_by_side: bool,
     context: usize,
-    no_syntax: bool,
 ) -> Result<()> {
     let repo = resolve_repo(g)?;
     let client = client(g)?;
+    let id = resolve_pr_id(&client, &repo.workspace, &repo.slug, id).await?;
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching diff...");
@@ -753,7 +753,6 @@ pub async fn diff(
             } else {
                 crate::diff::RenderMode::Unified
             },
-            syntax_highlight: !no_syntax,
         };
         let rendered = crate::diff::renderer::render(&files, &options, theme);
 
@@ -780,11 +779,7 @@ pub async fn diffstat(g: &GlobalArgs, id: Option<u64>) -> Result<()> {
     spinner.finish();
 
     let fmt = Formatter::from_json_flag(g.json);
-    let human = format!(
-        "Diffstat for PR #{}\n{}",
-        id,
-        serde_json::to_string_pretty(&stat).unwrap_or_default()
-    );
+    let human = render_diffstat(id, &stat);
     fmt.print(&stat, &human)
 }
 
@@ -981,6 +976,107 @@ fn render_list(out: &PrListOut) -> String {
     table.render()
 }
 
+/// Human table for Bitbucket PR diffstat payloads.
+///
+/// Expected shape:
+/// ```json
+/// { "values": [ { "status": "modified", "lines_added": 1, "lines_removed": 0,
+///   "old": {"path": "..."}, "new": {"path": "..."} } ] }
+/// ```
+fn render_diffstat(pr_id: u64, stat: &serde_json::Value) -> String {
+    let theme = Theme::current();
+    let values = stat
+        .get("values")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    if values.is_empty() {
+        return format!("No file changes for PR #{pr_id}.");
+    }
+
+    let mut table = Table::new().headers(["Status", "Path", "+", "-"]);
+    let mut total_added: u64 = 0;
+    let mut total_removed: u64 = 0;
+
+    for item in &values {
+        let status = item
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string();
+        let added = item
+            .get("lines_added")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let removed = item
+            .get("lines_removed")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        total_added += added;
+        total_removed += removed;
+
+        let new_path = item
+            .pointer("/new/path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let old_path = item
+            .pointer("/old/path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let path = if !new_path.is_empty() && !old_path.is_empty() && new_path != old_path {
+            if theme.unicode_enabled() {
+                format!("{old_path} \u{2192} {new_path}")
+            } else {
+                format!("{old_path} -> {new_path}")
+            }
+        } else if !new_path.is_empty() {
+            new_path.to_string()
+        } else if !old_path.is_empty() {
+            old_path.to_string()
+        } else {
+            "?".to_string()
+        };
+
+        let status_cell = match status.to_ascii_lowercase().as_str() {
+            "added" => theme.success(&status).into_owned(),
+            "removed" | "deleted" => theme.error(&status).into_owned(),
+            "renamed" => theme.warn(&status).into_owned(),
+            other => other.to_string(),
+        };
+
+        table = table.add_row([
+            status_cell,
+            truncate(&path, 72),
+            format!("+{added}"),
+            format!("-{removed}"),
+        ]);
+    }
+
+    let mut out = format!("Diffstat for PR #{pr_id}\n");
+    out.push_str(&table.render());
+    out.push('\n');
+    out.push_str(&format!(
+        " {} file{}, {} {}, {} {}\n",
+        values.len(),
+        if values.len() == 1 { "" } else { "s" },
+        total_added,
+        if total_added == 1 {
+            "insertion(+)"
+        } else {
+            "insertions(+)"
+        },
+        total_removed,
+        if total_removed == 1 {
+            "deletion(-)"
+        } else {
+            "deletions(-)"
+        },
+    ));
+    out
+}
+
 fn render_comments(out: &PrCommentsOut) -> String {
     if out.comments.is_empty() {
         return format!("No comments on PR #{}.", out.pr_id);
@@ -1150,5 +1246,54 @@ fn truncate_desc(s: &str, n: usize) -> String {
         out.push('…');
         out.push_str(&format!("\n  (... {}, use --json for full)", "truncated"));
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_diffstat_builds_table_with_totals() {
+        let stat = serde_json::json!({
+            "values": [
+                {
+                    "status": "modified",
+                    "lines_added": 2,
+                    "lines_removed": 1,
+                    "old": { "path": "src/a.rs" },
+                    "new": { "path": "src/a.rs" }
+                },
+                {
+                    "status": "added",
+                    "lines_added": 5,
+                    "lines_removed": 0,
+                    "old": null,
+                    "new": { "path": "src/b.rs" }
+                },
+                {
+                    "status": "renamed",
+                    "lines_added": 0,
+                    "lines_removed": 0,
+                    "old": { "path": "old.rs" },
+                    "new": { "path": "new.rs" }
+                }
+            ]
+        });
+        let out = render_diffstat(42, &stat);
+        assert!(out.contains("Diffstat for PR #42"));
+        assert!(out.contains("src/a.rs"));
+        assert!(out.contains("src/b.rs"));
+        assert!(out.contains("old.rs") && out.contains("new.rs"));
+        assert!(out.contains("3 files"));
+        assert!(out.contains("7 insertions(+)"));
+        assert!(out.contains("1 deletion(-)"));
+    }
+
+    #[test]
+    fn render_diffstat_empty_values() {
+        let stat = serde_json::json!({ "values": [] });
+        let out = render_diffstat(7, &stat);
+        assert!(out.contains("No file changes for PR #7"));
     }
 }

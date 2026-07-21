@@ -10,14 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **`bbr status` / commit statuses** — HTTP 404 "Commit not found" on unpushed HEAD no longer aborts the command; treated as empty status list.
+- **`bbr pr diff` docs** — USAGE/README no longer claim side-by-side is deferred or that pretty mode has syntax highlighting; `--no-syntax` removed (it was a no-op).
 
 ### Added
 
 - **`Paginated<T>` now implements `Default`** — empty page helper without `T: Default` bound.
+- **`bbr pr diff` optional ID** — omit the PR id to resolve the open PR for the current branch (same as `diffstat` / `patch`).
+- **Binary file marker in pretty diffs** — `Binary files … differ` entries show `(binary file changed)` and expose `"binary": true` in `--json`.
+- **`bbr pr diffstat` human table** — Status / Path / + / − table with totals instead of pretty-printed JSON.
 
 ### Changed
 
 - **README** — comprehensive rewrite with full command reference, API scopes table, scripting patterns, output/theme docs, and conventions.
+- **Pretty diff line numbers** — width scales to the largest line number in each file (no longer hard-capped at 4 columns).
+- **`DiffRenderOptions`** — dropped unused `syntax_highlight` field.
 
 ## [0.1.9] - 2026-07-20
 

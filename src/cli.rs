@@ -497,7 +497,8 @@ pub enum PrAction {
     },
     /// Show the diff for a pull request.
     Diff {
-        id: u64,
+        /// Pull request ID (defaults to the open PR for the current branch).
+        id: Option<u64>,
         /// Output raw diff text (legacy behavior: pipe through bat/less).
         #[arg(long)]
         raw: bool,
@@ -507,9 +508,6 @@ pub enum PrAction {
         /// Number of context lines around changes (default: 3).
         #[arg(long, default_value_t = 3)]
         context: usize,
-        /// Disable syntax highlighting.
-        #[arg(long)]
-        no_syntax: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },

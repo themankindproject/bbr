@@ -317,16 +317,23 @@ On failure, `success` is `false` and the process exits with code `5`.
       ]
     },
     {
-      "status": "new",
+      "status": "added",
       "old_path": "",
       "new_path": "src/lib.rs",
       "additions": 5,
       "deletions": 0,
       "hunks": []
+    },
+    {
+      "status": "modified",
+      "old_path": "logo.png",
+      "new_path": "logo.png",
+      "binary": true,
+      "hunks": []
     }
   ],
   "summary": {
-    "files_changed": 2,
+    "files_changed": 3,
     "additions": 8,
     "deletions": 1
   }
@@ -336,6 +343,7 @@ On failure, `success` is `false` and the process exits with code `5`.
 `status` values: `"added"`, `"deleted"`, `"modified"`, `"renamed"`.  
 `kind` values per line: `"context"`, `"addition"`, `"deletion"`.  
 `old_lineno` is `null` for additions; `new_lineno` is `null` for deletions.  
+`binary` is `true` for binary file changes (omitted when false).  
 `hunks` is empty for binary files or files with no parseable diff content.
 
 Pass `--raw --json` for the legacy flat shape `{ "id": 467, "diff": "..." }`.

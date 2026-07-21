@@ -245,14 +245,17 @@ bbr pr checkout 467
 
 #### `bbr pr diff`
 
-Print the diff for a PR with syntax highlighting and paging. Default output is a rendered pretty diff with box-drawn file headers, line numbers, and ANSI colors. Falls back to `bat`/`less` with `--raw`.
+Print the diff for a PR. Default output is a rendered pretty diff with box-drawn
+file headers, line numbers, word-level highlighting, and ANSI colors. Use
+`--raw` to pipe the unified diff through `bat`/`less` instead (syntax highlighting
+via `bat` when installed).
 
 ```bash
 bbr pr diff 467                          # pretty diff (default)
-bbr pr diff 467 --raw                    # bypass pretty renderer, use bat/less (legacy)
+bbr pr diff                              # open PR for the current branch
+bbr pr diff 467 --raw                    # bypass pretty renderer, use bat/less
 bbr pr diff 467 --context 5              # more context lines around changes
-bbr pr diff 467 --no-syntax              # disable syntax highlighting
-bbr pr diff 467 --side-by-side           # side-by-side view (deferred, acts as unified)
+bbr pr diff 467 --side-by-side           # side-by-side view
 bbr pr diff 467 --json                   # structured JSON with file/hunk/line data
 bbr pr diff 467 --no-color               # plain text, no ANSI
 ```
@@ -260,28 +263,24 @@ bbr pr diff 467 --no-color               # plain text, no ANSI
 Output (pretty mode):
 
 ```
-╭─ ~  src/main.rs · +2, -1 ─────────────────────────────╮
-│ modified                                               │
-├────────────────────────────────────────────────────────┤
+── ─ ~ src/main.rs ── modified ── [████░░░░] +2, -1 ────────
 @@ -1,3 +1,4 @@
-   1    1 │ fn hello() {
-   2      │     println!("goodbye");     ← red text
-        2 │     println!("hello");       ← green text
-        3 │     println!("world");       ← green text
-   3    4 │ }
-├────────────────────────────────────────────────────────┤
-│ 1 file changed, 2 insertions(+), 1 deletion(-)         │
-╰────────────────────────────────────────────────────────╯
+  1  1   │ fn hello() {
+  2      - │     println!("goodbye");
+     2 + │     println!("hello");
+     3 + │     println!("world");
+  3  4   │ }
+ 1 file changed, 2 insertions(+), 1 deletion(-) [████████████]
 ```
 
 #### `bbr pr diffstat`
 
-Show a JSON summary of file changes (files changed, insertions, deletions).
+Show a per-file change summary (status, path, insertions, deletions).
 
 ```bash
 bbr pr diffstat 467                            # by ID
 bbr pr diffstat                                # current branch's open PR
-bbr pr diffstat 467 --json                     # machine-readable
+bbr pr diffstat 467 --json                     # machine-readable API payload
 ```
 
 #### `bbr pr patch`

@@ -180,12 +180,13 @@ bbr pr commits [<id>]       # commits in PR
 bbr pr statuses [<id>]      # commit build statuses
 
 # Diff & Patch
-bbr pr diff 467                          # pretty diff with syntax highlighting
+bbr pr diff 467                          # pretty diff (word-level, line numbers)
+bbr pr diff                              # open PR for the current branch
 bbr pr diff 467 --raw                    # bypass renderer, use bat/less
 bbr pr diff 467 --json                   # structured JSON with file/hunk/line data
 bbr pr diff 467 --side-by-side           # side-by-side view
 bbr pr diff 467 --context 5              # more context lines
-bbr pr diffstat 467                      # file changes summary
+bbr pr diffstat 467                      # file changes summary table
 bbr pr patch 467                         # unified patch to stdout
 bbr pr patch 467 --output fix.patch      # unified patch to file
 

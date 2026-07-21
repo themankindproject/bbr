@@ -61,6 +61,9 @@ pub struct DiffFile {
     /// Number of deleted lines across all hunks.
     #[serde(skip_serializing_if = "is_zero")]
     pub deletions: u32,
+    /// True when the diff marks this as a binary file change.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub binary: bool,
 }
 
 fn is_zero(n: &u32) -> bool {
@@ -544,6 +547,7 @@ impl DiffFileBuilder {
             hunks: self.hunks,
             additions: self.additions,
             deletions: self.deletions,
+            binary: self.binary,
         }
     }
 }
@@ -823,6 +827,21 @@ normal line\n\
         let hunk = &files[0].hunks[0];
         // OSC sequence (set terminal title) should be stripped
         assert_eq!(hunk.lines[1].content, "new content");
+    }
+
+    #[test]
+    fn test_parse_binary_file() {
+        let diff = "\
+diff --git a/logo.png b/logo.png
+new file mode 100644
+index 0000000..abc1234
+Binary files /dev/null and b/logo.png differ
+";
+        let files = parse(diff);
+        assert_eq!(files.len(), 1);
+        assert!(files[0].binary, "binary marker should be preserved");
+        assert!(files[0].hunks.is_empty());
+        assert_eq!(files[0].new_path, "logo.png");
     }
 
     #[test]
