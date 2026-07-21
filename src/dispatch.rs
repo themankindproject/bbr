@@ -167,9 +167,11 @@ async fn dispatch_pr(g: &GlobalArgs, action: PrAction) -> Result<()> {
         PrAction::View {
             id,
             diff,
+            side_by_side,
+            context,
             comments,
             g,
-        } => commands::pr::view(&g, id, diff, comments).await,
+        } => commands::pr::view(&g, id, diff, side_by_side, context, comments).await,
         PrAction::Create {
             title,
             body,

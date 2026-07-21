@@ -184,7 +184,10 @@ Output: table with columns `ID  State  Title  Source  Destination  Author  URL`.
 ```bash
 bbr pr view                          # current branch's open PR
 bbr pr view 467                      # by ID
-bbr pr view --diff                   # append diff to output
+bbr pr view --diff                   # append pretty diff to output
+bbr pr view --diff --side-by-side    # side-by-side inline diff
+bbr pr view --diff --context 5       # more context lines
+bbr pr view --side-by-side           # implies --diff
 bbr pr view --comments               # show comments inline
 bbr pr view --json
 ```

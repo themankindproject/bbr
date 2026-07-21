@@ -355,6 +355,12 @@ pub enum PrAction {
         /// Show the diff inline.
         #[arg(long)]
         diff: bool,
+        /// Side-by-side diff (implies `--diff`).
+        #[arg(long)]
+        side_by_side: bool,
+        /// Context lines around changes when showing a diff (default: 3).
+        #[arg(long, default_value_t = 3)]
+        context: usize,
         /// Show comments inline.
         #[arg(long)]
         comments: bool,

@@ -148,6 +148,7 @@ bbr pr list --search "cache"                     # search in PR titles/descripti
 bbr pr view                                      # current branch's open PR
 bbr pr view 467                                  # by ID
 bbr pr view --diff --comments                    # with diff and comments
+bbr pr view --side-by-side --context 5           # inline side-by-side diff
 bbr pr checkout 467                              # fetch + switch to source branch
 
 # Create & Update

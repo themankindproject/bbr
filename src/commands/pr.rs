@@ -215,10 +215,14 @@ pub async fn view(
     g: &GlobalArgs,
     id: Option<u64>,
     show_diff: bool,
+    side_by_side: bool,
+    context: usize,
     show_comments: bool,
 ) -> Result<()> {
     let repo = resolve_repo(g)?;
     let client = client(g)?;
+    // `--side-by-side` implies showing the diff.
+    let show_diff = show_diff || side_by_side;
 
     let pr = match id {
         Some(id) => client.get_pr(&repo.workspace, &repo.slug, id).await?,
@@ -245,7 +249,14 @@ pub async fn view(
         spinner.finish();
         let theme = Theme::current();
         let files = crate::diff::parser::parse(&diff_body);
-        let options = crate::diff::DiffRenderOptions::default();
+        let options = crate::diff::DiffRenderOptions {
+            context_lines: context,
+            mode: if side_by_side {
+                crate::diff::RenderMode::SideBySide
+            } else {
+                crate::diff::RenderMode::Unified
+            },
+        };
         let rendered = crate::diff::renderer::render(&files, &options, theme);
         human.push_str(&format!("\n\n{}", rendered));
     }

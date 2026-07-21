@@ -433,6 +433,185 @@ fn render_hunk_unified(
 }
 
 // ---------------------------------------------------------------------------
+// Tinted line builder — keeps background across mid-line style changes
+// ---------------------------------------------------------------------------
+
+/// Build a full-width tinted diff line without mid-line `\x1b[0m` resets.
+///
+/// Each style change ends with an explicit attribute reset (`22` / `39` / `49`)
+/// and re-asserts the line background so padding spaces stay tinted.
+struct TintedLine {
+    bg_code: u8,
+    buf: String,
+}
+
+impl TintedLine {
+    fn new(bg_code: u8) -> Self {
+        let mut buf = String::with_capacity(128);
+        buf.push_str(&format!("\x1b[48;5;{bg_code}m"));
+        Self { bg_code, buf }
+    }
+
+    fn reassert_bg(&mut self) {
+        self.buf.push_str(&format!("\x1b[48;5;{}m", self.bg_code));
+    }
+
+    fn push_raw(&mut self, s: &str) {
+        self.buf.push_str(s);
+    }
+
+    fn push_space(&mut self) {
+        self.buf.push(' ');
+    }
+
+    /// Dim text, then restore normal intensity while keeping the background.
+    fn push_dim(&mut self, s: &str) {
+        self.buf.push_str("\x1b[2m");
+        self.buf.push_str(s);
+        self.buf.push_str("\x1b[22m");
+        self.reassert_bg();
+    }
+
+    /// Foreground-colored text (e.g. `"32"` green / `"31"` red).
+    fn push_fg(&mut self, fg: &str, s: &str) {
+        self.buf.push_str("\x1b[");
+        self.buf.push_str(fg);
+        self.buf.push('m');
+        self.buf.push_str(s);
+        self.buf.push_str("\x1b[39m");
+        self.reassert_bg();
+    }
+
+    /// Word-level highlight: black on bright green/red, then restore line bg + fg.
+    fn push_word_hl(&mut self, hl_bg: &str, restore_fg: &str, s: &str) {
+        self.buf.push_str("\x1b[30;");
+        self.buf.push_str(hl_bg);
+        self.buf.push('m');
+        self.buf.push_str(s);
+        // Reset fg+bg, re-assert line background, restore content foreground.
+        self.buf.push_str("\x1b[39;49m");
+        self.reassert_bg();
+        self.buf.push_str("\x1b[");
+        self.buf.push_str(restore_fg);
+        self.buf.push('m');
+    }
+
+    fn finish(mut self, pad: usize) -> String {
+        if pad > 0 {
+            self.buf.push_str(&" ".repeat(pad));
+        }
+        self.buf.push_str("\x1b[0m\n");
+        self.buf
+    }
+}
+
+const ADD_BG: u8 = 22;
+const DEL_BG: u8 = 52;
+
+/// Truncate content to fit the remaining terminal columns after the prefix.
+fn unified_content_width(lineno_width: usize, term_width: usize) -> usize {
+    term_width.saturating_sub(unified_prefix_width(lineno_width))
+}
+
+fn display_content<'a>(
+    raw: &'a str,
+    empty_marker: &'a str,
+    max_width: usize,
+) -> std::borrow::Cow<'a, str> {
+    if raw.is_empty() {
+        return std::borrow::Cow::Borrowed(empty_marker);
+    }
+    let truncated = truncate_code_raw(raw, max_width);
+    if truncated.as_str() == raw {
+        std::borrow::Cow::Borrowed(raw)
+    } else {
+        std::borrow::Cow::Owned(truncated)
+    }
+}
+
+fn render_addition_content(
+    line: &DiffLine,
+    pair: Option<&DiffLine>,
+    empty_marker: &str,
+    max_width: usize,
+    tinted: &mut TintedLine,
+) -> usize {
+    let content = display_content(&line.content, empty_marker, max_width);
+    let visible = content.width();
+
+    if line.content.is_empty() {
+        tinted.push_dim(empty_marker);
+        return visible;
+    }
+
+    if let Some(p) = pair {
+        let pair_disp = display_content(&p.content, "", max_width);
+        let sim = crate::diff::word_diff::similarity(pair_disp.as_ref(), content.as_ref());
+        if sim < crate::diff::word_diff::WORD_DIFF_THRESHOLD {
+            tinted.push_fg("32", content.as_ref());
+        } else {
+            let segments =
+                crate::diff::word_diff::word_changes(pair_disp.as_ref(), content.as_ref());
+            for seg in segments {
+                match seg.kind {
+                    crate::diff::word_diff::WordChange::Inserted => {
+                        tinted.push_word_hl("42", "32", &seg.text);
+                    }
+                    crate::diff::word_diff::WordChange::Deleted => {}
+                    crate::diff::word_diff::WordChange::Equal => {
+                        tinted.push_fg("32", &seg.text);
+                    }
+                }
+            }
+        }
+    } else {
+        tinted.push_fg("32", content.as_ref());
+    }
+    visible
+}
+
+fn render_deletion_content(
+    line: &DiffLine,
+    pair: Option<&DiffLine>,
+    empty_marker: &str,
+    max_width: usize,
+    tinted: &mut TintedLine,
+) -> usize {
+    let content = display_content(&line.content, empty_marker, max_width);
+    let visible = content.width();
+
+    if line.content.is_empty() {
+        tinted.push_dim(empty_marker);
+        return visible;
+    }
+
+    if let Some(p) = pair {
+        let pair_disp = display_content(&p.content, "", max_width);
+        let sim = crate::diff::word_diff::similarity(content.as_ref(), pair_disp.as_ref());
+        if sim < crate::diff::word_diff::WORD_DIFF_THRESHOLD {
+            tinted.push_fg("31", content.as_ref());
+        } else {
+            let segments =
+                crate::diff::word_diff::word_changes(content.as_ref(), pair_disp.as_ref());
+            for seg in segments {
+                match seg.kind {
+                    crate::diff::word_diff::WordChange::Deleted => {
+                        tinted.push_word_hl("41", "31", &seg.text);
+                    }
+                    crate::diff::word_diff::WordChange::Inserted => {}
+                    crate::diff::word_diff::WordChange::Equal => {
+                        tinted.push_fg("31", &seg.text);
+                    }
+                }
+            }
+        }
+    } else {
+        tinted.push_fg("31", content.as_ref());
+    }
+    visible
+}
+
+// ---------------------------------------------------------------------------
 // Paired line rendering (#1 bg tinting, #2 sign column, #5 threshold, #8 empty marker)
 // ---------------------------------------------------------------------------
 
@@ -444,159 +623,60 @@ fn render_paired_line(
     out: &mut String,
 ) {
     let term_width = cached_term_width();
-
     let old = format_lineno(line.old_lineno, lineno_width);
     let new = format_lineno(line.new_lineno, lineno_width);
-
     let sep = if theme.unicode_enabled() {
         "\u{2502}"
     } else {
         "|"
     };
-
-    // Improvement #8: empty line marker
     let empty_marker = if theme.unicode_enabled() {
         "\u{23ce}"
     } else {
         "<CR>"
     };
+    let max_content = unified_content_width(lineno_width, term_width);
 
     match line.kind {
         DiffLineKind::Addition => {
             if theme.colors_enabled() {
-                // #1: full-line dark-green background
-                let bg = "\x1b[48;5;22m";
-                let reset = "\x1b[0m";
-                // #2: green + sign
-                let sign = "\x1b[32m+\x1b[0m";
-                let dimmed_old = format!("\x1b[2m{}\x1b[0m", old);
-                let dimmed_sep = format!("\x1b[2m{}\x1b[0m", sep);
-
-                // Build content with word-diff or plain
-                let content = if line.content.is_empty() {
-                    format!("\x1b[2m{}\x1b[0m", empty_marker)
-                } else if let Some(p) = pair {
-                    // #5: check similarity threshold before word diff
-                    let sim = crate::diff::word_diff::similarity(&p.content, &line.content);
-                    if sim < crate::diff::word_diff::WORD_DIFF_THRESHOLD {
-                        format!("\x1b[32m{}\x1b[0m", line.content)
-                    } else {
-                        let segments =
-                            crate::diff::word_diff::word_changes(&p.content, &line.content);
-                        let mut s = String::new();
-                        for seg in segments {
-                            match seg.kind {
-                                crate::diff::word_diff::WordChange::Inserted => {
-                                    s.push_str(&format!("\x1b[30;42m{}\x1b[0m", seg.text));
-                                }
-                                crate::diff::word_diff::WordChange::Deleted => {}
-                                crate::diff::word_diff::WordChange::Equal => {
-                                    s.push_str(&format!("\x1b[32m{}\x1b[0m", seg.text));
-                                }
-                            }
-                        }
-                        s
-                    }
-                } else {
-                    format!("\x1b[32m{}\x1b[0m", line.content)
-                };
-
-                let prefix_visible_width = unified_prefix_width(lineno_width);
-                let content_visible_width = if line.content.is_empty() {
-                    empty_marker.width()
-                } else {
-                    line.content.width()
-                };
-                let used = prefix_visible_width + content_visible_width;
-                let pad = term_width.saturating_sub(used);
-
-                out.push_str(&format!(
-                    "{} {} {} {} {} {} {}{}{}",
-                    bg,
-                    dimmed_old,
-                    new,
-                    sign,
-                    dimmed_sep,
-                    content,
-                    " ".repeat(pad),
-                    reset,
-                    "\n"
-                ));
+                let mut tinted = TintedLine::new(ADD_BG);
+                tinted.push_space();
+                tinted.push_dim(&old);
+                tinted.push_space();
+                tinted.push_raw(&new);
+                tinted.push_space();
+                tinted.push_fg("32", "+");
+                tinted.push_space();
+                tinted.push_dim(sep);
+                tinted.push_space();
+                let content_w =
+                    render_addition_content(line, pair, empty_marker, max_content, &mut tinted);
+                let pad = term_width.saturating_sub(unified_prefix_width(lineno_width) + content_w);
+                out.push_str(&tinted.finish(pad));
             } else {
-                let content = if line.content.is_empty() {
-                    empty_marker.to_string()
-                } else {
-                    line.content.clone()
-                };
+                let content = display_content(&line.content, empty_marker, max_content);
                 out.push_str(&format!(" {} {} + {} {}\n", old, new, sep, content));
             }
         }
         DiffLineKind::Deletion => {
             if theme.colors_enabled() {
-                // #1: full-line dark-red background
-                let bg = "\x1b[48;5;52m";
-                let reset = "\x1b[0m";
-                // #2: red - sign
-                let sign = "\x1b[31m-\x1b[0m";
-                let dimmed_new = format!("\x1b[2m{}\x1b[0m", new);
-                let dimmed_sep = format!("\x1b[2m{}\x1b[0m", sep);
-
-                // Build content with word-diff or plain
-                let content = if line.content.is_empty() {
-                    format!("\x1b[2m{}\x1b[0m", empty_marker)
-                } else if let Some(p) = pair {
-                    // #5: check similarity threshold before word diff
-                    let sim = crate::diff::word_diff::similarity(&line.content, &p.content);
-                    if sim < crate::diff::word_diff::WORD_DIFF_THRESHOLD {
-                        format!("\x1b[31m{}\x1b[0m", line.content)
-                    } else {
-                        let segments =
-                            crate::diff::word_diff::word_changes(&line.content, &p.content);
-                        let mut s = String::new();
-                        for seg in segments {
-                            match seg.kind {
-                                crate::diff::word_diff::WordChange::Deleted => {
-                                    s.push_str(&format!("\x1b[30;41m{}\x1b[0m", seg.text));
-                                }
-                                crate::diff::word_diff::WordChange::Inserted => {}
-                                crate::diff::word_diff::WordChange::Equal => {
-                                    s.push_str(&format!("\x1b[31m{}\x1b[0m", seg.text));
-                                }
-                            }
-                        }
-                        s
-                    }
-                } else {
-                    format!("\x1b[31m{}\x1b[0m", line.content)
-                };
-
-                let prefix_visible_width = unified_prefix_width(lineno_width);
-                let content_visible_width = if line.content.is_empty() {
-                    empty_marker.width()
-                } else {
-                    line.content.width()
-                };
-                let used = prefix_visible_width + content_visible_width;
-                let pad = term_width.saturating_sub(used);
-
-                out.push_str(&format!(
-                    "{} {} {} {} {} {} {}{}{}",
-                    bg,
-                    old,
-                    dimmed_new,
-                    sign,
-                    dimmed_sep,
-                    content,
-                    " ".repeat(pad),
-                    reset,
-                    "\n"
-                ));
+                let mut tinted = TintedLine::new(DEL_BG);
+                tinted.push_space();
+                tinted.push_raw(&old);
+                tinted.push_space();
+                tinted.push_dim(&new);
+                tinted.push_space();
+                tinted.push_fg("31", "-");
+                tinted.push_space();
+                tinted.push_dim(sep);
+                tinted.push_space();
+                let content_w =
+                    render_deletion_content(line, pair, empty_marker, max_content, &mut tinted);
+                let pad = term_width.saturating_sub(unified_prefix_width(lineno_width) + content_w);
+                out.push_str(&tinted.finish(pad));
             } else {
-                let content = if line.content.is_empty() {
-                    empty_marker.to_string()
-                } else {
-                    line.content.clone()
-                };
+                let content = display_content(&line.content, empty_marker, max_content);
                 out.push_str(&format!(" {} {} - {} {}\n", old, new, sep, content));
             }
         }
@@ -613,10 +693,8 @@ fn render_paired_line(
 /// Render a single context/addition/deletion line.
 fn render_line(line: &DiffLine, theme: &Theme, lineno_width: usize, out: &mut String) {
     let term_width = cached_term_width();
-
     let old = format_lineno(line.old_lineno, lineno_width);
     let new = format_lineno(line.new_lineno, lineno_width);
-
     let sep = if theme.unicode_enabled() {
         "\u{2502}"
     } else {
@@ -627,101 +705,62 @@ fn render_line(line: &DiffLine, theme: &Theme, lineno_width: usize, out: &mut St
     } else {
         "<CR>"
     };
+    let max_content = unified_content_width(lineno_width, term_width);
 
     match line.kind {
         DiffLineKind::Context => {
+            let content = display_content(&line.content, "", max_content);
             if theme.colors_enabled() {
-                // #6: line numbers dimmed, separator dimmed, content normal
                 let dimmed_old = format!("\x1b[2m{}\x1b[0m", old);
                 let dimmed_new = format!("\x1b[2m{}\x1b[0m", new);
                 let dimmed_sep = format!("\x1b[2m{}\x1b[0m", sep);
                 out.push_str(&format!(
                     " {} {}   {} {}\n",
-                    dimmed_old, dimmed_new, dimmed_sep, line.content
+                    dimmed_old, dimmed_new, dimmed_sep, content
                 ));
             } else {
-                out.push_str(&format!(" {} {}   {} {}\n", old, new, sep, line.content));
+                out.push_str(&format!(" {} {}   {} {}\n", old, new, sep, content));
             }
         }
         DiffLineKind::Addition => {
             if theme.colors_enabled() {
-                let bg = "\x1b[48;5;22m";
-                let reset = "\x1b[0m";
-                let sign = "\x1b[32m+\x1b[0m";
-                let dimmed_old = format!("\x1b[2m{}\x1b[0m", old);
-                let dimmed_sep = format!("\x1b[2m{}\x1b[0m", sep);
-                let content = if line.content.is_empty() {
-                    format!("\x1b[2m{}\x1b[0m", empty_marker)
-                } else {
-                    format!("\x1b[32m{}\x1b[0m", line.content)
-                };
-                let prefix_visible_width = unified_prefix_width(lineno_width);
-                let content_visible_width = if line.content.is_empty() {
-                    empty_marker.width()
-                } else {
-                    line.content.width()
-                };
-                let used = prefix_visible_width + content_visible_width;
-                let pad = term_width.saturating_sub(used);
-                out.push_str(&format!(
-                    "{} {} {} {} {} {}{}{}{}",
-                    bg,
-                    dimmed_old,
-                    new,
-                    sign,
-                    dimmed_sep,
-                    content,
-                    " ".repeat(pad),
-                    reset,
-                    "\n"
-                ));
+                let mut tinted = TintedLine::new(ADD_BG);
+                tinted.push_space();
+                tinted.push_dim(&old);
+                tinted.push_space();
+                tinted.push_raw(&new);
+                tinted.push_space();
+                tinted.push_fg("32", "+");
+                tinted.push_space();
+                tinted.push_dim(sep);
+                tinted.push_space();
+                let content_w =
+                    render_addition_content(line, None, empty_marker, max_content, &mut tinted);
+                let pad = term_width.saturating_sub(unified_prefix_width(lineno_width) + content_w);
+                out.push_str(&tinted.finish(pad));
             } else {
-                let content = if line.content.is_empty() {
-                    empty_marker.to_string()
-                } else {
-                    line.content.clone()
-                };
+                let content = display_content(&line.content, empty_marker, max_content);
                 out.push_str(&format!(" {} {} + {} {}\n", old, new, sep, content));
             }
         }
         DiffLineKind::Deletion => {
             if theme.colors_enabled() {
-                let bg = "\x1b[48;5;52m";
-                let reset = "\x1b[0m";
-                let sign = "\x1b[31m-\x1b[0m";
-                let dimmed_new = format!("\x1b[2m{}\x1b[0m", new);
-                let dimmed_sep = format!("\x1b[2m{}\x1b[0m", sep);
-                let content = if line.content.is_empty() {
-                    format!("\x1b[2m{}\x1b[0m", empty_marker)
-                } else {
-                    format!("\x1b[31m{}\x1b[0m", line.content)
-                };
-                let prefix_visible_width = unified_prefix_width(lineno_width);
-                let content_visible_width = if line.content.is_empty() {
-                    empty_marker.width()
-                } else {
-                    line.content.width()
-                };
-                let used = prefix_visible_width + content_visible_width;
-                let pad = term_width.saturating_sub(used);
-                out.push_str(&format!(
-                    "{} {} {} {} {} {}{}{}{}",
-                    bg,
-                    old,
-                    dimmed_new,
-                    sign,
-                    dimmed_sep,
-                    content,
-                    " ".repeat(pad),
-                    reset,
-                    "\n"
-                ));
+                let mut tinted = TintedLine::new(DEL_BG);
+                tinted.push_space();
+                tinted.push_raw(&old);
+                tinted.push_space();
+                tinted.push_dim(&new);
+                tinted.push_space();
+                tinted.push_fg("31", "-");
+                tinted.push_space();
+                tinted.push_dim(sep);
+                tinted.push_space();
+                let content_w =
+                    render_deletion_content(line, None, empty_marker, max_content, &mut tinted);
+                let pad = term_width.saturating_sub(unified_prefix_width(lineno_width) + content_w);
+                out.push_str(&tinted.finish(pad));
             } else {
-                let content = if line.content.is_empty() {
-                    empty_marker.to_string()
-                } else {
-                    line.content.clone()
-                };
+                let content = display_content(&line.content, empty_marker, max_content);
                 out.push_str(&format!(" {} {} - {} {}\n", old, new, sep, content));
             }
         }
@@ -1481,6 +1520,61 @@ diff --git a/a.rs b/a.rs
             result.contains("\x1b[48;5;52m"),
             "should have dark-red background for deletions"
         );
+
+        // Background must survive mid-line style changes: no full reset until EOL.
+        for line in result.lines() {
+            if !line.contains("\x1b[48;5;22m") && !line.contains("\x1b[48;5;52m") {
+                continue;
+            }
+            let bg_pos = line
+                .find("\x1b[48;5;22m")
+                .or_else(|| line.find("\x1b[48;5;52m"))
+                .unwrap();
+            let after_bg = &line[bg_pos + "\x1b[48;5;22m".len()..];
+            // Mid-line may re-assert bg / change intensity/fg, but must not fully reset.
+            let reset_pos = after_bg.find("\x1b[0m");
+            assert!(
+                reset_pos.is_some(),
+                "tinted line should end with a full reset"
+            );
+            let before_reset = &after_bg[..reset_pos.unwrap()];
+            assert!(
+                !before_reset.contains("\x1b[0m"),
+                "must not fully reset mid-line while background tint is active: {line:?}"
+            );
+            // Soft resets are OK (22 intensity, 39 fg, 49 bg) — bg is re-asserted after.
+            assert!(
+                before_reset.contains("\x1b[22m") || before_reset.contains("\x1b[39m"),
+                "expected nested SGR style changes without full reset"
+            );
+        }
+    }
+
+    #[test]
+    fn test_unified_truncates_long_lines() {
+        let long = "x".repeat(200);
+        let diff = format!(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1,1 +1,1 @@
+-{long}
++{long}_new
+"
+        );
+        let files = parse(&diff);
+        let result = render(&files, &DiffRenderOptions::default(), &test_theme());
+        assert!(
+            result.contains('\u{2026}'),
+            "long unified lines should truncate with ellipsis, got length {}",
+            result.len()
+        );
+        // Raw 200-char run should not appear intact once truncated for term width.
+        assert!(
+            !result.contains(&long),
+            "full 200-char line should not be emitted untruncated"
+        );
     }
 
     #[test]
@@ -1498,15 +1592,9 @@ diff --git a/a.rs b/a.rs
         let theme = test_theme_colored();
         let result = render(&files, &options, &theme);
 
-        // #2: colored + and - signs
-        assert!(
-            result.contains("\x1b[32m+\x1b[0m"),
-            "should have green + sign"
-        );
-        assert!(
-            result.contains("\x1b[31m-\x1b[0m"),
-            "should have red - sign"
-        );
+        // #2: colored + and - signs (fg set, then soft-reset — not full \x1b[0m)
+        assert!(result.contains("\x1b[32m+"), "should have green + sign");
+        assert!(result.contains("\x1b[31m-"), "should have red - sign");
     }
 
     #[test]
