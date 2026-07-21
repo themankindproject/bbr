@@ -136,6 +136,26 @@ pub fn print_paginated(s: &str) -> Result<()> {
         return print_block(s);
     }
 
+    write_paginated(|w| {
+        w.write_all(s.as_bytes())?;
+        if !s.ends_with('\n') {
+            w.write_all(b"\n")?;
+        }
+        Ok(())
+    })
+}
+
+/// Stream output through a pager (or stdout when not a TTY), avoiding a full buffer.
+pub fn write_paginated<F>(write_fn: F) -> Result<()>
+where
+    F: FnOnce(&mut dyn Write) -> Result<()>,
+{
+    if !io::stdout().is_terminal() {
+        let mut out = io::stdout().lock();
+        write_fn(&mut out)?;
+        return Ok(());
+    }
+
     let pager_env = std::env::var("PAGER").unwrap_or_else(|_| "less".to_string());
     let mut cmd = if pager_env == "less" {
         let mut c = Command::new("less");
@@ -150,23 +170,24 @@ pub fn print_paginated(s: &str) -> Result<()> {
             }
             c
         } else {
-            return print_block(s);
+            let mut out = io::stdout().lock();
+            return write_fn(&mut out);
         }
     };
 
     cmd.stdin(Stdio::piped());
 
     if let Ok(mut child) = cmd.spawn() {
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(s.as_bytes());
-            if !s.ends_with('\n') {
-                let _ = stdin.write_all(b"\n");
-            }
-        }
+        let write_result = if let Some(mut stdin) = child.stdin.take() {
+            write_fn(&mut stdin)
+        } else {
+            Ok(())
+        };
         let _ = child.wait();
-        Ok(())
+        write_result
     } else {
-        print_block(s)
+        let mut out = io::stdout().lock();
+        write_fn(&mut out)
     }
 }
 

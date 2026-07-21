@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`bbr pr diff` docs** — USAGE/README no longer claim side-by-side is deferred or that pretty mode has syntax highlighting; `--no-syntax` removed (it was a no-op).
 - **Pretty diff background tinting** — mid-line styles no longer emit `\x1b[0m` (which cleared the row background); nested SGR keeps the tint through padding.
 - **`diff --git` paths with spaces** — quoted C-style paths (and `---/`+++` quotes) parse correctly instead of splitting on the first space.
+- **`\ No newline at end of file`** — preserved on the preceding line and shown in pretty diffs (was dropped silently).
+- **Pretty diff tab alignment** — tabs expand to tabstop 8 for width/truncation so columns stay aligned.
+- **Pure rename cue** — 100% renames with no hunks show `(renamed with no content change)` instead of a bare header.
+- **Diff header fill width** — trailing `─` fill uses plain (no-ANSI) Unicode width so colored headers don't over/under-fill.
+- **Terminal width** — measured once per render pass (not process-lifetime `OnceLock`), so resize mid-session is respected.
 
 ### Added
 
@@ -23,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`bbr pr view --side-by-side` / `--context`** — inline diff options (side-by-side implies `--diff`).
 - **`bbr pr diff --name-only` / `--name-status`** — path listing modes (git-compatible).
 - **`bbr pr diff -- PATH…`** — pathspec filters (exact, prefix, basename, `*`/`?` globs) after `--`.
+- **Streaming pretty diffs** — `render_to` / `write_paginated` write file-by-file into the pager to cut peak memory on large PRs.
 
 ### Changed
 

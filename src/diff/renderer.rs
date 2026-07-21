@@ -4,12 +4,16 @@
 //! suitable for terminal display or piping through a pager.
 
 use std::borrow::Cow;
+use std::io::{self, Write};
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::output::theme::Theme;
 
 use super::parser::{DiffFile, DiffHunk, DiffLine, DiffLineKind, FileStatus};
+
+/// Display columns per tab when expanding `\t` for width/truncation.
+const TABSTOP: usize = 8;
 
 /// Options for rendering a diff.
 #[derive(Debug, Clone)]
@@ -42,43 +46,55 @@ pub enum RenderMode {
 // Main entry point
 // ---------------------------------------------------------------------------
 
-/// Cached terminal width to avoid repeated ioctl syscalls per rendered line.
-/// The width is determined once per process and reused for all subsequent renders.
-fn cached_term_width() -> usize {
-    use std::sync::OnceLock;
-    static WIDTH: OnceLock<usize> = OnceLock::new();
-    *WIDTH.get_or_init(|| crate::output::theme::terminal_width().unwrap_or(80))
+/// Terminal width for one render pass (ioctl once; respects mid-session resize).
+fn term_width_for_render() -> usize {
+    crate::output::theme::terminal_width().unwrap_or(80)
 }
 
 /// Render a parsed diff into a formatted terminal string.
 pub fn render(files: &[DiffFile], options: &DiffRenderOptions, theme: &Theme) -> String {
-    let mut out = String::new();
+    let mut buf = Vec::new();
+    let _ = render_to(files, options, theme, &mut buf);
+    String::from_utf8(buf).unwrap_or_default()
+}
+
+/// Stream a pretty diff to `w`, writing one file at a time to limit peak memory.
+pub fn render_to(
+    files: &[DiffFile],
+    options: &DiffRenderOptions,
+    theme: &Theme,
+    w: &mut dyn Write,
+) -> io::Result<()> {
+    let term_width = term_width_for_render();
+    let mut buf = String::new();
 
     if files.is_empty() {
         if theme.colors_enabled() {
-            out.push_str("\x1b[2m  (no diff content)\x1b[0m\n");
+            buf.push_str("\x1b[2m  (no diff content)\x1b[0m\n");
         } else {
-            out.push_str("  (no diff content)\n");
+            buf.push_str("  (no diff content)\n");
         }
-        return out;
+        return w.write_all(buf.as_bytes());
     }
 
-    // Improvement #9: File index at top of multi-file diffs
     if files.len() >= 2 {
-        render_file_index(files, theme, &mut out);
+        render_file_index(files, theme, &mut buf);
+        w.write_all(buf.as_bytes())?;
+        buf.clear();
     }
 
     for (i, file) in files.iter().enumerate() {
         if i > 0 {
-            out.push('\n');
+            w.write_all(b"\n")?;
         }
-        render_file(file, options, theme, &mut out);
+        render_file(file, options, theme, term_width, &mut buf);
+        w.write_all(buf.as_bytes())?;
+        buf.clear();
     }
 
-    // Summary bar
-    render_summary(files, theme, &mut out);
-
-    out
+    render_summary(files, theme, &mut buf);
+    w.write_all(buf.as_bytes())?;
+    Ok(())
 }
 
 /// Render only file paths (one per line), like `git diff --name-only`.
@@ -178,8 +194,14 @@ fn render_file_index(files: &[DiffFile], theme: &Theme, out: &mut String) {
 // ---------------------------------------------------------------------------
 
 /// Render a single file's diff.
-fn render_file(file: &DiffFile, options: &DiffRenderOptions, theme: &Theme, out: &mut String) {
-    render_file_header(file, theme, out);
+fn render_file(
+    file: &DiffFile,
+    options: &DiffRenderOptions,
+    theme: &Theme,
+    term_width: usize,
+    out: &mut String,
+) {
+    render_file_header(file, theme, term_width, out);
 
     if file.binary {
         let msg = "  (binary file changed)";
@@ -192,11 +214,22 @@ fn render_file(file: &DiffFile, options: &DiffRenderOptions, theme: &Theme, out:
         return;
     }
 
-    if !file.hunks.is_empty() {
-        let lineno_width = lineno_width_for_file(file);
-        for hunk in &file.hunks {
-            render_hunk(hunk, options, theme, lineno_width, out);
+    if file.hunks.is_empty() {
+        if file.status == FileStatus::Renamed {
+            let msg = "  (renamed with no content change)";
+            if theme.colors_enabled() {
+                out.push_str(&format!("\x1b[2m{}\x1b[0m\n", msg));
+            } else {
+                out.push_str(msg);
+                out.push('\n');
+            }
         }
+        return;
+    }
+
+    let lineno_width = lineno_width_for_file(file);
+    for hunk in &file.hunks {
+        render_hunk(hunk, options, theme, lineno_width, term_width, out);
     }
 }
 
@@ -250,9 +283,7 @@ fn unified_prefix_width(lineno_width: usize) -> usize {
 // ---------------------------------------------------------------------------
 
 /// Render the file header as a single compact line with stats bar.
-fn render_file_header(file: &DiffFile, theme: &Theme, out: &mut String) {
-    let width = cached_term_width();
-
+fn render_file_header(file: &DiffFile, theme: &Theme, term_width: usize, out: &mut String) {
     let (icon, status_text) = match file.status {
         FileStatus::Added => ("+", "new file"),
         FileStatus::Deleted => {
@@ -284,8 +315,9 @@ fn render_file_header(file: &DiffFile, theme: &Theme, out: &mut String) {
         file.old_path.clone()
     };
 
-    // Build the stats bar (8 chars)
-    let stats_bar = build_stats_bar(file.additions, file.deletions, 8, theme);
+    // Build the stats bar (8 display columns)
+    const BAR_WIDTH: usize = 8;
+    let stats_bar = build_stats_bar(file.additions, file.deletions, BAR_WIDTH, theme);
 
     let adds_str = format!("+{}", file.additions);
     let dels_str = format!("-{}", file.deletions);
@@ -297,40 +329,33 @@ fn render_file_header(file: &DiffFile, theme: &Theme, out: &mut String) {
     };
     let dash2 = format!("{}{} ", dash, dash);
 
+    // Plain (no ANSI) layout for accurate fill width.
+    let plain = format!(
+        "{}{} {} {} {} {} [{}] {}, {} ",
+        dash2,
+        dash,
+        icon,
+        display_path,
+        dash2,
+        status_text,
+        "X".repeat(BAR_WIDTH),
+        adds_str,
+        dels_str
+    );
+    let visible_len = plain.width();
+    let fill_count = term_width.saturating_sub(visible_len);
+    let fill = dash.repeat(fill_count);
+
     if theme.colors_enabled() {
-        // Build: ── {icon} {path} ── {status} ── [stats_bar] +X, -Y ──
         let bold_icon = format!("\x1b[1m{}\x1b[0m", icon);
         let bold_path = format!("\x1b[1m{}\x1b[0m", display_path);
         let green_adds = format!("\x1b[32m{}\x1b[0m", adds_str);
         let red_dels = format!("\x1b[31m{}\x1b[0m", dels_str);
-
         let content = format!(
             "{}{} {} {} {} {} [{}] {}, {} ",
             dash2, dash, bold_icon, bold_path, dash2, status_text, stats_bar, green_adds, red_dels
         );
-
-        // Calculate visible width for fill (approximate since ANSI codes are invisible)
-        // visible: "── ─ {icon} {path} ── {status} ── [{bar}] +X, -Y "
-        let visible_len = 3
-            + 2
-            + icon.width()
-            + 1
-            + display_path.width()
-            + 1
-            + 3
-            + status_text.len()
-            + 1
-            + 3
-            + 8
-            + 2
-            + adds_str.len()
-            + 2
-            + dels_str.len()
-            + 1;
-        let fill_count = width.saturating_sub(visible_len);
-        let fill = dash.repeat(fill_count);
         let dimmed_fill = format!("\x1b[2m{}\x1b[0m", fill);
-
         out.push_str(&content);
         out.push_str(&dimmed_fill);
         out.push('\n');
@@ -339,9 +364,6 @@ fn render_file_header(file: &DiffFile, theme: &Theme, out: &mut String) {
             "{}{} {} {} {} {} [{}] {}, {} ",
             dash2, dash, icon, display_path, dash2, status_text, stats_bar, adds_str, dels_str
         );
-        let visible_len = content.width();
-        let fill_count = width.saturating_sub(visible_len);
-        let fill = dash.repeat(fill_count);
         out.push_str(&content);
         out.push_str(&fill);
         out.push('\n');
@@ -405,6 +427,7 @@ fn render_hunk(
     options: &DiffRenderOptions,
     theme: &Theme,
     lineno_width: usize,
+    term_width: usize,
     out: &mut String,
 ) {
     // Hunk header (dimmed)
@@ -421,9 +444,9 @@ fn render_hunk(
     };
 
     if options.mode == RenderMode::SideBySide {
-        render_hunk_side_by_side(hunk, options, theme, lineno_width, out);
+        render_hunk_side_by_side(hunk, options, theme, lineno_width, term_width, out);
     } else {
-        render_hunk_unified(hunk, options, theme, lineno_width, out);
+        render_hunk_unified(hunk, options, theme, lineno_width, term_width, out);
     }
 }
 
@@ -436,6 +459,7 @@ fn render_hunk_unified(
     options: &DiffRenderOptions,
     theme: &Theme,
     lineno_width: usize,
+    term_width: usize,
     out: &mut String,
 ) {
     let ranges = find_change_ranges(&hunk.lines, options.context_lines);
@@ -470,20 +494,34 @@ fn render_hunk_unified(
                 for row in rows {
                     match row {
                         crate::diff::align::AlignedRow::Pair(del, add) => {
-                            render_paired_line(del, Some(add), theme, lineno_width, out);
-                            render_paired_line(add, Some(del), theme, lineno_width, out);
+                            render_paired_line(
+                                del,
+                                Some(add),
+                                theme,
+                                lineno_width,
+                                term_width,
+                                out,
+                            );
+                            render_paired_line(
+                                add,
+                                Some(del),
+                                theme,
+                                lineno_width,
+                                term_width,
+                                out,
+                            );
                         }
                         crate::diff::align::AlignedRow::DeleteOnly(del) => {
-                            render_paired_line(del, None, theme, lineno_width, out);
+                            render_paired_line(del, None, theme, lineno_width, term_width, out);
                         }
                         crate::diff::align::AlignedRow::AddOnly(add) => {
-                            render_paired_line(add, None, theme, lineno_width, out);
+                            render_paired_line(add, None, theme, lineno_width, term_width, out);
                         }
                     }
                 }
             } else {
                 // Context line
-                render_line(&hunk.lines[i], theme, lineno_width, out);
+                render_line(&hunk.lines[i], theme, lineno_width, term_width, out);
                 i += 1;
             }
         }
@@ -571,19 +609,44 @@ fn unified_content_width(lineno_width: usize, term_width: usize) -> usize {
     term_width.saturating_sub(unified_prefix_width(lineno_width))
 }
 
-fn display_content<'a>(
-    raw: &'a str,
-    empty_marker: &'a str,
-    max_width: usize,
-) -> std::borrow::Cow<'a, str> {
-    if raw.is_empty() {
-        return std::borrow::Cow::Borrowed(empty_marker);
+/// Expand tabs to spaces using a fixed tabstop (display columns).
+fn expand_tabs(s: &str) -> Cow<'_, str> {
+    if !s.as_bytes().contains(&b'\t') {
+        return Cow::Borrowed(s);
     }
-    let truncated = truncate_code_raw(raw, max_width);
-    if truncated.as_str() == raw {
-        std::borrow::Cow::Borrowed(raw)
+    let mut out = String::with_capacity(s.len() + 8);
+    let mut col = 0usize;
+    for ch in s.chars() {
+        if ch == '\t' {
+            let spaces = TABSTOP - (col % TABSTOP);
+            out.push_str(&" ".repeat(spaces));
+            col += spaces;
+        } else {
+            out.push(ch);
+            col += ch.width().unwrap_or(0);
+        }
+    }
+    Cow::Owned(out)
+}
+
+fn display_content(raw: &str, empty_marker: &str, max_width: usize) -> String {
+    let expanded = expand_tabs(raw);
+    if expanded.is_empty() {
+        return empty_marker.to_string();
+    }
+    truncate_code_raw(expanded.as_ref(), max_width)
+}
+
+fn append_no_newline_marker(line: &DiffLine, theme: &Theme, out: &mut String) {
+    if !line.no_newline {
+        return;
+    }
+    let msg = "\\ No newline at end of file";
+    if theme.colors_enabled() {
+        out.push_str(&format!("\x1b[2m{}\x1b[0m\n", msg));
     } else {
-        std::borrow::Cow::Owned(truncated)
+        out.push_str(msg);
+        out.push('\n');
     }
 }
 
@@ -678,9 +741,9 @@ fn render_paired_line(
     pair: Option<&DiffLine>,
     theme: &Theme,
     lineno_width: usize,
+    term_width: usize,
     out: &mut String,
 ) {
-    let term_width = cached_term_width();
     let old = format_lineno(line.old_lineno, lineno_width);
     let new = format_lineno(line.new_lineno, lineno_width);
     let sep = if theme.unicode_enabled() {
@@ -739,8 +802,11 @@ fn render_paired_line(
             }
         }
         DiffLineKind::Context => {
-            render_line(line, theme, lineno_width, out);
+            render_line(line, theme, lineno_width, term_width, out);
         }
+    }
+    if line.kind != DiffLineKind::Context {
+        append_no_newline_marker(line, theme, out);
     }
 }
 
@@ -749,8 +815,13 @@ fn render_paired_line(
 // ---------------------------------------------------------------------------
 
 /// Render a single context/addition/deletion line.
-fn render_line(line: &DiffLine, theme: &Theme, lineno_width: usize, out: &mut String) {
-    let term_width = cached_term_width();
+fn render_line(
+    line: &DiffLine,
+    theme: &Theme,
+    lineno_width: usize,
+    term_width: usize,
+    out: &mut String,
+) {
     let old = format_lineno(line.old_lineno, lineno_width);
     let new = format_lineno(line.new_lineno, lineno_width);
     let sep = if theme.unicode_enabled() {
@@ -823,6 +894,7 @@ fn render_line(line: &DiffLine, theme: &Theme, lineno_width: usize, out: &mut St
             }
         }
     }
+    append_no_newline_marker(line, theme, out);
 }
 
 // ---------------------------------------------------------------------------
@@ -834,9 +906,10 @@ fn render_hunk_side_by_side(
     options: &DiffRenderOptions,
     theme: &Theme,
     lineno_width: usize,
+    term_width: usize,
     out: &mut String,
 ) {
-    let width = cached_term_width();
+    let width = term_width;
     // Reserved: left_edge(1) + left_lineno(w) + sep(3) + middle_sep(3) + right_lineno(w) + sep(3)
     // Total overhead: 1 + w + 3 + 3 + w + 3 = 2*w + 10
     let overhead = lineno_width * 2 + 10;
@@ -956,8 +1029,8 @@ fn render_side_by_side_row(
                 if l.kind == DiffLineKind::Deletion && r.kind == DiffLineKind::Addition =>
             {
                 // Paired change: check threshold then word-level highlighting
-                let left_visible = truncate_code_raw(&l.content, code_width);
-                let right_visible = truncate_code_raw(&r.content, code_width);
+                let left_visible = truncate_code_raw(expand_tabs(&l.content).as_ref(), code_width);
+                let right_visible = truncate_code_raw(expand_tabs(&r.content).as_ref(), code_width);
                 let sim = crate::diff::word_diff::similarity(&left_visible, &right_visible);
                 let mut col = String::new();
                 let mut left_w = 0;
@@ -994,7 +1067,8 @@ fn render_side_by_side_row(
                     let pad = code_width.saturating_sub(empty_marker.width());
                     format!("{}{}", marker, " ".repeat(pad))
                 } else {
-                    let left_visible = truncate_code_raw(&l.content, code_width);
+                    let left_visible =
+                        truncate_code_raw(expand_tabs(&l.content).as_ref(), code_width);
                     let left_w = left_visible.width();
                     let col = if l.kind == DiffLineKind::Context {
                         left_visible.clone()
@@ -1012,8 +1086,8 @@ fn render_side_by_side_row(
             (Some(l), Some(r))
                 if l.kind == DiffLineKind::Deletion && r.kind == DiffLineKind::Addition =>
             {
-                let left_visible = truncate_code_raw(&l.content, code_width);
-                let right_visible = truncate_code_raw(&r.content, code_width);
+                let left_visible = truncate_code_raw(expand_tabs(&l.content).as_ref(), code_width);
+                let right_visible = truncate_code_raw(expand_tabs(&r.content).as_ref(), code_width);
                 let sim = crate::diff::word_diff::similarity(&left_visible, &right_visible);
                 let mut col = String::new();
                 let mut right_w = 0;
@@ -1050,7 +1124,8 @@ fn render_side_by_side_row(
                     let pad = code_width.saturating_sub(empty_marker.width());
                     format!("{}{}", marker, " ".repeat(pad))
                 } else {
-                    let right_visible = truncate_code_raw(&r.content, code_width);
+                    let right_visible =
+                        truncate_code_raw(expand_tabs(&r.content).as_ref(), code_width);
                     let right_w = right_visible.width();
                     let col = if r.kind == DiffLineKind::Context {
                         right_visible.clone()
@@ -1079,7 +1154,7 @@ fn render_side_by_side_row(
                 if l.content.is_empty() {
                     truncate_code(empty_marker, code_width)
                 } else {
-                    truncate_code(&l.content, code_width)
+                    truncate_code(expand_tabs(&l.content).as_ref(), code_width)
                 }
             })
             .unwrap_or_else(|| " ".repeat(code_width));
@@ -1088,7 +1163,7 @@ fn render_side_by_side_row(
                 if l.content.is_empty() {
                     truncate_code(empty_marker, code_width)
                 } else {
-                    truncate_code(&l.content, code_width)
+                    truncate_code(expand_tabs(&l.content).as_ref(), code_width)
                 }
             })
             .unwrap_or_else(|| " ".repeat(code_width));
@@ -1120,6 +1195,16 @@ fn render_side_by_side_row(
             &format!("{}{}{}\n", sep, right_sign, right_content),
             "",
         ));
+    }
+    match (del, add) {
+        (Some(l), Some(r)) if std::ptr::eq(l, r) => append_no_newline_marker(l, theme, out),
+        (Some(l), Some(r)) => {
+            append_no_newline_marker(l, theme, out);
+            append_no_newline_marker(r, theme, out);
+        }
+        (Some(l), None) => append_no_newline_marker(l, theme, out),
+        (None, Some(r)) => append_no_newline_marker(r, theme, out),
+        (None, None) => {}
     }
 }
 
@@ -1377,18 +1462,21 @@ mod tests {
                 old_lineno: Some(1),
                 new_lineno: Some(1),
                 content: "a".into(),
+                no_newline: false,
             },
             DiffLine {
                 kind: DiffLineKind::Addition,
                 old_lineno: None,
                 new_lineno: Some(2),
                 content: "b".into(),
+                no_newline: false,
             },
             DiffLine {
                 kind: DiffLineKind::Context,
                 old_lineno: Some(2),
                 new_lineno: Some(3),
                 content: "c".into(),
+                no_newline: false,
             },
         ];
         let ranges = find_change_ranges(&lines, 3);
@@ -1407,6 +1495,7 @@ mod tests {
                 old_lineno: Some(i),
                 new_lineno: Some(i),
                 content: "ctx".into(),
+                no_newline: false,
             });
         }
         lines.push(DiffLine {
@@ -1414,6 +1503,7 @@ mod tests {
             old_lineno: None,
             new_lineno: Some(16),
             content: "add".into(),
+            no_newline: false,
         });
         for i in 17u32..=31 {
             lines.push(DiffLine {
@@ -1421,6 +1511,7 @@ mod tests {
                 old_lineno: Some(i.saturating_sub(1)),
                 new_lineno: Some(i),
                 content: "ctx".into(),
+                no_newline: false,
             });
         }
 
@@ -1871,5 +1962,107 @@ diff --git a/a.rs b/a.rs
 ";
         let files = parse(diff);
         assert_eq!(lineno_width_for_file(&files[0]), 1);
+    }
+
+    #[test]
+    fn test_render_no_newline_marker() {
+        let diff = "\
+diff --git a/a.txt b/a.txt
+--- a/a.txt
++++ b/a.txt
+@@ -1,1 +1,1 @@
+-old
+\\ No newline at end of file
++new
+\\ No newline at end of file
+";
+        let files = parse(diff);
+        let result = render(&files, &DiffRenderOptions::default(), &test_theme());
+        assert!(
+            result.contains("\\ No newline at end of file"),
+            "missing no-newline marker, got:\n{result}"
+        );
+    }
+
+    #[test]
+    fn test_expand_tabs_uses_tabstop_8() {
+        assert_eq!(expand_tabs("a\tb").as_ref(), "a       b");
+        assert_eq!(expand_tabs("\t").as_ref(), "        ");
+        assert_eq!(expand_tabs("abcd\te").as_ref(), "abcd    e");
+    }
+
+    #[test]
+    fn test_render_pure_rename_cue() {
+        let diff = "\
+diff --git a/old.rs b/new.rs
+similarity index 100%
+rename from old.rs
+rename to new.rs
+";
+        let files = parse(diff);
+        let result = render(&files, &DiffRenderOptions::default(), &test_theme());
+        assert!(
+            result.contains("renamed with no content change"),
+            "pure rename should show a cue, got:\n{result}"
+        );
+    }
+
+    #[test]
+    fn test_render_to_matches_render() {
+        let diff = "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1,1 +1,1 @@
+-foo
++bar
+";
+        let files = parse(diff);
+        let opts = DiffRenderOptions::default();
+        let theme = test_theme();
+        let as_string = render(&files, &opts, &theme);
+        let mut buf = Vec::new();
+        render_to(&files, &opts, &theme, &mut buf).unwrap();
+        assert_eq!(as_string, String::from_utf8(buf).unwrap());
+    }
+
+    #[test]
+    fn test_header_fill_uses_plain_visible_width() {
+        let files = parse(
+            "\
+diff --git a/short.rs b/short.rs
+--- a/short.rs
++++ b/short.rs
+@@ -1,1 +1,1 @@
+-a
++b
+",
+        );
+        // Force a known width by rendering and checking the header line length
+        // stays within a reasonable bound (no ANSI in width math → no huge fill).
+        let result = render(&files, &DiffRenderOptions::default(), &test_theme_colored());
+        let header = result.lines().next().unwrap_or("");
+        // Strip ANSI for measurement
+        let mut plain = String::new();
+        let mut chars = header.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\u{1b}' {
+                if chars.peek() == Some(&'[') {
+                    chars.next();
+                    for ch in chars.by_ref() {
+                        if ch.is_ascii_alphabetic() {
+                            break;
+                        }
+                    }
+                }
+                continue;
+            }
+            plain.push(c);
+        }
+        assert!(
+            plain.width() <= term_width_for_render() + 2,
+            "header visible width {} exceeds term width, plain={plain:?}",
+            plain.width()
+        );
     }
 }

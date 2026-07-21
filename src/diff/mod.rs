@@ -15,7 +15,9 @@ pub use parser::{
     FileStatus,
 };
 pub use pathspec::{matches_any as pathspec_matches_any, matches_one as pathspec_matches};
-pub use renderer::{render, render_name_only, render_name_status, DiffRenderOptions, RenderMode};
+pub use renderer::{
+    render, render_name_only, render_name_status, render_to, DiffRenderOptions, RenderMode,
+};
 
 /// Keep files whose old or new path matches any pathspec.
 pub fn filter_files(mut files: Vec<DiffFile>, pathspecs: &[String]) -> Vec<DiffFile> {

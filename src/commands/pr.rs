@@ -19,7 +19,7 @@ use crate::error::{BitbucketError, Result};
 use crate::git;
 use crate::output::table::Table;
 use crate::output::theme::Theme;
-use crate::output::{print_block, print_paginated, Formatter};
+use crate::output::{print_block, print_paginated, write_paginated, Formatter};
 
 // ---- JSON output shapes ---------------------------------------------------
 
@@ -785,12 +785,16 @@ pub async fn diff(
                 crate::diff::RenderMode::Unified
             },
         };
-        let rendered = crate::diff::renderer::render(&files, &options, theme);
 
         if g.no_pager || !std::io::stdout().is_terminal() {
-            print_block(&rendered)
+            let mut out = std::io::stdout().lock();
+            crate::diff::renderer::render_to(&files, &options, theme, &mut out)?;
+            Ok(())
         } else {
-            print_paginated(&rendered)
+            write_paginated(|w| {
+                crate::diff::renderer::render_to(&files, &options, theme, w)?;
+                Ok(())
+            })
         }
     }
 }

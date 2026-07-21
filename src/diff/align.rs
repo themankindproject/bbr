@@ -114,6 +114,7 @@ mod tests {
             old_lineno: None,
             new_lineno: None,
             content: content.to_string(),
+            no_newline: false,
         }
     }
 

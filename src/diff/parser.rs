@@ -24,6 +24,9 @@ pub struct DiffLine {
     pub new_lineno: Option<u32>,
     /// The line content (without leading `+`, `-`, or ` `).
     pub content: String,
+    /// True when the next marker is `\ No newline at end of file`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_newline: bool,
 }
 
 /// A hunk (chunk) of a diff, starting with `@@ -a,b +c,d @@`.
@@ -299,11 +302,16 @@ pub fn parse(raw: &str) -> Vec<DiffFile> {
                 hunk.add_line(line);
                 continue;
             }
+            // `\ No newline at end of file` applies to the preceding content line.
+            if line.starts_with('\\') {
+                if let Some(last) = hunk.lines.last_mut() {
+                    last.no_newline = true;
+                }
+                continue;
+            }
         }
 
-        // Lines that don't match any known pattern (like "\ No newline at end of file")
-        // We either ignore them or add as context if we're in a hunk
-        if current_hunk.is_some() && (line.is_empty() || line.starts_with('\\')) {
+        if current_hunk.is_some() && line.is_empty() {
             continue;
         }
     }
@@ -438,6 +446,7 @@ impl DiffHunkBuilder {
             old_lineno,
             new_lineno,
             content: sanitize_terminal_escapes(content),
+            no_newline: false,
         });
     }
 }
@@ -977,6 +986,44 @@ Binary files /dev/null and b/logo.png differ
         assert!(files[0].binary, "binary marker should be preserved");
         assert!(files[0].hunks.is_empty());
         assert_eq!(files[0].new_path, "logo.png");
+    }
+
+    #[test]
+    fn test_parse_no_newline_at_eof() {
+        let diff = "\
+diff --git a/a.txt b/a.txt
+--- a/a.txt
++++ b/a.txt
+@@ -1,1 +1,1 @@
+-old
+\\ No newline at end of file
++new
+\\ No newline at end of file
+";
+        let files = parse(diff);
+        assert_eq!(files.len(), 1);
+        let lines = &files[0].hunks[0].lines;
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].no_newline);
+        assert!(lines[1].no_newline);
+        assert_eq!(lines[0].content, "old");
+        assert_eq!(lines[1].content, "new");
+    }
+
+    #[test]
+    fn test_parse_pure_rename_no_hunks() {
+        let diff = "\
+diff --git a/old.rs b/new.rs
+similarity index 100%
+rename from old.rs
+rename to new.rs
+";
+        let files = parse(diff);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].status, FileStatus::Renamed);
+        assert!(files[0].hunks.is_empty());
+        assert_eq!(files[0].old_path, "old.rs");
+        assert_eq!(files[0].new_path, "new.rs");
     }
 
     #[test]
