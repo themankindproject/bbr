@@ -76,6 +76,7 @@ base64 = "0.22"
 
 # Timed wait for child processes (git)
 wait-timeout = "0.2"
+syntect = { version = "5", default-features = false, features = ["parsing", "default-syntaxes", "default-themes", "regex-fancy", "dump-load"] }
 
 [target.'cfg(unix)'.dependencies]
 # Terminal width detection (ioctl TIOCGWINSZ on Unix)

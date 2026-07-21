@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pure rename cue** — 100% renames with no hunks show `(renamed with no content change)` instead of a bare header.
 - **Diff header fill width** — trailing `─` fill uses plain (no-ANSI) Unicode width so colored headers don't over/under-fill.
 - **Terminal width** — measured once per render pass (not process-lifetime `OnceLock`), so resize mid-session is respected.
+- **`git rev-parse --verify --`** — branch existence checks pass `--` so names that look like options are safe.
 
 ### Added
 
@@ -29,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`bbr pr diff --name-only` / `--name-status`** — path listing modes (git-compatible).
 - **`bbr pr diff -- PATH…`** — pathspec filters (exact, prefix, basename, `*`/`?` globs) after `--`.
 - **Streaming pretty diffs** — `render_to` / `write_paginated` write file-by-file into the pager to cut peak memory on large PRs.
+- **`--word-diff` / `--no-word-diff`** — toggle intra-line word highlighting on `pr diff` and `pr view` (on by default).
+- **Syntect syntax highlighting** — pretty diffs colorize code by file type; disable with `--no-syntax`.
+- **Streaming `pr view --diff`** — header/comments stream with the diff instead of buffering the full view string.
 
 ### Changed
 

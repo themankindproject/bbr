@@ -169,9 +169,24 @@ async fn dispatch_pr(g: &GlobalArgs, action: PrAction) -> Result<()> {
             diff,
             side_by_side,
             context,
+            word_diff: _,
+            no_word_diff,
+            no_syntax,
             comments,
             g,
-        } => commands::pr::view(&g, id, diff, side_by_side, context, comments).await,
+        } => {
+            commands::pr::view(
+                &g,
+                id,
+                diff,
+                side_by_side,
+                context,
+                !no_word_diff,
+                !no_syntax,
+                comments,
+            )
+            .await
+        }
         PrAction::Create {
             title,
             body,
@@ -250,6 +265,9 @@ async fn dispatch_pr(g: &GlobalArgs, action: PrAction) -> Result<()> {
             raw,
             side_by_side,
             context,
+            word_diff: _,
+            no_word_diff,
+            no_syntax,
             name_only,
             name_status,
             paths,
@@ -261,6 +279,8 @@ async fn dispatch_pr(g: &GlobalArgs, action: PrAction) -> Result<()> {
                 raw,
                 side_by_side,
                 context,
+                !no_word_diff,
+                !no_syntax,
                 name_only,
                 name_status,
                 &paths,

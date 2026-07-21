@@ -8,6 +8,7 @@ pub mod align;
 pub mod parser;
 pub mod pathspec;
 pub mod renderer;
+pub mod syntax;
 pub mod word_diff;
 
 pub use parser::{

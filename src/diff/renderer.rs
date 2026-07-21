@@ -22,6 +22,10 @@ pub struct DiffRenderOptions {
     pub context_lines: usize,
     /// Render mode (unified or side-by-side).
     pub mode: RenderMode,
+    /// Intra-line word highlighting for similar paired lines (default: true).
+    pub word_diff: bool,
+    /// Syntect syntax highlighting when colors are enabled (default: true).
+    pub syntax_highlight: bool,
 }
 
 impl Default for DiffRenderOptions {
@@ -29,6 +33,8 @@ impl Default for DiffRenderOptions {
         DiffRenderOptions {
             context_lines: 3,
             mode: RenderMode::Unified,
+            word_diff: true,
+            syntax_highlight: true,
         }
     }
 }
@@ -228,8 +234,22 @@ fn render_file(
     }
 
     let lineno_width = lineno_width_for_file(file);
+    let path = display_path(file);
+    let mut highlighter = crate::diff::syntax::FileHighlighter::new(
+        path,
+        options.syntax_highlight && theme.colors_enabled(),
+    );
     for hunk in &file.hunks {
-        render_hunk(hunk, options, theme, lineno_width, term_width, out);
+        render_hunk(
+            hunk,
+            options,
+            theme,
+            lineno_width,
+            term_width,
+            path,
+            &mut highlighter,
+            out,
+        );
     }
 }
 
@@ -428,6 +448,8 @@ fn render_hunk(
     theme: &Theme,
     lineno_width: usize,
     term_width: usize,
+    path: &str,
+    highlighter: &mut crate::diff::syntax::FileHighlighter,
     out: &mut String,
 ) {
     // Hunk header (dimmed)
@@ -444,9 +466,17 @@ fn render_hunk(
     };
 
     if options.mode == RenderMode::SideBySide {
-        render_hunk_side_by_side(hunk, options, theme, lineno_width, term_width, out);
+        render_hunk_side_by_side(hunk, options, theme, lineno_width, term_width, path, out);
     } else {
-        render_hunk_unified(hunk, options, theme, lineno_width, term_width, out);
+        render_hunk_unified(
+            hunk,
+            options,
+            theme,
+            lineno_width,
+            term_width,
+            highlighter,
+            out,
+        );
     }
 }
 
@@ -460,12 +490,16 @@ fn render_hunk_unified(
     theme: &Theme,
     lineno_width: usize,
     term_width: usize,
+    highlighter: &mut crate::diff::syntax::FileHighlighter,
     out: &mut String,
 ) {
     let ranges = find_change_ranges(&hunk.lines, options.context_lines);
 
     for range in &ranges {
         if range.is_collapsed && range.end > range.start {
+            for line in &hunk.lines[range.start..range.end] {
+                highlighter.advance(expand_tabs(&line.content).as_ref());
+            }
             let hidden = range.end - range.start;
             let msg = format!("{} lines hidden", hidden);
             if theme.unicode_enabled() {
@@ -500,6 +534,8 @@ fn render_hunk_unified(
                                 theme,
                                 lineno_width,
                                 term_width,
+                                options,
+                                highlighter,
                                 out,
                             );
                             render_paired_line(
@@ -508,20 +544,48 @@ fn render_hunk_unified(
                                 theme,
                                 lineno_width,
                                 term_width,
+                                options,
+                                highlighter,
                                 out,
                             );
                         }
                         crate::diff::align::AlignedRow::DeleteOnly(del) => {
-                            render_paired_line(del, None, theme, lineno_width, term_width, out);
+                            render_paired_line(
+                                del,
+                                None,
+                                theme,
+                                lineno_width,
+                                term_width,
+                                options,
+                                highlighter,
+                                out,
+                            );
                         }
                         crate::diff::align::AlignedRow::AddOnly(add) => {
-                            render_paired_line(add, None, theme, lineno_width, term_width, out);
+                            render_paired_line(
+                                add,
+                                None,
+                                theme,
+                                lineno_width,
+                                term_width,
+                                options,
+                                highlighter,
+                                out,
+                            );
                         }
                     }
                 }
             } else {
                 // Context line
-                render_line(&hunk.lines[i], theme, lineno_width, term_width, out);
+                render_line(
+                    &hunk.lines[i],
+                    theme,
+                    lineno_width,
+                    term_width,
+                    options,
+                    highlighter,
+                    out,
+                );
                 i += 1;
             }
         }
@@ -565,6 +629,14 @@ impl TintedLine {
         self.buf.push_str("\x1b[2m");
         self.buf.push_str(s);
         self.buf.push_str("\x1b[22m");
+        self.reassert_bg();
+    }
+
+    /// 24-bit foreground (syntect), then restore default fg while keeping bg.
+    fn push_fg_rgb(&mut self, r: u8, g: u8, b: u8, s: &str) {
+        self.buf.push_str(&format!("\x1b[38;2;{r};{g};{b}m"));
+        self.buf.push_str(s);
+        self.buf.push_str("\x1b[39m");
         self.reassert_bg();
     }
 
@@ -650,14 +722,32 @@ fn append_no_newline_marker(line: &DiffLine, theme: &Theme, out: &mut String) {
     }
 }
 
+fn push_syntax_spans(tinted: &mut TintedLine, spans: &[(syntect::highlighting::Style, String)]) {
+    for (style, text) in spans {
+        if text.is_empty() {
+            continue;
+        }
+        let c = style.foreground;
+        tinted.push_fg_rgb(c.r, c.g, c.b, text);
+    }
+}
+
 fn render_addition_content(
     line: &DiffLine,
     pair: Option<&DiffLine>,
     empty_marker: &str,
     max_width: usize,
+    word_diff: bool,
+    highlighter: &mut crate::diff::syntax::FileHighlighter,
     tinted: &mut TintedLine,
 ) -> usize {
-    let content = display_content(&line.content, empty_marker, max_width);
+    let expanded = expand_tabs(&line.content);
+    let spans_raw = highlighter.highlight(expanded.as_ref());
+    let content = if expanded.is_empty() {
+        empty_marker.to_string()
+    } else {
+        truncate_code_raw(expanded.as_ref(), max_width)
+    };
     let visible = content.width();
 
     if line.content.is_empty() {
@@ -665,26 +755,32 @@ fn render_addition_content(
         return visible;
     }
 
-    if let Some(p) = pair {
-        let pair_disp = display_content(&p.content, "", max_width);
-        let sim = crate::diff::word_diff::similarity(pair_disp.as_ref(), content.as_ref());
-        if sim < crate::diff::word_diff::WORD_DIFF_THRESHOLD {
-            tinted.push_fg("32", content.as_ref());
-        } else {
-            let segments =
-                crate::diff::word_diff::word_changes(pair_disp.as_ref(), content.as_ref());
-            for seg in segments {
-                match seg.kind {
-                    crate::diff::word_diff::WordChange::Inserted => {
-                        tinted.push_word_hl("42", "32", &seg.text);
-                    }
-                    crate::diff::word_diff::WordChange::Deleted => {}
-                    crate::diff::word_diff::WordChange::Equal => {
-                        tinted.push_fg("32", &seg.text);
+    if word_diff {
+        if let Some(p) = pair {
+            let pair_disp = display_content(&p.content, "", max_width);
+            let sim = crate::diff::word_diff::similarity(pair_disp.as_ref(), content.as_ref());
+            if sim >= crate::diff::word_diff::WORD_DIFF_THRESHOLD {
+                let segments =
+                    crate::diff::word_diff::word_changes(pair_disp.as_ref(), content.as_ref());
+                for seg in segments {
+                    match seg.kind {
+                        crate::diff::word_diff::WordChange::Inserted => {
+                            tinted.push_word_hl("42", "32", &seg.text);
+                        }
+                        crate::diff::word_diff::WordChange::Deleted => {}
+                        crate::diff::word_diff::WordChange::Equal => {
+                            tinted.push_fg("32", &seg.text);
+                        }
                     }
                 }
+                return visible;
             }
         }
+    }
+
+    if !spans_raw.is_empty() {
+        let truncated = crate::diff::syntax::truncate_spans(&spans_raw, max_width);
+        push_syntax_spans(tinted, &truncated);
     } else {
         tinted.push_fg("32", content.as_ref());
     }
@@ -696,9 +792,17 @@ fn render_deletion_content(
     pair: Option<&DiffLine>,
     empty_marker: &str,
     max_width: usize,
+    word_diff: bool,
+    highlighter: &mut crate::diff::syntax::FileHighlighter,
     tinted: &mut TintedLine,
 ) -> usize {
-    let content = display_content(&line.content, empty_marker, max_width);
+    let expanded = expand_tabs(&line.content);
+    let spans_raw = highlighter.highlight(expanded.as_ref());
+    let content = if expanded.is_empty() {
+        empty_marker.to_string()
+    } else {
+        truncate_code_raw(expanded.as_ref(), max_width)
+    };
     let visible = content.width();
 
     if line.content.is_empty() {
@@ -706,26 +810,32 @@ fn render_deletion_content(
         return visible;
     }
 
-    if let Some(p) = pair {
-        let pair_disp = display_content(&p.content, "", max_width);
-        let sim = crate::diff::word_diff::similarity(content.as_ref(), pair_disp.as_ref());
-        if sim < crate::diff::word_diff::WORD_DIFF_THRESHOLD {
-            tinted.push_fg("31", content.as_ref());
-        } else {
-            let segments =
-                crate::diff::word_diff::word_changes(content.as_ref(), pair_disp.as_ref());
-            for seg in segments {
-                match seg.kind {
-                    crate::diff::word_diff::WordChange::Deleted => {
-                        tinted.push_word_hl("41", "31", &seg.text);
-                    }
-                    crate::diff::word_diff::WordChange::Inserted => {}
-                    crate::diff::word_diff::WordChange::Equal => {
-                        tinted.push_fg("31", &seg.text);
+    if word_diff {
+        if let Some(p) = pair {
+            let pair_disp = display_content(&p.content, "", max_width);
+            let sim = crate::diff::word_diff::similarity(content.as_ref(), pair_disp.as_ref());
+            if sim >= crate::diff::word_diff::WORD_DIFF_THRESHOLD {
+                let segments =
+                    crate::diff::word_diff::word_changes(content.as_ref(), pair_disp.as_ref());
+                for seg in segments {
+                    match seg.kind {
+                        crate::diff::word_diff::WordChange::Deleted => {
+                            tinted.push_word_hl("41", "31", &seg.text);
+                        }
+                        crate::diff::word_diff::WordChange::Inserted => {}
+                        crate::diff::word_diff::WordChange::Equal => {
+                            tinted.push_fg("31", &seg.text);
+                        }
                     }
                 }
+                return visible;
             }
         }
+    }
+
+    if !spans_raw.is_empty() {
+        let truncated = crate::diff::syntax::truncate_spans(&spans_raw, max_width);
+        push_syntax_spans(tinted, &truncated);
     } else {
         tinted.push_fg("31", content.as_ref());
     }
@@ -742,6 +852,8 @@ fn render_paired_line(
     theme: &Theme,
     lineno_width: usize,
     term_width: usize,
+    options: &DiffRenderOptions,
+    highlighter: &mut crate::diff::syntax::FileHighlighter,
     out: &mut String,
 ) {
     let old = format_lineno(line.old_lineno, lineno_width);
@@ -771,12 +883,20 @@ fn render_paired_line(
                 tinted.push_space();
                 tinted.push_dim(sep);
                 tinted.push_space();
-                let content_w =
-                    render_addition_content(line, pair, empty_marker, max_content, &mut tinted);
+                let content_w = render_addition_content(
+                    line,
+                    pair,
+                    empty_marker,
+                    max_content,
+                    options.word_diff,
+                    highlighter,
+                    &mut tinted,
+                );
                 let pad = term_width.saturating_sub(unified_prefix_width(lineno_width) + content_w);
                 out.push_str(&tinted.finish(pad));
             } else {
                 let content = display_content(&line.content, empty_marker, max_content);
+                highlighter.advance(expand_tabs(&line.content).as_ref());
                 out.push_str(&format!(" {} {} + {} {}\n", old, new, sep, content));
             }
         }
@@ -792,17 +912,33 @@ fn render_paired_line(
                 tinted.push_space();
                 tinted.push_dim(sep);
                 tinted.push_space();
-                let content_w =
-                    render_deletion_content(line, pair, empty_marker, max_content, &mut tinted);
+                let content_w = render_deletion_content(
+                    line,
+                    pair,
+                    empty_marker,
+                    max_content,
+                    options.word_diff,
+                    highlighter,
+                    &mut tinted,
+                );
                 let pad = term_width.saturating_sub(unified_prefix_width(lineno_width) + content_w);
                 out.push_str(&tinted.finish(pad));
             } else {
                 let content = display_content(&line.content, empty_marker, max_content);
+                highlighter.advance(expand_tabs(&line.content).as_ref());
                 out.push_str(&format!(" {} {} - {} {}\n", old, new, sep, content));
             }
         }
         DiffLineKind::Context => {
-            render_line(line, theme, lineno_width, term_width, out);
+            render_line(
+                line,
+                theme,
+                lineno_width,
+                term_width,
+                options,
+                highlighter,
+                out,
+            );
         }
     }
     if line.kind != DiffLineKind::Context {
@@ -820,6 +956,8 @@ fn render_line(
     theme: &Theme,
     lineno_width: usize,
     term_width: usize,
+    options: &DiffRenderOptions,
+    highlighter: &mut crate::diff::syntax::FileHighlighter,
     out: &mut String,
 ) {
     let old = format_lineno(line.old_lineno, lineno_width);
@@ -838,14 +976,26 @@ fn render_line(
 
     match line.kind {
         DiffLineKind::Context => {
-            let content = display_content(&line.content, "", max_content);
+            let expanded = expand_tabs(&line.content);
+            let spans_raw = highlighter.highlight(expanded.as_ref());
+            let content = if expanded.is_empty() {
+                String::new()
+            } else {
+                truncate_code_raw(expanded.as_ref(), max_content)
+            };
             if theme.colors_enabled() {
                 let dimmed_old = format!("\x1b[2m{}\x1b[0m", old);
                 let dimmed_new = format!("\x1b[2m{}\x1b[0m", new);
                 let dimmed_sep = format!("\x1b[2m{}\x1b[0m", sep);
+                let body = if !spans_raw.is_empty() {
+                    let truncated = crate::diff::syntax::truncate_spans(&spans_raw, max_content);
+                    crate::diff::syntax::spans_to_ansi(&truncated)
+                } else {
+                    content
+                };
                 out.push_str(&format!(
                     " {} {}   {} {}\n",
-                    dimmed_old, dimmed_new, dimmed_sep, content
+                    dimmed_old, dimmed_new, dimmed_sep, body
                 ));
             } else {
                 out.push_str(&format!(" {} {}   {} {}\n", old, new, sep, content));
@@ -863,12 +1013,20 @@ fn render_line(
                 tinted.push_space();
                 tinted.push_dim(sep);
                 tinted.push_space();
-                let content_w =
-                    render_addition_content(line, None, empty_marker, max_content, &mut tinted);
+                let content_w = render_addition_content(
+                    line,
+                    None,
+                    empty_marker,
+                    max_content,
+                    options.word_diff,
+                    highlighter,
+                    &mut tinted,
+                );
                 let pad = term_width.saturating_sub(unified_prefix_width(lineno_width) + content_w);
                 out.push_str(&tinted.finish(pad));
             } else {
                 let content = display_content(&line.content, empty_marker, max_content);
+                highlighter.advance(expand_tabs(&line.content).as_ref());
                 out.push_str(&format!(" {} {} + {} {}\n", old, new, sep, content));
             }
         }
@@ -884,12 +1042,20 @@ fn render_line(
                 tinted.push_space();
                 tinted.push_dim(sep);
                 tinted.push_space();
-                let content_w =
-                    render_deletion_content(line, None, empty_marker, max_content, &mut tinted);
+                let content_w = render_deletion_content(
+                    line,
+                    None,
+                    empty_marker,
+                    max_content,
+                    options.word_diff,
+                    highlighter,
+                    &mut tinted,
+                );
                 let pad = term_width.saturating_sub(unified_prefix_width(lineno_width) + content_w);
                 out.push_str(&tinted.finish(pad));
             } else {
                 let content = display_content(&line.content, empty_marker, max_content);
+                highlighter.advance(expand_tabs(&line.content).as_ref());
                 out.push_str(&format!(" {} {} - {} {}\n", old, new, sep, content));
             }
         }
@@ -907,6 +1073,7 @@ fn render_hunk_side_by_side(
     theme: &Theme,
     lineno_width: usize,
     term_width: usize,
+    path: &str,
     out: &mut String,
 ) {
     let width = term_width;
@@ -956,6 +1123,8 @@ fn render_hunk_side_by_side(
                                 code_width,
                                 lineno_width,
                                 theme,
+                                options,
+                                path,
                                 out,
                             );
                         }
@@ -966,6 +1135,8 @@ fn render_hunk_side_by_side(
                                 code_width,
                                 lineno_width,
                                 theme,
+                                options,
+                                path,
                                 out,
                             );
                         }
@@ -976,6 +1147,8 @@ fn render_hunk_side_by_side(
                                 code_width,
                                 lineno_width,
                                 theme,
+                                options,
+                                path,
                                 out,
                             );
                         }
@@ -989,6 +1162,8 @@ fn render_hunk_side_by_side(
                     code_width,
                     lineno_width,
                     theme,
+                    options,
+                    path,
                     out,
                 );
                 i += 1;
@@ -1003,8 +1178,12 @@ fn render_side_by_side_row(
     code_width: usize,
     lineno_width: usize,
     theme: &Theme,
+    options: &DiffRenderOptions,
+    path: &str,
     out: &mut String,
 ) {
+    let _ = path; // reserved for per-row syntect (stateless) in colored solid paths
+
     let left_lineno = format_lineno(del.and_then(|l| l.old_lineno), lineno_width);
     let right_lineno = format_lineno(add.and_then(|l| l.new_lineno), lineno_width);
 
@@ -1032,6 +1211,7 @@ fn render_side_by_side_row(
                 let left_visible = truncate_code_raw(expand_tabs(&l.content).as_ref(), code_width);
                 let right_visible = truncate_code_raw(expand_tabs(&r.content).as_ref(), code_width);
                 let sim = crate::diff::word_diff::similarity(&left_visible, &right_visible);
+                let sim = if options.word_diff { sim } else { 0.0 };
                 let mut col = String::new();
                 let mut left_w = 0;
                 if left_visible.is_empty() {
@@ -1089,6 +1269,7 @@ fn render_side_by_side_row(
                 let left_visible = truncate_code_raw(expand_tabs(&l.content).as_ref(), code_width);
                 let right_visible = truncate_code_raw(expand_tabs(&r.content).as_ref(), code_width);
                 let sim = crate::diff::word_diff::similarity(&left_visible, &right_visible);
+                let sim = if options.word_diff { sim } else { 0.0 };
                 let mut col = String::new();
                 let mut right_w = 0;
                 if right_visible.is_empty() {
@@ -1600,6 +1781,7 @@ diff --git a/a.rs b/a.rs
         let options = DiffRenderOptions {
             context_lines: 3,
             mode: RenderMode::SideBySide,
+            ..Default::default()
         };
         let result = render(&files, &options, &test_theme());
         assert!(result.contains("a.rs"));
@@ -1837,7 +2019,10 @@ diff --git a/a.rs b/a.rs
  }
 ";
         let files = parse(diff);
-        let options = DiffRenderOptions::default();
+        let options = DiffRenderOptions {
+            syntax_highlight: false,
+            ..Default::default()
+        };
         let theme = test_theme_colored();
         let result = render(&files, &options, &theme);
 
@@ -1846,6 +2031,55 @@ diff --git a/a.rs b/a.rs
         // Find a context line: "fn hello() {"
         // It should appear without dim around it
         assert!(result.contains("fn hello() {"));
+    }
+
+    #[test]
+    fn test_syntax_highlight_emits_truecolor() {
+        let diff = "\
+diff --git a/hello.rs b/hello.rs
+--- a/hello.rs
++++ b/hello.rs
+@@ -1,3 +1,4 @@
+ fn hello() {
+-    old();
++    new();
+ }
+";
+        let files = parse(diff);
+        let options = DiffRenderOptions {
+            word_diff: false,
+            syntax_highlight: true,
+            ..Default::default()
+        };
+        let result = render(&files, &options, &test_theme_colored());
+        assert!(
+            result.contains("\x1b[38;2;"),
+            "expected syntect 24-bit fg sequences, got:\n{result}"
+        );
+    }
+
+    #[test]
+    fn test_no_word_diff_skips_intra_line_hl() {
+        let diff = "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1,1 +1,1 @@
+-hello world
++hello there
+";
+        let files = parse(diff);
+        let options = DiffRenderOptions {
+            word_diff: false,
+            syntax_highlight: false,
+            ..Default::default()
+        };
+        let result = render(&files, &options, &test_theme_colored());
+        // Word-diff uses 42/41 bright bg highlights; without word_diff those should be absent.
+        assert!(
+            !result.contains("\x1b[30;42m") && !result.contains("\x1b[30;41m"),
+            "word-diff highlight should be off, got:\n{result}"
+        );
     }
 
     #[test]
@@ -1893,6 +2127,7 @@ diff --git a/a.rs b/a.rs
         let options = DiffRenderOptions {
             context_lines: 3,
             mode: RenderMode::SideBySide,
+            ..Default::default()
         };
 
         // Plain mode: should have | at left edge

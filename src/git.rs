@@ -179,7 +179,8 @@ pub fn fetch_branch(branch: &str) -> Result<()> {
 /// Checkout a local branch (creating it if it doesn't exist).
 pub fn checkout_branch(branch: &str) -> Result<()> {
     // First check if branch exists locally (locale-independent)
-    let exists = git(&["rev-parse", "--verify", branch]).is_ok();
+    // `--` stops option parsing so branch names like `--help` or `HEAD:foo` are safe.
+    let exists = git(&["rev-parse", "--verify", "--", branch]).is_ok();
 
     if exists {
         git(&["switch", "--", branch]).map(|_| ())

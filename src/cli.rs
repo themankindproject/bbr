@@ -361,6 +361,15 @@ pub enum PrAction {
         /// Context lines around changes when showing a diff (default: 3).
         #[arg(long, default_value_t = 3)]
         context: usize,
+        /// Enable word-level highlighting (default).
+        #[arg(long, group = "view_word_diff")]
+        word_diff: bool,
+        /// Disable word-level highlighting.
+        #[arg(long, group = "view_word_diff")]
+        no_word_diff: bool,
+        /// Disable syntect syntax highlighting in the pretty diff.
+        #[arg(long)]
+        no_syntax: bool,
         /// Show comments inline.
         #[arg(long)]
         comments: bool,
@@ -514,6 +523,15 @@ pub enum PrAction {
         /// Number of context lines around changes (default: 3).
         #[arg(long, default_value_t = 3)]
         context: usize,
+        /// Enable word-level highlighting (default).
+        #[arg(long, group = "diff_word_diff")]
+        word_diff: bool,
+        /// Disable word-level highlighting.
+        #[arg(long, group = "diff_word_diff")]
+        no_word_diff: bool,
+        /// Disable syntect syntax highlighting in the pretty diff.
+        #[arg(long, conflicts_with = "raw")]
+        no_syntax: bool,
         /// Show only file paths (like `git diff --name-only`).
         #[arg(long, conflicts_with_all = ["raw", "side_by_side", "name_status"])]
         name_only: bool,

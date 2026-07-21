@@ -188,6 +188,8 @@ bbr pr view --diff                   # append pretty diff to output
 bbr pr view --diff --side-by-side    # side-by-side inline diff
 bbr pr view --diff --context 5       # more context lines
 bbr pr view --side-by-side           # implies --diff
+bbr pr view --diff --no-word-diff    # full-line changes only
+bbr pr view --diff --no-syntax       # disable syntect highlighting
 bbr pr view --comments               # show comments inline
 bbr pr view --json
 ```
@@ -249,9 +251,8 @@ bbr pr checkout 467
 #### `bbr pr diff`
 
 Print the diff for a PR. Default output is a rendered pretty diff with box-drawn
-file headers, line numbers, word-level highlighting, and ANSI colors. Use
-`--raw` to pipe the unified diff through `bat`/`less` instead (syntax highlighting
-via `bat` when installed).
+file headers, line numbers, word-level highlighting, syntect syntax highlighting,
+and ANSI colors. Use `--raw` to pipe the unified diff through `bat`/`less` instead.
 
 ```bash
 bbr pr diff 467                          # pretty diff (default)
@@ -259,6 +260,8 @@ bbr pr diff                              # open PR for the current branch
 bbr pr diff 467 --raw                    # bypass pretty renderer, use bat/less
 bbr pr diff 467 --context 5              # more context lines around changes
 bbr pr diff 467 --side-by-side           # side-by-side view
+bbr pr diff 467 --no-word-diff           # disable intra-line word highlighting
+bbr pr diff 467 --no-syntax              # disable syntect syntax highlighting
 bbr pr diff 467 --name-only              # paths only
 bbr pr diff 467 --name-status            # status letter + path
 bbr pr diff 467 -- src/main.rs           # filter to pathspec(s) after `--`

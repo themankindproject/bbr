@@ -211,12 +211,15 @@ pub async fn list(
     fmt.print(&out, &human)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn view(
     g: &GlobalArgs,
     id: Option<u64>,
     show_diff: bool,
     side_by_side: bool,
     context: usize,
+    word_diff: bool,
+    syntax_highlight: bool,
     show_comments: bool,
 ) -> Result<()> {
     let repo = resolve_repo(g)?;
@@ -239,29 +242,23 @@ pub async fn view(
 
     let out = PrViewOut::from(&pr);
 
-    let fmt = Formatter::from_json_flag(g.json);
-    let mut human = render_view(&out);
+    if g.json {
+        return Formatter::from_json_flag(true).print(&out, "");
+    }
 
-    if show_diff {
+    // Prefetch optional sections before opening the pager so the spinner is not
+    // hidden behind less, then stream the body (especially large diffs).
+    let files = if show_diff {
         let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
         spinner.set_message("Fetching diff...");
         let diff_body = client.pr_diff(&repo.workspace, &repo.slug, pr.id).await?;
         spinner.finish();
-        let theme = Theme::current();
-        let files = crate::diff::parser::parse(&diff_body);
-        let options = crate::diff::DiffRenderOptions {
-            context_lines: context,
-            mode: if side_by_side {
-                crate::diff::RenderMode::SideBySide
-            } else {
-                crate::diff::RenderMode::Unified
-            },
-        };
-        let rendered = crate::diff::renderer::render(&files, &options, theme);
-        human.push_str(&format!("\n\n{}", rendered));
-    }
+        Some(crate::diff::parser::parse(&diff_body))
+    } else {
+        None
+    };
 
-    if show_comments {
+    let comments_human = if show_comments {
         let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
         spinner.set_message("Fetching comments...");
         let comments = client
@@ -283,10 +280,46 @@ pub async fn view(
                 })
                 .collect(),
         };
-        human.push_str(&format!("\n\n{}", render_comments(&comments_out)));
-    }
+        Some(render_comments(&comments_out))
+    } else {
+        None
+    };
 
-    fmt.print_paginated(&out, &human)
+    let theme = Theme::current();
+    let options = crate::diff::DiffRenderOptions {
+        context_lines: context,
+        mode: if side_by_side {
+            crate::diff::RenderMode::SideBySide
+        } else {
+            crate::diff::RenderMode::Unified
+        },
+        word_diff,
+        syntax_highlight,
+    };
+    let header = render_view(&out);
+
+    let write_body = |w: &mut dyn std::io::Write| -> Result<()> {
+        w.write_all(header.as_bytes())?;
+        if let Some(ref files) = files {
+            w.write_all(b"\n\n")?;
+            crate::diff::renderer::render_to(files, &options, theme, w)?;
+        }
+        if let Some(ref comments) = comments_human {
+            w.write_all(b"\n\n")?;
+            w.write_all(comments.as_bytes())?;
+            if !comments.ends_with('\n') {
+                w.write_all(b"\n")?;
+            }
+        }
+        Ok(())
+    };
+
+    if g.no_pager || !std::io::stdout().is_terminal() {
+        let mut out = std::io::stdout().lock();
+        write_body(&mut out)
+    } else {
+        write_paginated(write_body)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -726,6 +759,8 @@ pub async fn diff(
     raw: bool,
     side_by_side: bool,
     context: usize,
+    word_diff: bool,
+    syntax_highlight: bool,
     name_only: bool,
     name_status: bool,
     paths: &[String],
@@ -784,6 +819,8 @@ pub async fn diff(
             } else {
                 crate::diff::RenderMode::Unified
             },
+            word_diff,
+            syntax_highlight,
         };
 
         if g.no_pager || !std::io::stdout().is_terminal() {
