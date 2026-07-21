@@ -250,8 +250,23 @@ async fn dispatch_pr(g: &GlobalArgs, action: PrAction) -> Result<()> {
             raw,
             side_by_side,
             context,
+            name_only,
+            name_status,
+            paths,
             g,
-        } => commands::pr::diff(&g, id, raw, side_by_side, context).await,
+        } => {
+            commands::pr::diff(
+                &g,
+                id,
+                raw,
+                side_by_side,
+                context,
+                name_only,
+                name_status,
+                &paths,
+            )
+            .await
+        }
         PrAction::Diffstat { id, g } => commands::pr::diffstat(&g, id).await,
         PrAction::Patch { id, output, g } => commands::pr::patch(&g, id, output.as_deref()).await,
         PrAction::Update {

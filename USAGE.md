@@ -259,6 +259,10 @@ bbr pr diff                              # open PR for the current branch
 bbr pr diff 467 --raw                    # bypass pretty renderer, use bat/less
 bbr pr diff 467 --context 5              # more context lines around changes
 bbr pr diff 467 --side-by-side           # side-by-side view
+bbr pr diff 467 --name-only              # paths only
+bbr pr diff 467 --name-status            # status letter + path
+bbr pr diff 467 -- src/main.rs           # filter to pathspec(s) after `--`
+bbr pr diff 467 -- "src/*.rs"            # glob pathspecs supported
 bbr pr diff 467 --json                   # structured JSON with file/hunk/line data
 bbr pr diff 467 --no-color               # plain text, no ANSI
 ```

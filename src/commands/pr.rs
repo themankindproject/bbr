@@ -719,12 +719,16 @@ pub async fn update(
     fmt.print(&out, &human)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn diff(
     g: &GlobalArgs,
     id: Option<u64>,
     raw: bool,
     side_by_side: bool,
     context: usize,
+    name_only: bool,
+    name_status: bool,
+    paths: &[String],
 ) -> Result<()> {
     let repo = resolve_repo(g)?;
     let client = client(g)?;
@@ -735,9 +739,14 @@ pub async fn diff(
     let body = client.pr_diff(&repo.workspace, &repo.slug, id).await?;
     spinner.finish();
 
+    let body = if paths.is_empty() {
+        body
+    } else {
+        crate::diff::filter_raw_diff(&body, paths)
+    };
+
     if g.json {
-        // JSON: emit structured diff with file metadata
-        let files = crate::diff::parser::parse(&body);
+        let files = crate::diff::filter_files(crate::diff::parser::parse(&body), paths);
         let output = serde_json::json!({
             "id": id,
             "files": files,
@@ -749,14 +758,25 @@ pub async fn diff(
         });
         let fmt = Formatter::from_json_flag(true);
         fmt.print(&output, "")
+    } else if name_only || name_status {
+        let theme = Theme::current();
+        let files = crate::diff::filter_files(crate::diff::parser::parse(&body), paths);
+        let rendered = if name_only {
+            crate::diff::renderer::render_name_only(&files)
+        } else {
+            crate::diff::renderer::render_name_status(&files, theme)
+        };
+        if g.no_pager || !std::io::stdout().is_terminal() {
+            print_block(&rendered)
+        } else {
+            print_paginated(&rendered)
+        }
     } else if raw {
-        // Legacy: pipe raw diff through bat/less
         let fmt = Formatter::from_json_flag(false);
         fmt.print_diff(&serde_json::json!({ "id": id, "diff": body }), &body)
     } else {
-        // Pretty diff renderer
         let theme = Theme::current();
-        let files = crate::diff::parser::parse(&body);
+        let files = crate::diff::filter_files(crate::diff::parser::parse(&body), paths);
         let options = crate::diff::DiffRenderOptions {
             context_lines: context,
             mode: if side_by_side {
@@ -767,7 +787,6 @@ pub async fn diff(
         };
         let rendered = crate::diff::renderer::render(&files, &options, theme);
 
-        // Paginate or print directly
         if g.no_pager || !std::io::stdout().is_terminal() {
             print_block(&rendered)
         } else {

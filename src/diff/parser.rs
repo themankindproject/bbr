@@ -70,6 +70,144 @@ fn is_zero(n: &u32) -> bool {
     *n == 0
 }
 
+/// Parse `diff --git a/<old> b/<new>` paths, including quoted paths with spaces.
+///
+/// Git quotes a path (C-style) when it contains spaces or special characters;
+/// when either path is quoted, both usually are. Unquoted paths never contain
+/// spaces, so the separator is the first ` b/` after `a/`.
+pub fn parse_diff_git_paths(line: &str) -> (String, String) {
+    let rest = line.strip_prefix("diff --git ").unwrap_or(line).trim();
+    if rest.is_empty() {
+        return ("unknown".into(), "unknown".into());
+    }
+
+    if let Some((old, new)) = parse_two_quoted_paths(rest) {
+        return (strip_ab_prefix(&old), strip_ab_prefix(&new));
+    }
+
+    // Unquoted: "a/<old> b/<new>" — separator is " b/" (space + b + /).
+    if let Some(after_a) = rest.strip_prefix("a/") {
+        if let Some(idx) = after_a.find(" b/") {
+            let old = &after_a[..idx];
+            // after " b/" comes "b/<new>" in the full string; after_a slice
+            // starts at old path, so idx+3 points at 'b' of "b/<new>".
+            let new_part = &after_a[idx + 3..]; // "b/<new>"
+            let new_path = new_part.strip_prefix("b/").unwrap_or(new_part);
+            return (old.to_string(), new_path.to_string());
+        }
+    }
+
+    // Fallback: first whitespace split (legacy / unusual)
+    if let Some((a, b)) = rest.split_once(' ') {
+        return (strip_ab_prefix(a), strip_ab_prefix(b));
+    }
+    let p = strip_ab_prefix(rest);
+    (p.clone(), p)
+}
+
+fn strip_ab_prefix(path: &str) -> String {
+    let path = path.trim().trim_matches('"');
+    path.strip_prefix("a/")
+        .or_else(|| path.strip_prefix("b/"))
+        .unwrap_or(path)
+        .to_string()
+}
+
+/// Parse two adjacent C-style quoted strings: `"a/foo bar" "b/foo bar"`.
+fn parse_two_quoted_paths(s: &str) -> Option<(String, String)> {
+    let (first, rest) = parse_one_quoted(s)?;
+    let rest = rest.trim_start();
+    let (second, _) = parse_one_quoted(rest)?;
+    Some((first, second))
+}
+
+/// Parse a leading `"..."` C-style string; return (unescaped, remainder).
+fn parse_one_quoted(s: &str) -> Option<(String, &str)> {
+    if !s.starts_with('"') {
+        return None;
+    }
+    let bytes = s.as_bytes();
+    let mut i = 1; // after opening quote
+    let mut out = String::new();
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                i += 1;
+                return Some((out, &s[i..]));
+            }
+            b'\\' => {
+                i += 1;
+                if i >= bytes.len() {
+                    return None;
+                }
+                let (ch, consumed) = unescape_bytes(bytes, i)?;
+                out.push(ch);
+                i += consumed;
+            }
+            _ => {
+                let ch = s[i..].chars().next()?;
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+        }
+    }
+    None
+}
+
+/// Unescape starting at `i` (first char after `\`). Returns (char, bytes_consumed from i).
+fn unescape_bytes(bytes: &[u8], i: usize) -> Option<(char, usize)> {
+    let b = *bytes.get(i)?;
+    match b {
+        b'n' => Some(('\n', 1)),
+        b't' => Some(('\t', 1)),
+        b'r' => Some(('\r', 1)),
+        b'"' => Some(('"', 1)),
+        b'\\' => Some(('\\', 1)),
+        b'a' => Some(('\u{7}', 1)),
+        b'b' => Some(('\u{8}', 1)),
+        b'f' => Some(('\u{c}', 1)),
+        b'v' => Some(('\u{b}', 1)),
+        b'0'..=b'7' => {
+            let mut val: u32 = (b - b'0') as u32;
+            let mut n = 1;
+            while n < 3 {
+                if let Some(&d) = bytes.get(i + n) {
+                    if (b'0'..=b'7').contains(&d) {
+                        val = val * 8 + (d - b'0') as u32;
+                        n += 1;
+                        continue;
+                    }
+                }
+                break;
+            }
+            let ch = char::from_u32(val)?;
+            Some((ch, n))
+        }
+        other => Some((other as char, 1)),
+    }
+}
+
+/// Filter a raw unified diff to file hunks matching `pathspecs`.
+pub fn filter_raw_diff(raw: &str, pathspecs: &[String]) -> String {
+    if pathspecs.is_empty() {
+        return raw.to_string();
+    }
+    let mut out = String::new();
+    let mut keep = false;
+    for line in raw.lines() {
+        if line.starts_with("diff --git ") {
+            let (old, new) = parse_diff_git_paths(line);
+            keep = crate::diff::pathspec::matches_any(pathspecs, &old)
+                || crate::diff::pathspec::matches_any(pathspecs, &new);
+        }
+        if keep {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
 /// Parse a raw unified diff string into a list of file diffs.
 ///
 /// Returns an empty vec if the input contains no diff output (e.g. empty diff).
@@ -389,18 +527,7 @@ struct DiffFileBuilder {
 
 impl DiffFileBuilder {
     fn new(diff_line: &str) -> Self {
-        // Parse "diff --git a/old_path b/new_path"
-        let (old_path, new_path) = if let Some(paths) = diff_line
-            .strip_prefix("diff --git ")
-            .and_then(|s| s.split_once(' '))
-        {
-            (
-                paths.0.strip_prefix("a/").unwrap_or(paths.0).to_string(),
-                paths.1.strip_prefix("b/").unwrap_or(paths.1).to_string(),
-            )
-        } else {
-            ("unknown".to_string(), "unknown".to_string())
-        };
+        let (old_path, new_path) = parse_diff_git_paths(diff_line);
 
         let status = if new_path == "/dev/null" {
             FileStatus::Deleted
@@ -463,6 +590,14 @@ impl DiffFileBuilder {
 
     fn set_paths(&mut self, line: &str) {
         let stripped = line[4..].trim();
+        // Git may quote paths: --- "a/my file.rs"
+        let stripped =
+            if stripped.starts_with('"') && stripped.ends_with('"') && stripped.len() >= 2 {
+                // Best-effort: strip surrounding quotes (full C-unescape not required for ---/+++)
+                &stripped[1..stripped.len() - 1]
+            } else {
+                stripped
+            };
         if line.starts_with("--- ") {
             if stripped != "/dev/null" {
                 self.old_path = stripped.strip_prefix("a/").unwrap_or(stripped).to_string();
@@ -842,6 +977,64 @@ Binary files /dev/null and b/logo.png differ
         assert!(files[0].binary, "binary marker should be preserved");
         assert!(files[0].hunks.is_empty());
         assert_eq!(files[0].new_path, "logo.png");
+    }
+
+    #[test]
+    fn test_parse_diff_git_paths_with_spaces() {
+        let (old, new) = parse_diff_git_paths(r#"diff --git "a/my file.rs" "b/my file.rs""#);
+        assert_eq!(old, "my file.rs");
+        assert_eq!(new, "my file.rs");
+    }
+
+    #[test]
+    fn test_parse_diff_git_paths_unquoted() {
+        let (old, new) = parse_diff_git_paths("diff --git a/src/main.rs b/src/main.rs");
+        assert_eq!(old, "src/main.rs");
+        assert_eq!(new, "src/main.rs");
+    }
+
+    #[test]
+    fn test_parse_quoted_path_in_full_diff() {
+        let diff = "\
+diff --git \"a/my file.rs\" \"b/my file.rs\"
+--- \"a/my file.rs\"
++++ \"b/my file.rs\"
+@@ -1,1 +1,1 @@
+-foo
++bar
+";
+        let files = parse(diff);
+        assert_eq!(files.len(), 1);
+        // ---/+++ may also set paths; either source should yield the spaced name
+        assert!(
+            files[0].new_path == "my file.rs" || files[0].old_path == "my file.rs",
+            "got old={} new={}",
+            files[0].old_path,
+            files[0].new_path
+        );
+    }
+
+    #[test]
+    fn test_filter_raw_diff_by_pathspec() {
+        let diff = "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1,1 +1,1 @@
+-foo
++bar
+diff --git a/b.rs b/b.rs
+--- a/b.rs
++++ b/b.rs
+@@ -1,1 +1,1 @@
+-old
++new
+";
+        let filtered = filter_raw_diff(diff, &["a.rs".into()]);
+        assert!(filtered.contains("a.rs"));
+        assert!(!filtered.contains("b.rs"));
+        assert!(filtered.contains("+bar"));
+        assert!(!filtered.contains("+new"));
     }
 
     #[test]

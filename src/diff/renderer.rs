@@ -81,6 +81,63 @@ pub fn render(files: &[DiffFile], options: &DiffRenderOptions, theme: &Theme) ->
     out
 }
 
+/// Render only file paths (one per line), like `git diff --name-only`.
+pub fn render_name_only(files: &[DiffFile]) -> String {
+    let mut out = String::new();
+    for file in files {
+        out.push_str(display_path(file));
+        out.push('\n');
+    }
+    out
+}
+
+/// Render status + path lines, like `git diff --name-status`.
+pub fn render_name_status(files: &[DiffFile], theme: &Theme) -> String {
+    let mut out = String::new();
+    for file in files {
+        let code = status_code(file.status);
+        let path = match file.status {
+            FileStatus::Renamed => {
+                if theme.unicode_enabled() {
+                    format!("{} \u{2192} {}", file.old_path, file.new_path)
+                } else {
+                    format!("{} -> {}", file.old_path, file.new_path)
+                }
+            }
+            _ => display_path(file).to_string(),
+        };
+        if theme.colors_enabled() {
+            let colored = match file.status {
+                FileStatus::Added => format!("\x1b[32m{code}\x1b[0m"),
+                FileStatus::Deleted => format!("\x1b[31m{code}\x1b[0m"),
+                FileStatus::Renamed => format!("\x1b[33m{code}\x1b[0m"),
+                FileStatus::Modified => code.to_string(),
+            };
+            out.push_str(&format!("{colored}\t{path}\n"));
+        } else {
+            out.push_str(&format!("{code}\t{path}\n"));
+        }
+    }
+    out
+}
+
+fn display_path(file: &DiffFile) -> &str {
+    if !file.new_path.is_empty() {
+        &file.new_path
+    } else {
+        &file.old_path
+    }
+}
+
+fn status_code(status: FileStatus) -> &'static str {
+    match status {
+        FileStatus::Added => "A",
+        FileStatus::Deleted => "D",
+        FileStatus::Modified => "M",
+        FileStatus::Renamed => "R",
+    }
+}
+
 // ---------------------------------------------------------------------------
 // File index (#9)
 // ---------------------------------------------------------------------------
@@ -409,18 +466,19 @@ fn render_hunk_unified(
             }
 
             if !deletions.is_empty() || !additions.is_empty() {
-                // Improvement #3: Interleave paired lines
-                let max_pairs = deletions.len().max(additions.len());
-                for j in 0..max_pairs {
-                    // Output deletion line j (paired with addition j for word-diff)
-                    if let Some(del) = deletions.get(j) {
-                        let pair = additions.get(j).copied();
-                        render_paired_line(del, pair, theme, lineno_width, out);
-                    }
-                    // Output addition line j (paired with deletion j for word-diff)
-                    if let Some(add) = additions.get(j) {
-                        let pair = deletions.get(j).copied();
-                        render_paired_line(add, pair, theme, lineno_width, out);
+                let rows = crate::diff::align::align_change_block(&deletions, &additions);
+                for row in rows {
+                    match row {
+                        crate::diff::align::AlignedRow::Pair(del, add) => {
+                            render_paired_line(del, Some(add), theme, lineno_width, out);
+                            render_paired_line(add, Some(del), theme, lineno_width, out);
+                        }
+                        crate::diff::align::AlignedRow::DeleteOnly(del) => {
+                            render_paired_line(del, None, theme, lineno_width, out);
+                        }
+                        crate::diff::align::AlignedRow::AddOnly(add) => {
+                            render_paired_line(add, None, theme, lineno_width, out);
+                        }
                     }
                 }
             } else {
@@ -815,11 +873,40 @@ fn render_hunk_side_by_side(
             }
 
             if !deletions.is_empty() || !additions.is_empty() {
-                let max_len = deletions.len().max(additions.len());
-                for j in 0..max_len {
-                    let del = deletions.get(j).copied();
-                    let add = additions.get(j).copied();
-                    render_side_by_side_row(del, add, code_width, lineno_width, theme, out);
+                let rows = crate::diff::align::align_change_block(&deletions, &additions);
+                for row in rows {
+                    match row {
+                        crate::diff::align::AlignedRow::Pair(del, add) => {
+                            render_side_by_side_row(
+                                Some(del),
+                                Some(add),
+                                code_width,
+                                lineno_width,
+                                theme,
+                                out,
+                            );
+                        }
+                        crate::diff::align::AlignedRow::DeleteOnly(del) => {
+                            render_side_by_side_row(
+                                Some(del),
+                                None,
+                                code_width,
+                                lineno_width,
+                                theme,
+                                out,
+                            );
+                        }
+                        crate::diff::align::AlignedRow::AddOnly(add) => {
+                            render_side_by_side_row(
+                                None,
+                                Some(add),
+                                code_width,
+                                lineno_width,
+                                theme,
+                                out,
+                            );
+                        }
+                    }
                 }
             } else {
                 let line = &hunk.lines[i];
@@ -1449,19 +1536,19 @@ diff --git a/a.rs b/a.rs
         let files = parse(diff);
         let options = DiffRenderOptions::default();
         let result = render(&files, &options, &test_theme());
-        // In interleaved mode, line1_old should appear before line1_new
+        // With similarity pairing, each deletion is emitted with its matched
+        // addition: del1, add1, del2, add2, …
         let pos_old1 = result.find("line1_old").unwrap();
         let pos_new1 = result.find("line1_new").unwrap();
+        let pos_old2 = result.find("line2_old").unwrap();
+        let pos_new2 = result.find("line2_new").unwrap();
         assert!(
             pos_old1 < pos_new1,
             "deletion should appear before its paired addition"
         );
-
-        // line2_old should appear after line1_new
-        let pos_old2 = result.find("line2_old").unwrap();
         assert!(
-            pos_old2 > pos_new1,
-            "second deletion should follow first addition"
+            pos_new1 < pos_old2 && pos_old2 < pos_new2,
+            "pairs should interleave: del1, add1, del2, add2"
         );
     }
 

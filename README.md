@@ -187,6 +187,9 @@ bbr pr diff 467 --raw                    # bypass renderer, use bat/less
 bbr pr diff 467 --json                   # structured JSON with file/hunk/line data
 bbr pr diff 467 --side-by-side           # side-by-side view
 bbr pr diff 467 --context 5              # more context lines
+bbr pr diff 467 --name-only              # paths only
+bbr pr diff 467 --name-status            # status + path
+bbr pr diff 467 -- src/                  # filter by pathspec
 bbr pr diffstat 467                      # file changes summary table
 bbr pr patch 467                         # unified patch to stdout
 bbr pr patch 467 --output fix.patch      # unified patch to file

@@ -514,6 +514,17 @@ pub enum PrAction {
         /// Number of context lines around changes (default: 3).
         #[arg(long, default_value_t = 3)]
         context: usize,
+        /// Show only file paths (like `git diff --name-only`).
+        #[arg(long, conflicts_with_all = ["raw", "side_by_side", "name_status"])]
+        name_only: bool,
+        /// Show status letter + path (like `git diff --name-status`).
+        #[arg(long, conflicts_with_all = ["raw", "side_by_side", "name_only"])]
+        name_status: bool,
+        /// Limit the diff to these pathspecs (pass after `--`).
+        ///
+        /// Examples: `bbr pr diff 12 -- src/`, `bbr pr diff -- "*.rs"`
+        #[arg(last = true, value_name = "PATH")]
+        paths: Vec<String>,
         #[command(flatten)]
         g: GlobalArgs,
     },
