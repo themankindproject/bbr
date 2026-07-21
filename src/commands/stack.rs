@@ -26,6 +26,8 @@ pub struct StackAddOut {
 pub struct StackListOut {
     pub name: String,
     pub base_branch: String,
+    /// All configured stack names (active marked in human output).
+    pub stacks: Vec<String>,
     pub prs: Vec<StackPrStatus>,
 }
 
@@ -93,6 +95,7 @@ pub fn init(g: &GlobalArgs, name: &str, base: Option<&str>) -> Result<()> {
         base_branch: base_branch.clone(),
         prs: Vec::new(),
     });
+    config.active = Some(name.to_string());
 
     config.save()?;
 
@@ -105,6 +108,22 @@ pub fn init(g: &GlobalArgs, name: &str, base: Option<&str>) -> Result<()> {
         "Initialized empty stack '{}' onto base branch '{}'.",
         out.name, out.base_branch
     );
+    Formatter::from_json_flag(g.json).print(&out, &human)
+}
+
+pub fn use_stack(g: &GlobalArgs, name: &str) -> Result<()> {
+    let mut config = StackConfig::load()?;
+    config.set_active(name)?;
+    config.save()?;
+
+    #[derive(Serialize)]
+    struct Out {
+        active: String,
+    }
+    let out = Out {
+        active: name.to_string(),
+    };
+    let human = format!("Active stack set to '{name}'.");
     Formatter::from_json_flag(g.json).print(&out, &human)
 }
 
@@ -236,6 +255,7 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
     let out = StackListOut {
         name: stack.name.clone(),
         base_branch: stack.base_branch.clone(),
+        stacks: config.stacks.iter().map(|s| s.name.clone()).collect(),
         prs: prs_status,
     };
 
@@ -438,6 +458,9 @@ pub async fn abort(g: &GlobalArgs, yes: bool) -> Result<()> {
     // Remove stack from configuration
     let mut new_config = StackConfig::load().unwrap_or_default();
     new_config.stacks.retain(|s| s.name != stack.name);
+    if new_config.active.as_deref() == Some(stack.name.as_str()) {
+        new_config.active = new_config.stacks.first().map(|s| s.name.clone());
+    }
     new_config.save()?;
 
     let out = StackAbortOut {
@@ -458,8 +481,27 @@ fn render_stack_list(out: &StackListOut) -> String {
     let theme = Theme::current();
     let mut s = String::new();
 
+    if out.stacks.len() > 1 {
+        let names: Vec<String> = out
+            .stacks
+            .iter()
+            .map(|n| {
+                if n == &out.name {
+                    format!("*{}", n)
+                } else {
+                    n.clone()
+                }
+            })
+            .collect();
+        s.push_str(&format!(
+            "{} Stacks: {}\n",
+            theme.bullet(),
+            names.join(", ")
+        ));
+    }
+
     s.push_str(&format!(
-        "{} Stack: {} (base: {})\n",
+        "{} Active stack: {} (base: {})\n",
         theme.bullet(),
         theme.bold(&out.name),
         out.base_branch
@@ -484,6 +526,10 @@ fn render_stack_list(out: &StackListOut) -> String {
                 pr.parent_branch
             ));
         }
+    }
+
+    if out.stacks.len() > 1 {
+        s.push_str("\nHint: switch stacks with `bbr pr stack use <name>`.\n");
     }
 
     s

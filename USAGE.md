@@ -366,7 +366,10 @@ bbr pr stack init my-stack --base main
 bbr pr stack add feat/step-1
 bbr pr stack add feat/step-2
 
-# Show stack status with live PR states
+# Switch which stack subsequent commands use (when you have more than one)
+bbr pr stack use other-stack
+
+# Show active stack status with live PR states
 bbr pr stack list
 
 # Rebase all branches bottom-up onto their parents
@@ -388,11 +391,13 @@ bbr pr stack abort --yes              # skip confirmation
 `stack list` output:
 
 ```
-● Stack: my-stack (base: main)
+● Active stack: my-stack (base: main)
 ────────────────────────────────
   1. feat/step-1    PR #110  OPEN    → main
   2. feat/step-2    PR #111  OPEN    → feat/step-1
 ```
+
+With multiple stacks, the list also shows all names with `*` on the active one, and a hint for `bbr pr stack use <name>`. New stacks from `init` become active automatically; aborting the active stack falls back to the first remaining stack.
 
 > **Note:** `rebase` and `land` require a clean working tree. Rebase stops at the first conflict and reports which branch failed. `land` stops at the first merge failure and preserves remaining stack config for retry.
 
@@ -1063,7 +1068,7 @@ bbr pr dashboard --json   # { workspace, user, needs_review, my_prs, recent_acti
 bbr batch merge-approved --dry-run --json  # { dry_run, action_count, actions: [...] }
 bbr ci compare 42 57 --json  # { a, b, step_deltas, test_deltas }
 bbr repo audit --json     # { workspace, total_repos, repos: [...], summary }
-bbr pr stack list --json  # { name, base_branch, prs: [...] }
+bbr pr stack list --json  # { name, base_branch, stacks, prs: [...] }
 bbr search "TODO" --json  # { query, total, results: [{ file, content_matches }] }
 bbr update --json         # { current_version, latest_version, up_to_date, downloaded? }
 ```

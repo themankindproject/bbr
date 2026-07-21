@@ -608,6 +608,11 @@ pub enum StackAction {
     },
     /// List the current stack status.
     List,
+    /// Select which stack subsequent commands operate on.
+    Use {
+        /// Stack name.
+        name: String,
+    },
     /// Rebase all stacked branches onto their parents.
     Rebase {
         /// Push branches to origin after rebase.

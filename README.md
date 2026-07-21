@@ -199,9 +199,10 @@ bbr pr patch 467 --output fix.patch      # unified patch to file
 # Dashboard & Stacks
 bbr pr dashboard                         # workspace-wide PR dashboard
 bbr pr dashboard --repos 50 --filter "api"
-bbr pr stack init my-stack               # start a stacked PR chain
+bbr pr stack init my-stack               # start a stacked PR chain (becomes active)
+bbr pr stack use my-stack                # select active stack when several exist
 bbr pr stack add feat/step-1             # add branch to stack (auto-creates PR)
-bbr pr stack list                        # show stack with PR states
+bbr pr stack list                        # show active stack with PR states
 bbr pr stack rebase                      # rebase all branches bottom-up
 bbr pr stack land --strategy squash      # merge all PRs in stack
 bbr pr stack abort                       # decline all PRs, delete branches
@@ -462,7 +463,7 @@ bbr pr dashboard --json   # { workspace, user, needs_review, my_prs, recent_acti
 bbr batch merge-approved --dry-run --json  # { dry_run, action_count, actions: [...] }
 bbr ci compare 42 57 --json  # { a, b, step_deltas, test_deltas }
 bbr repo audit --json     # { workspace, total_repos, repos: [...], summary }
-bbr pr stack list --json  # { name, base_branch, prs: [...] }
+bbr pr stack list --json  # { name, base_branch, stacks, prs: [...] }
 bbr search "TODO" --json  # { query, total, results: [{ file, content_matches }] }
 bbr update --json         # { current_version, latest_version, up_to_date, downloaded? }
 ```

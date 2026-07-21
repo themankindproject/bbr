@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`bbr pr stack use <name>`** — select which stack `add`/`list`/`rebase`/`land`/`abort` operate on (stored as `active` in `.bbr/stack.toml`; legacy configs without `active` still use the first stack).
 - **`Paginated<T>` now implements `Default`** — empty page helper without `T: Default` bound.
 - **`bbr pr diff` optional ID** — omit the PR id to resolve the open PR for the current branch (same as `diffstat` / `patch`).
 - **Binary file marker in pretty diffs** — `Binary files … differ` entries show `(binary file changed)` and expose `"binary": true` in `--json`.

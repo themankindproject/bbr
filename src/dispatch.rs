@@ -300,6 +300,7 @@ async fn dispatch_pr(g: &GlobalArgs, action: PrAction) -> Result<()> {
         }
         PrAction::Stack { action } => match action {
             StackAction::Init { name, base } => commands::stack::init(g, &name, base.as_deref()),
+            StackAction::Use { name } => commands::stack::use_stack(g, &name),
             StackAction::Add { branch, parent } => {
                 commands::stack::add(g, &branch, parent.as_deref()).await
             }
