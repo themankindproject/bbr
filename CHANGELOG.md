@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`bbr status` / commit statuses** — HTTP 404 "Commit not found" on unpushed HEAD no longer aborts the command; treated as empty status list.
+
+### Added
+
+- **`Paginated<T>` now implements `Default`** — empty page helper without `T: Default` bound.
+
+### Changed
+
+- **README** — comprehensive rewrite with full command reference, API scopes table, scripting patterns, output/theme docs, and conventions.
+
 ## [0.1.9] - 2026-07-20
 
 ### Added
