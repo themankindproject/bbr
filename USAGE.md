@@ -238,6 +238,9 @@ bbr pr merge 467                                 # merge with confirmation promp
 bbr pr merge 467 --close-source-branch           # close source branch after merge
 bbr pr merge 467 --strategy squash               # merge strategy: merge_commit | squash | fast_forward
 bbr pr merge 467 --message "closes #123"         # custom merge commit message
+bbr pr merge-check 467                           # can this PR merge? (conflicts/statuses/approvals)
+bbr pr add-reviewer 467 alice                    # username or UUID
+bbr pr remove-reviewer 467 alice
 ```
 
 #### `bbr pr checkout`
@@ -709,6 +712,14 @@ List user and group permissions for the repository:
 ```bash
 bbr repo permissions                       # table of users and groups
 bbr repo permissions --json                # machine-readable
+```
+
+#### `bbr repo default-reviewers`
+
+```bash
+bbr repo default-reviewers list
+bbr repo default-reviewers add alice       # username or UUID
+bbr repo default-reviewers remove alice
 ```
 
 Output:

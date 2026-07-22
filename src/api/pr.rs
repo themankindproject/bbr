@@ -71,6 +71,8 @@ pub struct PullRequest {
     pub reviewers: Vec<Participant>,
     #[serde(default)]
     pub summary: Option<Markdown>,
+    #[serde(default)]
+    pub draft: bool,
 }
 
 impl PullRequest {
@@ -312,6 +314,8 @@ pub struct UpdatePrRequest {
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub close_source_branch: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reviewers: Option<Vec<ReviewerRef>>,
 }
 
 /// Body for `POST /repositories/{ws}/{slug}/pullrequests/{id}/merge`.
@@ -564,6 +568,84 @@ impl BitbucketClient {
         let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}");
         let raw = serde_json::to_string(body)?;
         self.send(reqwest::Method::PUT, &path, Some(&raw)).await
+    }
+
+    /// Replace the reviewer list on an existing pull request.
+    pub async fn set_pr_reviewers(
+        &self,
+        workspace: &str,
+        slug: &str,
+        id: u64,
+        reviewers: Vec<ReviewerRef>,
+    ) -> Result<PullRequest> {
+        let pr = self.get_pr(workspace, slug, id).await?;
+        let body = UpdatePrRequest {
+            title: pr.title,
+            description: None,
+            close_source_branch: None,
+            reviewers: Some(reviewers),
+        };
+        self.update_pr(workspace, slug, id, &body).await
+    }
+
+    /// Add a reviewer (by UUID) to an existing pull request.
+    pub async fn add_pr_reviewer(
+        &self,
+        workspace: &str,
+        slug: &str,
+        id: u64,
+        uuid: &str,
+    ) -> Result<PullRequest> {
+        let uuid = super::pipeline::ensure_uuid_braces(uuid);
+        let pr = self.get_pr(workspace, slug, id).await?;
+        let mut reviewers: Vec<ReviewerRef> = pr
+            .reviewers
+            .iter()
+            .filter_map(|r| r.uuid.as_ref().map(|u| ReviewerRef { uuid: u.clone() }))
+            .collect();
+        if !reviewers.iter().any(|r| {
+            super::pipeline::normalize_uuid(&r.uuid) == super::pipeline::normalize_uuid(&uuid)
+        }) {
+            reviewers.push(ReviewerRef { uuid });
+        }
+        let body = UpdatePrRequest {
+            title: pr.title,
+            description: None,
+            close_source_branch: None,
+            reviewers: Some(reviewers),
+        };
+        self.update_pr(workspace, slug, id, &body).await
+    }
+
+    /// Remove a reviewer (by UUID) from an existing pull request.
+    pub async fn remove_pr_reviewer(
+        &self,
+        workspace: &str,
+        slug: &str,
+        id: u64,
+        uuid: &str,
+    ) -> Result<PullRequest> {
+        let want = super::pipeline::normalize_uuid(uuid);
+        let pr = self.get_pr(workspace, slug, id).await?;
+        let reviewers: Vec<ReviewerRef> = pr
+            .reviewers
+            .iter()
+            .filter_map(|r| {
+                let u = r.uuid.as_ref()?;
+                if super::pipeline::normalize_uuid(u) == want {
+                    None
+                } else {
+                    Some(ReviewerRef { uuid: u.clone() })
+                }
+            })
+            .collect();
+        let body = UpdatePrRequest {
+            title: pr.title,
+            description: None,
+            close_source_branch: None,
+            reviewers: Some(reviewers),
+        };
+        self.update_pr(workspace, slug, id, &body).await
     }
 
     /// `POST /repositories/{ws}/{slug}/pullrequests/{id}/merge`
@@ -929,11 +1011,13 @@ mod tests {
             title: "New Title".into(),
             description: Some("New desc".into()),
             close_source_branch: None,
+            reviewers: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["title"], "New Title");
         assert_eq!(json["description"], "New desc");
         assert!(json.get("close_source_branch").is_none());
+        assert!(json.get("reviewers").is_none());
     }
 
     #[test]

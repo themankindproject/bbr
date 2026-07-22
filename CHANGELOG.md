@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`bbr pr merge-check`** — report mergeability (conflicts, draft/state, failing/pending statuses, change requests).
+- **`bbr pr add-reviewer` / `remove-reviewer`** — update reviewers on an existing PR (username or UUID).
+- **`bbr repo default-reviewers list|add|remove`** — manage repository default reviewers.
 - **`BitbucketClient::from_credentials`** — preferred client factory; removed `Credentials::into_client` coupling.
 - **`table_or_empty`** — consistent "No X found" human messages for empty list commands.
 - **PR lifecycle + `prs_for_branch` API tests** — create/approve/merge/decline and status branch lookup covered with wiremock.

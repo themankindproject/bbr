@@ -461,6 +461,31 @@ pub enum PrAction {
         #[command(flatten)]
         g: GlobalArgs,
     },
+    /// Check whether a pull request can be merged (conflicts, statuses, approvals).
+    MergeCheck {
+        /// Pull request ID (defaults to current branch's open PR).
+        id: Option<u64>,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Add a reviewer to a pull request.
+    AddReviewer {
+        /// Pull request ID.
+        id: u64,
+        /// Username or account UUID.
+        user: String,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Remove a reviewer from a pull request.
+    RemoveReviewer {
+        /// Pull request ID.
+        id: u64,
+        /// Username or account UUID.
+        user: String,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
     /// Request changes on a pull request.
     RequestChanges {
         id: u64,
@@ -866,6 +891,32 @@ pub enum RepoAction {
     },
     /// List user and group permissions for the repository.
     Permissions {
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Manage repository default reviewers.
+    #[command(subcommand)]
+    DefaultReviewers(DefaultReviewersAction),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DefaultReviewersAction {
+    /// List default reviewers.
+    List {
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Add a default reviewer (username or UUID).
+    Add {
+        /// Username or account UUID.
+        user: String,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Remove a default reviewer (username or UUID).
+    Remove {
+        /// Username or account UUID.
+        user: String,
         #[command(flatten)]
         g: GlobalArgs,
     },

@@ -139,5 +139,17 @@ fn pr_help_lists_create_merge_approve() {
         .success()
         .stdout(predicate::str::contains("create"))
         .stdout(predicate::str::contains("merge"))
-        .stdout(predicate::str::contains("approve"));
+        .stdout(predicate::str::contains("approve"))
+        .stdout(predicate::str::contains("merge-check"))
+        .stdout(predicate::str::contains("add-reviewer"));
+}
+
+#[test]
+fn repo_help_lists_default_reviewers() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["repo", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("default-reviewers"));
 }

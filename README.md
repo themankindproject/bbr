@@ -163,6 +163,9 @@ bbr pr update 467 --title "New title" --description "New description"
 bbr pr merge 467                                 # merge with confirmation prompt
 bbr pr merge 467 --strategy squash               # squash | merge_commit | fast_forward
 bbr pr merge 467 --close-source-branch
+bbr pr merge-check 467                           # conflicts / statuses / approvals summary
+bbr pr add-reviewer 467 alice                    # username or UUID
+bbr pr remove-reviewer 467 alice
 bbr pr approve 467 --message "LGTM!"
 bbr pr unapprove 467
 bbr pr decline 467
@@ -275,6 +278,9 @@ bbr repo branches [--limit 50]       # remote branches
 bbr repo tags [--limit 50]           # remote tags
 bbr repo commits [--branch main] [--limit 50]
 bbr repo permissions                 # user and group permissions
+bbr repo default-reviewers list      # list default reviewers
+bbr repo default-reviewers add alice # username or UUID
+bbr repo default-reviewers remove alice
 
 bbr repo create my-new-repo --private --language rust
 bbr repo delete my-old-repo --yes

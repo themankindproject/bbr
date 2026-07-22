@@ -389,6 +389,88 @@ pub async fn permissions(g: &GlobalArgs) -> Result<()> {
     make_formatter(g).print(&out, &human)
 }
 
+pub async fn list_default_reviewers(g: &GlobalArgs) -> Result<()> {
+    let repo = resolve_repo(g)?;
+    let client = client(g)?;
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
+    spinner.set_message("Fetching default reviewers...");
+    let reviewers = client
+        .list_default_reviewers(&repo.workspace, &repo.slug)
+        .await?;
+    spinner.finish();
+
+    let out: Vec<serde_json::Value> = reviewers
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "display_name": r.user.as_ref().map(|u| &u.display_name),
+                "uuid": r.user.as_ref().and_then(|u| u.uuid.as_ref()),
+                "nickname": r.user.as_ref().and_then(|u| u.nickname.as_ref()),
+            })
+        })
+        .collect();
+
+    let mut table = Table::new().headers(["Name", "Nickname", "UUID"]);
+    for r in &reviewers {
+        let u = r.user.as_ref();
+        table = table.add_row([
+            u.map(|u| u.display_name.as_str())
+                .unwrap_or("-")
+                .to_string(),
+            u.and_then(|u| u.nickname.as_deref())
+                .unwrap_or("-")
+                .to_string(),
+            u.and_then(|u| u.uuid.as_deref())
+                .map(|id| truncate(id, 40))
+                .unwrap_or_else(|| "-".into()),
+        ]);
+    }
+    let human = table_or_empty(
+        out.len(),
+        "No default reviewers configured.",
+        table.render(),
+    );
+    make_formatter(g).print(&out, &human)
+}
+
+pub async fn add_default_reviewer(g: &GlobalArgs, user: &str) -> Result<()> {
+    let repo = resolve_repo(g)?;
+    let client = client(g)?;
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
+    spinner.set_message("Resolving user...");
+    let uuid = client.resolve_user_uuid(user).await?;
+    spinner.set_message("Adding default reviewer...");
+    client
+        .add_default_reviewer(&repo.workspace, &repo.slug, &uuid)
+        .await?;
+    spinner.finish();
+    let out = serde_json::json!({
+        "action": "added",
+        "user": user,
+        "uuid": uuid,
+    });
+    make_formatter(g).print(&out, &format!("Added {user} as a default reviewer"))
+}
+
+pub async fn remove_default_reviewer(g: &GlobalArgs, user: &str) -> Result<()> {
+    let repo = resolve_repo(g)?;
+    let client = client(g)?;
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
+    spinner.set_message("Resolving user...");
+    let uuid = client.resolve_user_uuid(user).await?;
+    spinner.set_message("Removing default reviewer...");
+    client
+        .remove_default_reviewer(&repo.workspace, &repo.slug, &uuid)
+        .await?;
+    spinner.finish();
+    let out = serde_json::json!({
+        "action": "removed",
+        "user": user,
+        "uuid": uuid,
+    });
+    make_formatter(g).print(&out, &format!("Removed {user} from default reviewers"))
+}
+
 fn first_line(s: &str) -> String {
     s.lines().next().unwrap_or("").to_string()
 }

@@ -257,6 +257,60 @@ impl BitbucketClient {
         self.fetch_all_pages(&path, usize::MAX).await
     }
 
+    /// `PUT /repositories/{ws}/{slug}/default-reviewers/{user}` — add a default reviewer.
+    ///
+    /// `user` may be a Bitbucket username or a braced UUID.
+    pub async fn add_default_reviewer(
+        &self,
+        workspace: &str,
+        slug: &str,
+        user: &str,
+    ) -> Result<()> {
+        let target = super::url_encode(user.trim());
+        let path = format!("/repositories/{workspace}/{slug}/default-reviewers/{target}");
+        self.send_empty(reqwest::Method::PUT, &path, None).await
+    }
+
+    /// `DELETE /repositories/{ws}/{slug}/default-reviewers/{user}` — remove a default reviewer.
+    pub async fn remove_default_reviewer(
+        &self,
+        workspace: &str,
+        slug: &str,
+        user: &str,
+    ) -> Result<()> {
+        let target = super::url_encode(user.trim());
+        let path = format!("/repositories/{workspace}/{slug}/default-reviewers/{target}");
+        self.send_empty(reqwest::Method::DELETE, &path, None).await
+    }
+
+    /// `GET /users/{selected_user}` — resolve a username or UUID to a user account.
+    pub async fn get_user(&self, selected_user: &str) -> Result<super::pr::User> {
+        let encoded = super::url_encode(selected_user.trim());
+        self.send(reqwest::Method::GET, &format!("/users/{encoded}"), None)
+            .await
+    }
+
+    /// Resolve a username or UUID string to a braced Bitbucket account UUID.
+    pub async fn resolve_user_uuid(&self, user: &str) -> Result<String> {
+        let trimmed = user.trim();
+        if trimmed.is_empty() {
+            return Err(crate::error::BitbucketError::Other(
+                "user identifier must not be empty".into(),
+            ));
+        }
+        // Already a UUID (with or without braces).
+        let inner = trimmed.trim_matches(|c| c == '{' || c == '}');
+        if inner.len() >= 32 && inner.contains('-') {
+            return Ok(super::pipeline::ensure_uuid_braces(trimmed));
+        }
+        let resolved = self.get_user(trimmed).await?;
+        resolved.uuid.ok_or_else(|| {
+            crate::error::BitbucketError::Other(format!(
+                "user '{trimmed}' has no UUID in the Bitbucket response"
+            ))
+        })
+    }
+
     /// `GET /repositories/{ws}/{slug}/permissions-config/users` — list user permissions.
     pub async fn list_user_permissions(
         &self,

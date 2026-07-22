@@ -236,6 +236,11 @@ async fn dispatch_pr(g: &GlobalArgs, action: PrAction) -> Result<()> {
         PrAction::Commits { id, limit, g } => commands::pr::commits(&g, id, limit).await,
         PrAction::Statuses { id, limit, g } => commands::pr::statuses(&g, id, limit).await,
         PrAction::Conflicts { id, limit, g } => commands::pr::conflicts(&g, id, limit).await,
+        PrAction::MergeCheck { id, g } => commands::pr::merge_check(&g, id).await,
+        PrAction::AddReviewer { id, user, g } => commands::pr::add_reviewer(&g, id, &user).await,
+        PrAction::RemoveReviewer { id, user, g } => {
+            commands::pr::remove_reviewer(&g, id, &user).await
+        }
         PrAction::RequestChanges { id, g } => commands::pr::request_changes(&g, id).await,
         PrAction::UnrequestChanges { id, g } => commands::pr::unrequest_changes(&g, id).await,
         PrAction::Merge {
@@ -456,6 +461,17 @@ async fn dispatch_repo(action: RepoAction) -> Result<()> {
             g,
         } => commands::repo::create_tag(&g, &name, target.as_deref(), message.as_deref()).await,
         RepoAction::Permissions { g } => commands::repo::permissions(&g).await,
+        RepoAction::DefaultReviewers(action) => match action {
+            crate::cli::DefaultReviewersAction::List { g } => {
+                commands::repo::list_default_reviewers(&g).await
+            }
+            crate::cli::DefaultReviewersAction::Add { user, g } => {
+                commands::repo::add_default_reviewer(&g, &user).await
+            }
+            crate::cli::DefaultReviewersAction::Remove { user, g } => {
+                commands::repo::remove_default_reviewer(&g, &user).await
+            }
+        },
     }
 }
 

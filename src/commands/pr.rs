@@ -568,6 +568,204 @@ pub async fn unrequest_changes(g: &GlobalArgs, id: u64) -> Result<()> {
     )
 }
 
+pub async fn merge_check(g: &GlobalArgs, id: Option<u64>) -> Result<()> {
+    let repo = resolve_repo(g)?;
+    let client = client(g)?;
+    let id = resolve_pr_id(&client, &repo.workspace, &repo.slug, id).await?;
+
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
+    spinner.set_message("Checking mergeability...");
+    let (pr, conflicts, statuses) = tokio::try_join!(
+        client.get_pr(&repo.workspace, &repo.slug, id),
+        client.pr_conflicts(&repo.workspace, &repo.slug, id, 100),
+        client.pr_statuses(&repo.workspace, &repo.slug, id, 100),
+    )?;
+    spinner.finish();
+
+    let approvals: Vec<String> = pr
+        .reviewers
+        .iter()
+        .filter(|r| r.is_approved())
+        .map(|r| r.display_name.clone())
+        .collect();
+    let pending_reviewers: Vec<String> = pr
+        .reviewers
+        .iter()
+        .filter(|r| !r.is_approved())
+        .map(|r| r.display_name.clone())
+        .collect();
+    let changes_requested: Vec<String> = pr
+        .reviewers
+        .iter()
+        .filter(|r| r.is_changes_requested())
+        .map(|r| r.display_name.clone())
+        .collect();
+
+    let failing_statuses: Vec<String> = statuses
+        .iter()
+        .filter(|s| {
+            let st = s.state.to_ascii_uppercase();
+            st == "FAILED" || st == "STOPPED" || st == "ERROR"
+        })
+        .map(|s| {
+            if s.name.is_empty() {
+                s.key.clone()
+            } else {
+                s.name.clone()
+            }
+        })
+        .collect();
+    let pending_statuses: Vec<String> = statuses
+        .iter()
+        .filter(|s| {
+            let st = s.state.to_ascii_uppercase();
+            st == "INPROGRESS" || st == "PENDING"
+        })
+        .map(|s| {
+            if s.name.is_empty() {
+                s.key.clone()
+            } else {
+                s.name.clone()
+            }
+        })
+        .collect();
+
+    let conflict_paths: Vec<String> = conflicts.iter().map(|c| c.path.clone()).collect();
+
+    let mut blockers = Vec::new();
+    if !pr.state.eq_ignore_ascii_case("OPEN") {
+        blockers.push(format!("PR state is {}", pr.state));
+    }
+    if pr.draft {
+        blockers.push("PR is a draft".into());
+    }
+    if !conflict_paths.is_empty() {
+        blockers.push(format!("{} merge conflict(s)", conflict_paths.len()));
+    }
+    if !changes_requested.is_empty() {
+        blockers.push(format!(
+            "changes requested by {}",
+            changes_requested.join(", ")
+        ));
+    }
+    if !failing_statuses.is_empty() {
+        blockers.push(format!("failing status: {}", failing_statuses.join(", ")));
+    }
+    if !pending_statuses.is_empty() {
+        blockers.push(format!("pending status: {}", pending_statuses.join(", ")));
+    }
+
+    let can_merge = blockers.is_empty();
+    let out = serde_json::json!({
+        "id": id,
+        "title": pr.title,
+        "state": pr.state,
+        "draft": pr.draft,
+        "can_merge": can_merge,
+        "blockers": blockers,
+        "conflicts": conflict_paths,
+        "approvals": approvals,
+        "pending_reviewers": pending_reviewers,
+        "changes_requested": changes_requested,
+        "failing_statuses": failing_statuses,
+        "pending_statuses": pending_statuses,
+        "url": pr.web_url(),
+    });
+
+    let theme = Theme::current();
+    let mut human = String::new();
+    human.push_str(&format!(
+        "{} PR #{} — {}\n",
+        theme.bullet(),
+        id,
+        theme.bold(&pr.title)
+    ));
+    human.push_str(&format!(
+        "{}{}\n",
+        theme.label("Can merge:"),
+        if can_merge {
+            theme.success("yes")
+        } else {
+            theme.error("no")
+        }
+    ));
+    if !blockers.is_empty() {
+        human.push_str(&format!(
+            "{}{}\n",
+            theme.label("Blockers:"),
+            blockers.join("; ")
+        ));
+    }
+    human.push_str(&format!(
+        "{}{} approved, {} pending\n",
+        theme.label("Reviewers:"),
+        approvals.len(),
+        pending_reviewers.len()
+    ));
+    if !conflict_paths.is_empty() {
+        human.push_str(&format!(
+            "{}{}\n",
+            theme.label("Conflicts:"),
+            conflict_paths.join(", ")
+        ));
+    }
+    if let Some(url) = pr.web_url() {
+        human.push_str(&format!("{}{url}\n", theme.label("URL:")));
+    }
+
+    make_formatter(g).print(&out, &human)
+}
+
+pub async fn add_reviewer(g: &GlobalArgs, id: u64, user: &str) -> Result<()> {
+    let repo = resolve_repo(g)?;
+    let client = client(g)?;
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
+    spinner.set_message("Resolving user...");
+    let uuid = client.resolve_user_uuid(user).await?;
+    spinner.set_message("Adding reviewer...");
+    let pr = client
+        .add_pr_reviewer(&repo.workspace, &repo.slug, id, &uuid)
+        .await?;
+    spinner.finish();
+
+    let reviewers: Vec<String> = pr
+        .reviewers
+        .iter()
+        .map(|r| r.display_name.clone())
+        .collect();
+    let out = serde_json::json!({
+        "id": id,
+        "added": uuid,
+        "reviewers": reviewers,
+    });
+    make_formatter(g).print(&out, &format!("Added reviewer {user} to PR #{id}"))
+}
+
+pub async fn remove_reviewer(g: &GlobalArgs, id: u64, user: &str) -> Result<()> {
+    let repo = resolve_repo(g)?;
+    let client = client(g)?;
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
+    spinner.set_message("Resolving user...");
+    let uuid = client.resolve_user_uuid(user).await?;
+    spinner.set_message("Removing reviewer...");
+    let pr = client
+        .remove_pr_reviewer(&repo.workspace, &repo.slug, id, &uuid)
+        .await?;
+    spinner.finish();
+
+    let reviewers: Vec<String> = pr
+        .reviewers
+        .iter()
+        .map(|r| r.display_name.clone())
+        .collect();
+    let out = serde_json::json!({
+        "id": id,
+        "removed": uuid,
+        "reviewers": reviewers,
+    });
+    make_formatter(g).print(&out, &format!("Removed reviewer {user} from PR #{id}"))
+}
+
 pub async fn approve(g: &GlobalArgs, id: u64, message: Option<&str>) -> Result<()> {
     let repo = resolve_repo(g)?;
     let client = client(g)?;
@@ -722,6 +920,7 @@ pub async fn update(
             title: t.to_string(),
             description: Some(d.to_string()),
             close_source_branch: None,
+            reviewers: None,
         },
         (title, desc) => {
             let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
@@ -735,6 +934,7 @@ pub async fn update(
                     .map(|d| d.to_string())
                     .or_else(|| pr.description.clone()),
                 close_source_branch: None,
+                reviewers: None,
             }
         }
     };
