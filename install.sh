@@ -26,6 +26,17 @@ esac
 TARGET="${ARCH}-${OS}"
 ARCHIVE="${APP}-${TARGET}.tar.gz"
 
+sha256_file() {
+  if command -v sha256sum &>/dev/null; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum &>/dev/null; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    echo "error: need sha256sum or shasum to verify download integrity" >&2
+    exit 1
+  fi
+}
+
 # ---- resolve download URL --------------------------------------------------
 if [ "$VERSION" = "latest" ]; then
   API="https://api.github.com/repos/${REPO}/releases/latest"
@@ -35,6 +46,7 @@ else
 fi
 
 DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG}/${ARCHIVE}"
+CHECKSUMS_URL="https://github.com/${REPO}/releases/download/${TAG}/checksums.txt"
 
 # ---- download & install ----------------------------------------------------
 TMP="$(mktemp -d)"
@@ -43,6 +55,35 @@ trap cleanup EXIT
 
 echo "Downloading ${APP} ${TAG} (${TARGET})…"
 curl -fsSL "$DOWNLOAD_URL" -o "$TMP/${ARCHIVE}"
+
+echo "Verifying checksum…"
+if curl -fsSL "$CHECKSUMS_URL" -o "$TMP/checksums.txt"; then
+  EXPECTED=""
+  while read -r hash name; do
+    case "$hash" in ''|\#*) continue ;; esac
+    name="${name#\*}"
+    if [ "$name" = "$ARCHIVE" ]; then
+      EXPECTED="$hash"
+      break
+    fi
+  done < "$TMP/checksums.txt"
+
+  if [ -z "$EXPECTED" ]; then
+    echo "Warning: no checksum entry for ${ARCHIVE}; skipping verification."
+  else
+    ACTUAL="$(sha256_file "$TMP/${ARCHIVE}")"
+    if [ "$ACTUAL" != "$EXPECTED" ]; then
+      echo "ERROR: SHA256 checksum mismatch for ${ARCHIVE}!" >&2
+      echo "  Expected: ${EXPECTED}" >&2
+      echo "  Got:      ${ACTUAL}" >&2
+      echo "The download may be corrupted or tampered with. Aborting." >&2
+      exit 1
+    fi
+    echo "Checksum verified."
+  fi
+else
+  echo "Warning: checksums.txt not found for ${TAG}; skipping verification."
+fi
 
 echo "Extracting…"
 tar -xzf "$TMP/${ARCHIVE}" -C "$TMP"

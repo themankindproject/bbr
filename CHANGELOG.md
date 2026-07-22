@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Release `checksums.txt`** — release workflow publishes SHA256 sums for all archives; `install.sh` verifies before extract (warns and continues if the asset is missing on older releases).
 - **`bbr pr merge-check`** — report mergeability (conflicts, draft/state, failing/pending statuses, change requests).
 - **`bbr pr add-reviewer` / `remove-reviewer`** — update reviewers on an existing PR (username or UUID).
 - **`bbr repo default-reviewers list|add|remove`** — manage repository default reviewers.
