@@ -7,13 +7,13 @@ use crate::api::pipeline::{Pipeline, PipelineStep, StepSummary};
 use crate::api::pr::{Participant, PrState, PullRequest};
 use crate::cli::GlobalArgs;
 use crate::commands::{
-    client, current_head, human_duration, make_spinner, resolve_repo, truncate, SpinnerGuard,
+    client, current_head, human_duration, make_formatter, make_spinner, resolve_repo, truncate,
+    SpinnerGuard,
 };
 use crate::error::{BitbucketError, Result};
 use crate::git::Head;
 use crate::output::table::Table;
 use crate::output::theme::Theme;
-use crate::output::Formatter;
 
 #[derive(Debug, Serialize)]
 pub struct BuildStatusSummary {
@@ -270,7 +270,7 @@ pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
                     "{} (refreshing every {interval_secs}s — Ctrl+C to stop)\n\n",
                     theme.bold("bbr status --watch")
                 );
-                let fmt = Formatter::from_json_flag(g.json);
+                let fmt = make_formatter(g);
                 fmt.print(&out, &human)?;
             }
             Err(e) => {
@@ -293,14 +293,14 @@ pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
 
 pub async fn run(g: &GlobalArgs) -> Result<()> {
     let out = run_inner(g).await?;
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = render_human(&out);
     fmt.print(&out, &human)
 }
 
 pub async fn run_short(g: &GlobalArgs) -> Result<()> {
     let out = run_inner(g).await?;
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = render_short(&out);
     fmt.print(&out, &human)
 }
@@ -374,7 +374,7 @@ pub async fn run_overview(g: &GlobalArgs) -> Result<()> {
         suggested_commands: suggested,
     };
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = render_overview_human(&out);
     fmt.print(&out, &human)
 }

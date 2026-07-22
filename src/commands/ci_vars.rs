@@ -1,9 +1,10 @@
 //! `bbr ci vars` — pipeline variable management.
 use crate::cli::GlobalArgs;
-use crate::commands::{client, make_spinner, resolve_repo, SpinnerGuard};
+use crate::commands::{
+    client, make_formatter, make_spinner, resolve_repo, table_or_empty, SpinnerGuard,
+};
 use crate::error::{BitbucketError, Result};
 use crate::output::table::Table;
-use crate::output::Formatter;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -35,7 +36,7 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
         })
         .collect();
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let mut table = Table::new().headers(["Key", "Secured", "Value"]);
     for v in &out {
         let display_value = if v.secured {
@@ -45,7 +46,7 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
         };
         table = table.add_row([v.key.clone(), v.secured.to_string(), display_value]);
     }
-    let human = table.render();
+    let human = table_or_empty(out.len(), "No pipeline variables found.", table.render());
     fmt.print(&out, &human)
 }
 
@@ -60,7 +61,7 @@ pub async fn set(g: &GlobalArgs, key: &str, value: &str, secured: bool) -> Resul
         .await?;
     spinner.finish();
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     if let Some(existing) = vars.iter().find(|v| v.key == key) {
         let spinner2 = SpinnerGuard::new(make_spinner(g.json, g.quiet));
         spinner2.set_message(format!("Updating {key}..."));
@@ -113,7 +114,7 @@ pub async fn delete(g: &GlobalArgs, key: &str) -> Result<()> {
         .await?;
     spinner2.finish();
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let out = serde_json::json!({"action": "deleted", "key": key});
     let human = format!("Deleted {key}");
     fmt.print(&out, &human)

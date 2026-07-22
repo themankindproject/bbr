@@ -1,10 +1,9 @@
 //! Workspace operations (`bbr workspace`).
 
 use crate::cli::GlobalArgs;
-use crate::commands::{client, make_spinner, SpinnerGuard};
+use crate::commands::{client, make_formatter, make_spinner, SpinnerGuard};
 use crate::error::Result;
 use crate::output::theme::Theme;
-use crate::output::Formatter;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -73,5 +72,5 @@ pub async fn list(g: &GlobalArgs, role: Option<&str>, limit: u32) -> Result<()> 
         }
     }
 
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }

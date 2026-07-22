@@ -3,10 +3,9 @@
 use crate::api::pr::{Participant, PrState};
 use crate::api::repo::Repository;
 use crate::cli::GlobalArgs;
-use crate::commands::{client, make_spinner, resolve_repo, truncate, SpinnerGuard};
+use crate::commands::{client, make_formatter, make_spinner, resolve_repo, truncate, SpinnerGuard};
 use crate::error::Result;
 use crate::output::theme::Theme;
-use crate::output::Formatter;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -248,7 +247,7 @@ pub async fn run_dashboard(
     };
 
     let human = render_dashboard(&out);
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 fn render_dashboard(out: &DashboardOut) -> String {

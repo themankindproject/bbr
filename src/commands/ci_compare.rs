@@ -3,11 +3,10 @@
 use crate::api::pipeline::{Pipeline, PipelineStep};
 use crate::cli::GlobalArgs;
 use crate::commands::{
-    client, current_head, human_duration, make_spinner, resolve_repo, SpinnerGuard,
+    client, current_head, human_duration, make_formatter, make_spinner, resolve_repo, SpinnerGuard,
 };
 use crate::error::{BitbucketError, Result};
 use crate::output::theme::Theme;
-use crate::output::Formatter;
 use serde::Serialize;
 use std::fmt::Write as FmtWrite;
 
@@ -138,7 +137,7 @@ pub async fn compare(g: &GlobalArgs, a_ref: &str, b_ref: &str) -> Result<()> {
     };
 
     let human = render_compare(&out);
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 fn compute_step_deltas(steps_a: &[PipelineStep], steps_b: &[PipelineStep]) -> Vec<StepDelta> {

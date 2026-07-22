@@ -2,10 +2,11 @@
 
 use crate::api::pipeline::PipelineSchedule;
 use crate::cli::GlobalArgs;
-use crate::commands::{client, confirm, make_spinner, resolve_repo, SpinnerGuard};
+use crate::commands::{
+    client, confirm, make_formatter, make_spinner, resolve_repo, table_or_empty, SpinnerGuard,
+};
 use crate::error::Result;
 use crate::output::table::Table;
-use crate::output::Formatter;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -51,7 +52,7 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
 
     let out: Vec<ScheduleOut> = schedules.into_iter().map(ScheduleOut::from).collect();
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let mut table = Table::new().headers(["UUID", "Branch", "Cron", "Enabled", "Updated"]);
     for s in &out {
         table = table.add_row([
@@ -62,7 +63,7 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
             s.updated_on.as_deref().unwrap_or("-").to_string(),
         ]);
     }
-    let human = table.render();
+    let human = table_or_empty(out.len(), "No schedules found.", table.render());
     fmt.print(&out, &human)
 }
 
@@ -96,7 +97,7 @@ pub async fn create(
     spinner.finish();
 
     let out = ScheduleOut::from(schedule);
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = format!(
         "Created schedule {} (cron: {}, branch: {}, enabled: {})",
         out.uuid, out.cron_pattern, branch, out.enabled
@@ -114,7 +115,7 @@ pub async fn view(g: &GlobalArgs, uuid: &str) -> Result<()> {
     spinner.finish();
 
     let out = ScheduleOut::from(schedule);
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = format!(
         "Schedule {}\n  Cron:    {}\n  Branch:  {}\n  Enabled: {}\n  Created: {}\n  Updated: {}",
         out.uuid,
@@ -144,7 +145,7 @@ pub async fn update(
     spinner.finish();
 
     let out = ScheduleOut::from(schedule);
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = format!(
         "Updated schedule {} (cron: {}, enabled: {})",
         out.uuid, out.cron_pattern, out.enabled
@@ -170,7 +171,7 @@ pub async fn delete(g: &GlobalArgs, uuid: &str, yes: bool) -> Result<()> {
         .await?;
     spinner.finish();
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let out = serde_json::json!({"action": "deleted", "uuid": uuid});
     let human = format!("Deleted schedule {uuid}");
     fmt.print(&out, &human)
@@ -187,7 +188,7 @@ pub async fn executions(g: &GlobalArgs, uuid: &str, limit: u32) -> Result<()> {
         .await?;
     spinner.finish();
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let mut table = Table::new().headers(["UUID", "State", "Created"]);
     for e in &execs {
         let state = e

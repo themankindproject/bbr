@@ -14,7 +14,7 @@ async fn client(base: &str) -> BitbucketClient {
         secret: "tok".into(),
         kind: CredentialKind::ApiToken,
     };
-    BitbucketClient::new(base, creds).unwrap()
+    BitbucketClient::from_credentials(base, creds).unwrap()
 }
 
 const AUTH_BASIC: &str = "Basic dUBleGFtcGxlLmNvbTp0b2s=";
@@ -208,4 +208,134 @@ async fn toggles_pr_change_request() {
     let c = client(&server.uri()).await;
     c.request_pr_changes("sdadev", "bvrm", 467).await.unwrap();
     c.unrequest_pr_changes("sdadev", "bvrm", 467).await.unwrap();
+}
+
+fn sample_pr_json(id: u64, state: &str) -> serde_json::Value {
+    json!({
+        "id": id,
+        "title": "Fix X",
+        "state": state,
+        "source": { "branch": { "name": "feat/x" },
+                    "repository": { "name": "bvrm", "full_name": "sdadev/bvrm", "type": "repository" } },
+        "destination": { "branch": { "name": "main" },
+                         "repository": { "name": "bvrm", "full_name": "sdadev/bvrm", "type": "repository" } },
+        "links": { "html": { "href": format!("https://bitbucket.org/sdadev/bvrm/pull-requests/{id}") } },
+        "author": { "display_name": "Ash", "role": "AUTHOR", "approved": false }
+    })
+}
+
+#[tokio::test]
+async fn creates_approves_merges_and_declines_pr() {
+    use bbr::api::pr::{CreateBranchRef, CreateNamed, CreatePrRequest, MergePrRequest};
+    use wiremock::matchers::body_partial_json;
+
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/repositories/sdadev/bvrm/pullrequests"))
+        .and(header("authorization", AUTH_BASIC))
+        .and(body_partial_json(json!({ "title": "Fix X" })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(sample_pr_json(467, "OPEN")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/repositories/sdadev/bvrm/pullrequests/467/approve"))
+        .and(header("authorization", AUTH_BASIC))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/repositories/sdadev/bvrm/pullrequests/467/merge"))
+        .and(header("authorization", AUTH_BASIC))
+        .and(body_partial_json(json!({ "merge_strategy": "squash" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(sample_pr_json(467, "MERGED")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/repositories/sdadev/bvrm/pullrequests/468/decline"))
+        .and(header("authorization", AUTH_BASIC))
+        .respond_with(ResponseTemplate::new(200).set_body_json(sample_pr_json(468, "DECLINED")))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let c = client(&server.uri()).await;
+    let created = c
+        .create_pr(
+            "sdadev",
+            "bvrm",
+            &CreatePrRequest {
+                title: "Fix X".into(),
+                description: None,
+                source: CreateBranchRef {
+                    branch: CreateNamed {
+                        name: "feat/x".into(),
+                    },
+                },
+                destination: CreateBranchRef {
+                    branch: CreateNamed {
+                        name: "main".into(),
+                    },
+                },
+                close_source_branch: None,
+                reviewers: vec![],
+                draft: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.id, 467);
+    assert_eq!(created.state, "OPEN");
+
+    c.approve_pr("sdadev", "bvrm", 467).await.unwrap();
+
+    let merged = c
+        .merge_pr(
+            "sdadev",
+            "bvrm",
+            467,
+            Some(&MergePrRequest {
+                close_source_branch: None,
+                merge_strategy: Some("squash".into()),
+                message: None,
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(merged.state, "MERGED");
+
+    let declined = c.decline_pr("sdadev", "bvrm", 468).await.unwrap();
+    assert_eq!(declined.state, "DECLINED");
+}
+
+#[tokio::test]
+async fn prs_for_branch_returns_open_prs() {
+    use wiremock::matchers::query_param;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/sdadev/bvrm/pullrequests"))
+        .and(header("authorization", AUTH_BASIC))
+        .and(query_param(
+            "q",
+            "source.branch.name=\"feat/x\" AND state=\"OPEN\"",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 1, "page": 1, "pagelen": 50,
+            "values": [sample_pr_json(467, "OPEN")]
+        })))
+        .mount(&server)
+        .await;
+
+    let c = client(&server.uri()).await;
+    let prs = c.prs_for_branch("sdadev", "bvrm", "feat/x").await.unwrap();
+    assert_eq!(prs.len(), 1);
+    assert_eq!(prs[0].id, 467);
+    assert_eq!(prs[0].source_branch(), "feat/x");
 }

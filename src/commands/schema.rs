@@ -1,5 +1,6 @@
 //! `bbr schema` — prints JSON Schema specifications for --json outputs.
 use crate::cli::GlobalArgs;
+use crate::commands::make_formatter;
 use crate::error::{BitbucketError, Result};
 
 const SCHEMAS: &[(&str, &str, &str)] = &[
@@ -219,7 +220,7 @@ const SCHEMAS: &[(&str, &str, &str)] = &[
 ];
 
 pub fn run(g: &GlobalArgs, model: Option<&str>) -> Result<()> {
-    let fmt = crate::output::Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
 
     if let Some(m) = model {
         let normalized = m.trim().to_lowercase();

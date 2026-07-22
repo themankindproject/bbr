@@ -169,4 +169,28 @@ mod tests {
         assert_eq!(c.active.as_deref(), Some("b"));
         assert_eq!(c.active_stack().unwrap().name, "b");
     }
+
+    #[test]
+    fn active_roundtrips_in_toml() {
+        let c = cfg(&["a", "b"], Some("b"));
+        let toml = toml::to_string_pretty(&c).unwrap();
+        assert!(toml.contains("active = \"b\""));
+        let parsed: StackConfig = toml::from_str(&toml).unwrap();
+        assert_eq!(parsed.active.as_deref(), Some("b"));
+        assert_eq!(parsed.active_stack().unwrap().name, "b");
+    }
+
+    #[test]
+    fn missing_active_deserializes_as_none() {
+        let parsed: StackConfig = toml::from_str(
+            r#"
+[[stacks]]
+name = "a"
+base_branch = "main"
+"#,
+        )
+        .unwrap();
+        assert!(parsed.active.is_none());
+        assert_eq!(parsed.active_stack().unwrap().name, "a");
+    }
 }

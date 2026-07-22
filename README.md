@@ -427,8 +427,8 @@ Background version check: running `bbr status` automatically checks for updates 
 | `--api-base <URL>` | | Override API base URL (env: `BITBUCKET_API_BASE`) |
 | `--no-pager` | | Disable output paging |
 | `--quiet` | `-q` | Suppress spinners and non-essential output (env: `BBR_QUIET`) |
-| `--color` | | Force ANSI color output |
-| `--no-color` | | Disable ANSI color output |
+| `--color <WHEN>` | | Color output: `auto` (default), `always`, or `never` |
+| `--no-color` | | Disable color (same as `--color never`; wins over `--color`) |
 | `--no-unicode` | | Use ASCII instead of Unicode |
 | `--timeout <SECS>` | | HTTP request timeout in seconds (env: `BBR_TIMEOUT`, default: 30) |
 
@@ -511,7 +511,7 @@ bbr batch cleanup-merged-branches --remote --yes
 
 bbr renders human output with a theme system that respects your terminal:
 
-- **Colors**: Respects `NO_COLOR`, `CLICOLOR`, `CLICOLOR_FORCE` env vars and TTY detection. Force with `--color always`.
+- **Colors**: Precedence is `--no-color` > `--color` > `CLICOLOR_FORCE` > `NO_COLOR` > `CLICOLOR=0` > TTY detection. Force with `--color always`.
 - **Unicode**: Semantic glyphs (`[ok]`/`[X]`/`[!]`/`[~]`/`[.]`/`[?]`). Use `--no-unicode` for ASCII-only terminals.
 - **Pager**: Long output paged through `less -F -R -X`. Disable with `--no-pager`.
 - **Spinners**: `indicatif` spinners during network operations. Hidden in `--json` mode and `--quiet` mode.

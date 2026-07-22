@@ -2,10 +2,11 @@
 
 use crate::api::pr::{CreateBranchRef, CreateNamed, CreatePrRequest, MergePrRequest};
 use crate::cli::GlobalArgs;
-use crate::commands::{client, confirm, current_head, make_spinner, resolve_repo, SpinnerGuard};
+use crate::commands::{
+    client, confirm, current_head, make_formatter, make_spinner, resolve_repo, SpinnerGuard,
+};
 use crate::error::{BitbucketError, Result};
 use crate::output::theme::Theme;
-use crate::output::Formatter;
 use crate::stack::{StackConfig, StackDef, StackPr};
 use serde::Serialize;
 
@@ -108,7 +109,7 @@ pub fn init(g: &GlobalArgs, name: &str, base: Option<&str>) -> Result<()> {
         "Initialized empty stack '{}' onto base branch '{}'.",
         out.name, out.base_branch
     );
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 pub fn use_stack(g: &GlobalArgs, name: &str) -> Result<()> {
@@ -124,7 +125,7 @@ pub fn use_stack(g: &GlobalArgs, name: &str) -> Result<()> {
         active: name.to_string(),
     };
     let human = format!("Active stack set to '{name}'.");
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 pub async fn add(g: &GlobalArgs, branch: &str, parent: Option<&str>) -> Result<()> {
@@ -205,7 +206,7 @@ pub async fn add(g: &GlobalArgs, branch: &str, parent: Option<&str>) -> Result<(
         parent_branch,
         out.url.as_deref().unwrap_or("-")
     );
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 pub async fn list(g: &GlobalArgs) -> Result<()> {
@@ -260,7 +261,7 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
     };
 
     let human = render_stack_list(&out);
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 pub async fn rebase(g: &GlobalArgs, push: bool) -> Result<()> {
@@ -322,7 +323,7 @@ pub async fn rebase(g: &GlobalArgs, push: bool) -> Result<()> {
 
     let out = StackRebaseOut { steps };
     let human = render_rebase(&out);
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 pub async fn land(g: &GlobalArgs, strategy: Option<&str>, yes: bool) -> Result<()> {
@@ -403,7 +404,7 @@ pub async fn land(g: &GlobalArgs, strategy: Option<&str>, yes: bool) -> Result<(
 
     let out = StackLandOut { merged, failed };
     let human = render_land(&out);
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 pub async fn abort(g: &GlobalArgs, yes: bool) -> Result<()> {
@@ -474,7 +475,7 @@ pub async fn abort(g: &GlobalArgs, yes: bool) -> Result<()> {
         out.declined.len(),
         out.branches_deleted.len()
     );
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 fn render_stack_list(out: &StackListOut) -> String {

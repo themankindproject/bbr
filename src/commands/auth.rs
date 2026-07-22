@@ -6,10 +6,9 @@ use serde::Serialize;
 
 use crate::auth::{self, CredentialKind};
 use crate::cli::GlobalArgs;
-use crate::commands::client;
+use crate::commands::{client, make_formatter};
 use crate::config::{self, CredentialProfile, CredentialsFile};
 use crate::error::{BitbucketError, Result};
-use crate::output::Formatter;
 
 const API_TOKEN_URL: &str = "https://id.atlassian.com/manage-profile/security/api-tokens";
 
@@ -140,7 +139,7 @@ pub async fn status(g: &GlobalArgs) -> Result<()> {
         rate_limit_remaining,
     };
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = if out.authenticated {
         let mut msg = format!(
             "Authenticated as {} ({}) via {}",
@@ -184,7 +183,7 @@ pub async fn test(g: &GlobalArgs) -> Result<()> {
         "✓ Authenticated as {} ({})",
         user.display_name, creds.username
     );
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 /// Remove stored credentials.
@@ -196,7 +195,7 @@ pub fn logout(g: &GlobalArgs) -> Result<()> {
     } else {
         "No stored credentials to remove.".to_string()
     };
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 // ---- prompt helpers -------------------------------------------------------

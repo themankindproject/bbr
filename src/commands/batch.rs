@@ -3,11 +3,10 @@
 use crate::api::pr::{MergePrRequest, PrState};
 use crate::api::BitbucketClient;
 use crate::cli::GlobalArgs;
-use crate::commands::{client, confirm, make_spinner, resolve_repo, SpinnerGuard};
+use crate::commands::{client, confirm, make_formatter, make_spinner, resolve_repo, SpinnerGuard};
 use crate::error::Result;
 use crate::output::table::Table;
 use crate::output::theme::Theme;
-use crate::output::Formatter;
 use serde::Serialize;
 
 /// Delay between batch API calls to avoid burning the hourly rate limit.
@@ -143,7 +142,7 @@ pub async fn merge_approved(
 
     if approved_actions.is_empty() {
         if g.json {
-            Formatter::from_json_flag(g.json).print(&plan, "")?;
+            make_formatter(g).print(&plan, "")?;
         } else {
             eprintln!("No approved pull requests found to merge.");
         }
@@ -169,7 +168,7 @@ pub async fn merge_approved(
 
     if dry_run {
         if g.json {
-            Formatter::from_json_flag(g.json).print(&plan, "")?;
+            make_formatter(g).print(&plan, "")?;
         }
         return Ok(());
     }
@@ -218,7 +217,7 @@ pub async fn merge_approved(
 
     let result = BatchResult { succeeded, failed };
     let human = render_results(&result);
-    Formatter::from_json_flag(g.json).print(&result, &human)
+    make_formatter(g).print(&result, &human)
 }
 
 pub async fn rerun_failed(
@@ -286,7 +285,7 @@ pub async fn rerun_failed(
 
     if failed_actions.is_empty() {
         if g.json {
-            Formatter::from_json_flag(g.json).print(&plan, "")?;
+            make_formatter(g).print(&plan, "")?;
         } else {
             eprintln!("No failed pipelines found to rerun.");
         }
@@ -310,7 +309,7 @@ pub async fn rerun_failed(
 
     if dry_run {
         if g.json {
-            Formatter::from_json_flag(g.json).print(&plan, "")?;
+            make_formatter(g).print(&plan, "")?;
         }
         return Ok(());
     }
@@ -357,7 +356,7 @@ pub async fn rerun_failed(
 
     let result = BatchResult { succeeded, failed };
     let human = render_results(&result);
-    Formatter::from_json_flag(g.json).print(&result, &human)
+    make_formatter(g).print(&result, &human)
 }
 
 pub async fn cleanup_merged_branches(
@@ -422,7 +421,7 @@ pub async fn cleanup_merged_branches(
 
     if cleanup_actions.is_empty() {
         if g.json {
-            Formatter::from_json_flag(g.json).print(&plan, "")?;
+            make_formatter(g).print(&plan, "")?;
         } else {
             eprintln!("No merged branches found to clean up.");
         }
@@ -442,7 +441,7 @@ pub async fn cleanup_merged_branches(
 
     if dry_run {
         if g.json {
-            Formatter::from_json_flag(g.json).print(&plan, "")?;
+            make_formatter(g).print(&plan, "")?;
         }
         return Ok(());
     }
@@ -505,7 +504,7 @@ pub async fn cleanup_merged_branches(
 
     let result = BatchResult { succeeded, failed };
     let human = render_results(&result);
-    Formatter::from_json_flag(g.json).print(&result, &human)
+    make_formatter(g).print(&result, &human)
 }
 
 fn render_results(res: &BatchResult) -> String {

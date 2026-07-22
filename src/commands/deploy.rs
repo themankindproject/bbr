@@ -1,9 +1,10 @@
 //! `bbr deploy` — deployment and environment management.
 use crate::cli::GlobalArgs;
-use crate::commands::{client, make_spinner, resolve_repo, truncate, SpinnerGuard};
+use crate::commands::{
+    client, make_formatter, make_spinner, resolve_repo, table_or_empty, truncate, SpinnerGuard,
+};
 use crate::error::{BitbucketError, Result};
 use crate::output::table::Table;
-use crate::output::Formatter;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -66,7 +67,7 @@ pub async fn list_deployments(g: &GlobalArgs, limit: u32) -> Result<()> {
         })
         .collect();
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let mut table = Table::new().headers(["Environment", "State", "Build#", "Commit", "Date"]);
     for d in &out {
         table = table.add_row([
@@ -82,7 +83,7 @@ pub async fn list_deployments(g: &GlobalArgs, limit: u32) -> Result<()> {
             d.last_update.as_deref().unwrap_or("-").to_string(),
         ]);
     }
-    let human = table.render();
+    let human = table_or_empty(out.len(), "No deployments found.", table.render());
     fmt.print(&out, &human)
 }
 
@@ -108,7 +109,7 @@ pub async fn list_environments(g: &GlobalArgs) -> Result<()> {
         })
         .collect();
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let mut table = Table::new().headers(["Name", "Type", "Rank", "UUID"]);
     for e in &out {
         table = table.add_row([
@@ -118,7 +119,7 @@ pub async fn list_environments(g: &GlobalArgs) -> Result<()> {
             e.uuid.clone(),
         ]);
     }
-    let human = table.render();
+    let human = table_or_empty(out.len(), "No environments found.", table.render());
     fmt.print(&out, &human)
 }
 
@@ -139,7 +140,7 @@ pub async fn create_environment(g: &GlobalArgs, name: &str, env_type: &str) -> R
         env_type: env.environment_type.name,
         rank: env.rank,
     };
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = format!(
         "Created environment '{}' (type: {}, rank: {})",
         out.name, out.env_type, out.rank
@@ -168,7 +169,7 @@ pub async fn list_env_vars(g: &GlobalArgs, env_uuid: &str) -> Result<()> {
         })
         .collect();
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let mut table = Table::new().headers(["Key", "Secured", "Value"]);
     for v in &out {
         let display_value = if v.secured {
@@ -178,7 +179,7 @@ pub async fn list_env_vars(g: &GlobalArgs, env_uuid: &str) -> Result<()> {
         };
         table = table.add_row([v.key.clone(), v.secured.to_string(), display_value]);
     }
-    let human = table.render();
+    let human = table_or_empty(out.len(), "No environment variables found.", table.render());
     fmt.print(&out, &human)
 }
 
@@ -199,7 +200,7 @@ pub async fn set_env_var(
         .await?;
     spinner.finish();
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     if let Some(existing) = vars.iter().find(|v| v.key == key) {
         let spinner2 = SpinnerGuard::new(make_spinner(g.json, g.quiet));
         spinner2.set_message(format!("Updating {key}..."));
@@ -253,7 +254,7 @@ pub async fn delete_env_var(g: &GlobalArgs, env_uuid: &str, key: &str) -> Result
         .await?;
     spinner2.finish();
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let out = serde_json::json!({"action": "deleted", "key": key});
     let human = format!("Deleted {key}");
     fmt.print(&out, &human)
@@ -289,7 +290,7 @@ pub async fn trigger_deployment(g: &GlobalArgs, env_uuid: &str, commit: &str) ->
         last_update: deployment.last_update_time,
     };
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = format!(
         "Triggered deployment {} to environment {} (commit: {})",
         out.uuid,

@@ -43,9 +43,9 @@ pub fn client(g: &GlobalArgs) -> Result<BitbucketClient> {
     let creds = crate::auth::resolve()?;
     let base = resolve_api_base(g);
     if let Some(timeout) = g.timeout {
-        creds.into_client_with_timeout(base, timeout)
+        BitbucketClient::from_credentials_with_timeout(base, creds, timeout)
     } else {
-        creds.into_client(base)
+        BitbucketClient::from_credentials(base, creds)
     }
 }
 
@@ -131,9 +131,20 @@ pub async fn resolve_body(
     ))
 }
 
-/// Create a Formatter respecting --json and --no-pager flags.
+/// Standard Formatter construction for command handlers.
+///
+/// Prefer this over `Formatter::from_json_flag` so `--no-pager` is honored.
 pub fn make_formatter(g: &GlobalArgs) -> crate::output::Formatter {
     crate::output::Formatter::from_args(g.json, g.no_pager)
+}
+
+/// Human list output: show `empty` when there are no rows, otherwise the table.
+pub fn table_or_empty(row_count: usize, empty: &str, table: String) -> String {
+    if row_count == 0 {
+        empty.to_string()
+    } else {
+        table
+    }
 }
 
 /// Create a spinner if stdout is a TTY and we're not in JSON or quiet mode.
@@ -329,6 +340,22 @@ mod tests {
     fn make_spinner_hidden_in_quiet_mode() {
         let pb = make_spinner(false, true);
         assert!(pb.is_hidden());
+    }
+
+    #[test]
+    fn table_or_empty_returns_message_when_no_rows() {
+        assert_eq!(
+            table_or_empty(0, "No items found.", "table".into()),
+            "No items found."
+        );
+    }
+
+    #[test]
+    fn table_or_empty_returns_table_when_rows_present() {
+        assert_eq!(
+            table_or_empty(2, "No items found.", "table".into()),
+            "table"
+        );
     }
 
     #[tokio::test]

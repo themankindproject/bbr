@@ -11,12 +11,12 @@ use crate::api::pipeline::{
 use crate::api::BitbucketClient;
 use crate::cli::GlobalArgs;
 use crate::commands::{
-    client, confirm, current_head, human_duration, make_spinner, resolve_repo, SpinnerGuard,
+    client, confirm, current_head, human_duration, make_formatter, make_spinner, resolve_repo,
+    SpinnerGuard,
 };
 use crate::error::{BitbucketError, Result};
 use crate::output::table::Table;
 use crate::output::theme::Theme;
-use crate::output::Formatter;
 
 #[derive(Debug, Serialize)]
 pub struct CiStatusOut {
@@ -76,7 +76,7 @@ pub async fn list(g: &GlobalArgs, branch: Option<&str>, limit: u32, no_steps: bo
         .await?;
     spinner.finish();
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     if pipelines.is_empty() {
         let out = CiListOut {
             branch: branch.clone(),
@@ -198,7 +198,7 @@ pub async fn status(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
         }),
     };
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = render_status(&out);
     fmt.print(&out, &human)
 }
@@ -271,7 +271,7 @@ pub async fn watch(
         failure_log: failure_log.clone(),
     };
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let mut human = format!(
         "Pipeline {} in {}",
         theme.status_glyph(&final_state),
@@ -350,12 +350,12 @@ pub async fn logs(
     if let Some(path) = output {
         std::fs::write(path, &log.text)
             .map_err(|e| BitbucketError::Other(format!("writing {path}: {e}")))?;
-        let fmt = Formatter::from_json_flag(g.json);
+        let fmt = make_formatter(g);
         let human = format!("Wrote {} bytes to {path}", log.text.len());
         return fmt.print(&out, &human);
     }
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = log.text;
     fmt.print_paginated(&out, &human)
 }
@@ -395,7 +395,7 @@ pub async fn steps(g: &GlobalArgs, uuid: Option<&str>) -> Result<()> {
         steps: raw.values.iter().map(step_out).collect(),
     };
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let theme = Theme::current();
     let mut table = Table::new().headers(["Step", "State", "Duration"]);
     for (i, s) in raw.values.iter().enumerate() {
@@ -473,7 +473,7 @@ pub async fn tests(
         test_cases: cases,
     };
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let theme = Theme::current();
     let mut human = format!(
         "Test report for {} / {}\n",
@@ -550,7 +550,7 @@ pub async fn stop(g: &GlobalArgs, uuid: Option<&str>, branch: Option<&str>) -> R
         .stop_pipeline(&repo.workspace, &repo.slug, &pipeline_uuid)
         .await?;
     spinner.finish();
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     fmt.print(
         &serde_json::json!({ "uuid": pipeline_uuid, "stopped": true }),
         &format!("Stopped pipeline {pipeline_uuid}"),
@@ -582,7 +582,7 @@ pub async fn rerun(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
         ))
         .await?
     {
-        let fmt = Formatter::from_json_flag(g.json);
+        let fmt = make_formatter(g);
         fmt.print(&(), "Aborted.")?;
         return Ok(());
     }
@@ -605,7 +605,7 @@ pub async fn rerun(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
             steps: Vec::new(),
         }),
     };
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = format!("Reran pipeline #{}", new_pipeline.build_number);
     if !g.json {
         fmt.print(&out, &format!("{human}\nNext: bbr ci watch"))
@@ -679,7 +679,7 @@ pub async fn trigger(
             steps: Vec::new(),
         }),
     };
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = format!(
         "Triggered pipeline #{} for '{}'",
         pipeline.build_number, branch

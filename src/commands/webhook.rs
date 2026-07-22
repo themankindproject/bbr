@@ -1,9 +1,11 @@
 //! `bbr webhook` — repository webhook management.
 use crate::cli::GlobalArgs;
-use crate::commands::{client, confirm, make_spinner, resolve_repo, truncate, SpinnerGuard};
+use crate::commands::{
+    client, confirm, make_formatter, make_spinner, resolve_repo, table_or_empty, truncate,
+    SpinnerGuard,
+};
 use crate::error::{BitbucketError, Result};
 use crate::output::table::Table;
-use crate::output::Formatter;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -38,7 +40,7 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
         })
         .collect();
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let mut table = Table::new().headers(["UUID", "Active", "Events", "URL"]);
     for h in &hooks {
         table = table.add_row([
@@ -48,11 +50,7 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
             truncate(&h.url, 60),
         ]);
     }
-    let human = if hooks.is_empty() {
-        "No webhooks configured.".into()
-    } else {
-        table.render()
-    };
+    let human = table_or_empty(hooks.len(), "No webhooks configured.", table.render());
     fmt.print(&out, &human)
 }
 
@@ -74,7 +72,7 @@ pub async fn view(g: &GlobalArgs, uid: &str) -> Result<()> {
         events: hook.events.clone(),
     };
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = format!(
         "Webhook {}\n  URL:    {}\n  Active: {}\n  Secret: {}\n  Events:\n{}",
         hook.uuid,
@@ -134,7 +132,7 @@ pub async fn create(
         secret_set: hook.secret_set,
         events: hook.events.clone(),
     };
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = format!("Created webhook {}\n  URL: {}", hook.uuid, hook.url);
     fmt.print(&out, &human)
 }
@@ -179,7 +177,7 @@ pub async fn update(
         secret_set: hook.secret_set,
         events: hook.events.clone(),
     };
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = format!("Updated webhook {}", hook.uuid);
     fmt.print(&out, &human)
 }
@@ -199,7 +197,7 @@ pub async fn delete(g: &GlobalArgs, uid: &str, yes: bool) -> Result<()> {
         .delete_webhook(&repo.workspace, &repo.slug, uid)
         .await?;
     spinner.finish();
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let out = serde_json::json!({"deleted": uid});
     fmt.print(&out, &format!("Deleted webhook {uid}"))
 }

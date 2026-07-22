@@ -13,7 +13,8 @@ use crate::api::status::BuildStatus;
 use crate::api::BitbucketClient;
 use crate::cli::GlobalArgs;
 use crate::commands::{
-    client, confirm, current_head, make_spinner, resolve_body, resolve_repo, truncate, SpinnerGuard,
+    client, confirm, current_head, make_formatter, make_spinner, resolve_body, resolve_repo,
+    truncate, SpinnerGuard,
 };
 use crate::error::{BitbucketError, Result};
 use crate::git;
@@ -206,7 +207,7 @@ pub async fn list(
         pull_requests: rows,
     };
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = render_list(&out);
     fmt.print(&out, &human)
 }
@@ -389,7 +390,7 @@ pub async fn create(
         state: pr.state.clone(),
     };
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = format!(
         "Created PR #{}: {}",
         out.id,
@@ -428,7 +429,7 @@ pub async fn comment(
         pr_id: id,
         posted: true,
     };
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = if reply_to.is_some() {
         format!("Replied to comment on PR #{}", id)
     } else {
@@ -454,7 +455,7 @@ pub async fn comments(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()>
         comments: comments.iter().map(comment_summary).collect(),
     };
     let human = render_comments(&out);
-    Formatter::from_json_flag(g.json).print_paginated(&out, &human)
+    make_formatter(g).print_paginated(&out, &human)
 }
 
 pub async fn tasks(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()> {
@@ -474,7 +475,7 @@ pub async fn tasks(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()> {
         tasks: tasks.iter().map(task_summary).collect(),
     };
     let human = render_tasks(&out);
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 pub async fn commits(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()> {
@@ -494,7 +495,7 @@ pub async fn commits(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()> 
         commits: commits.iter().map(commit_summary).collect(),
     };
     let human = render_commits(&out);
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 pub async fn statuses(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()> {
@@ -514,7 +515,7 @@ pub async fn statuses(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()>
         statuses: statuses.iter().map(status_summary).collect(),
     };
     let human = render_statuses(&out);
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 pub async fn conflicts(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()> {
@@ -534,7 +535,7 @@ pub async fn conflicts(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()
         conflicts: conflicts.iter().map(conflict_summary).collect(),
     };
     let human = render_conflicts(&out);
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 pub async fn request_changes(g: &GlobalArgs, id: u64) -> Result<()> {
@@ -546,7 +547,7 @@ pub async fn request_changes(g: &GlobalArgs, id: u64) -> Result<()> {
         .request_pr_changes(&repo.workspace, &repo.slug, id)
         .await?;
     spinner.finish();
-    Formatter::from_json_flag(g.json).print(
+    make_formatter(g).print(
         &serde_json::json!({ "id": id, "changes_requested": true }),
         &format!("Requested changes on PR #{}", id),
     )
@@ -561,7 +562,7 @@ pub async fn unrequest_changes(g: &GlobalArgs, id: u64) -> Result<()> {
         .unrequest_pr_changes(&repo.workspace, &repo.slug, id)
         .await?;
     spinner.finish();
-    Formatter::from_json_flag(g.json).print(
+    make_formatter(g).print(
         &serde_json::json!({ "id": id, "changes_requested": false }),
         &format!("Cleared change request on PR #{}", id),
     )
@@ -580,7 +581,7 @@ pub async fn approve(g: &GlobalArgs, id: u64, message: Option<&str>) -> Result<(
         client.approve_pr(&repo.workspace, &repo.slug, id).await?;
     }
     spinner.finish();
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     fmt.print(
         &serde_json::json!({ "id": id, "approved": true }),
         &format!("Approved PR #{}", id),
@@ -594,7 +595,7 @@ pub async fn unapprove(g: &GlobalArgs, id: u64) -> Result<()> {
     spinner.set_message("Removing approval...");
     client.unapprove_pr(&repo.workspace, &repo.slug, id).await?;
     spinner.finish();
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     fmt.print(
         &serde_json::json!({ "id": id, "approved": false }),
         &format!("Removed approval from PR #{}", id),
@@ -609,7 +610,7 @@ pub async fn decline(g: &GlobalArgs, id: u64) -> Result<()> {
     let pr = client.decline_pr(&repo.workspace, &repo.slug, id).await?;
     spinner.finish();
     let out = PrViewOut::from(&pr);
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     fmt.print(&out, &format!("Declined PR #{}", id))
 }
 
@@ -648,7 +649,7 @@ pub async fn merge(
         ))
         .await?
     {
-        let fmt = Formatter::from_json_flag(g.json);
+        let fmt = make_formatter(g);
         let human = "Aborted.".to_string();
         fmt.print(&(), &human)?;
         return Ok(());
@@ -668,7 +669,7 @@ pub async fn merge(
 
     let out = PrViewOut::from(&pr);
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = format!("Merged PR #{}", id);
     if !g.json {
         fmt.print(&out, &format!("{human}\nNext: bbr status"))
@@ -700,7 +701,7 @@ pub async fn checkout(g: &GlobalArgs, id: u64) -> Result<()> {
     git::checkout_branch_async(&branch).await?;
     spinner.finish();
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     fmt.print(
         &serde_json::json!({ "id": id, "branch": branch }),
         &format!("Checked out PR #{}: {}", id, branch),
@@ -747,7 +748,7 @@ pub async fn update(
 
     let out = PrViewOut::from(&pr);
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = format!("Updated PR #{}", id);
     fmt.print(&out, &human)
 }
@@ -849,7 +850,7 @@ pub async fn diffstat(g: &GlobalArgs, id: Option<u64>) -> Result<()> {
     let stat = client.pr_diffstat(&repo.workspace, &repo.slug, id).await?;
     spinner.finish();
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = render_diffstat(id, &stat);
     fmt.print(&stat, &human)
 }
@@ -872,10 +873,10 @@ pub async fn patch(g: &GlobalArgs, id: Option<u64>, output: Option<&str>) -> Res
             .map_err(|e| crate::error::BitbucketError::Other(format!("writing {path}: {e}")))?;
         let out = serde_json::json!({ "id": id, "file": path, "bytes": body.len() });
         let human = format!("Wrote patch to {path}");
-        Formatter::from_json_flag(g.json).print(&out, &human)
+        make_formatter(g).print(&out, &human)
     } else {
         let out = serde_json::json!({ "id": id, "patch": body });
-        let fmt = Formatter::from_json_flag(g.json);
+        let fmt = make_formatter(g);
         fmt.print_diff(&out, &body)
     }
 }

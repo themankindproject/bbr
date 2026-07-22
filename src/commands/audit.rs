@@ -2,10 +2,9 @@
 
 use crate::api::repo::{BranchRestriction, DefaultReviewer};
 use crate::cli::GlobalArgs;
-use crate::commands::{client, make_spinner, resolve_repo, SpinnerGuard};
+use crate::commands::{client, make_formatter, make_spinner, resolve_repo, SpinnerGuard};
 use crate::error::Result;
 use crate::output::theme::Theme;
-use crate::output::Formatter;
 use futures::future::join_all;
 use serde::Serialize;
 
@@ -117,7 +116,7 @@ pub async fn run_audit(g: &GlobalArgs, slug_arg: Option<&str>) -> Result<()> {
     };
 
     let human = render_audit(&out);
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 fn matches_main(r: &BranchRestriction) -> bool {

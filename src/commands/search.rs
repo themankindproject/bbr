@@ -4,9 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::BitbucketClient;
 use crate::cli::GlobalArgs;
-use crate::commands::{client, make_spinner, resolve_repo, SpinnerGuard};
+use crate::commands::{client, make_formatter, make_spinner, resolve_repo, SpinnerGuard};
 use crate::error::Result;
-use crate::output::Formatter;
 
 #[derive(Debug, Serialize)]
 pub struct SearchOut {
@@ -137,7 +136,7 @@ pub async fn run(g: &GlobalArgs, query: &str, repo_filter: Option<&str>, limit: 
     };
 
     let human = render_search(&out);
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 fn render_search(out: &SearchOut) -> String {

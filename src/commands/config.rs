@@ -3,9 +3,9 @@
 use serde::Serialize;
 
 use crate::cli::GlobalArgs;
+use crate::commands::make_formatter;
 use crate::config;
 use crate::error::{BitbucketError, Result};
-use crate::output::Formatter;
 
 #[derive(Debug, Serialize)]
 pub struct ConfigOut {
@@ -31,7 +31,7 @@ pub fn run_path(g: &GlobalArgs) -> Result<()> {
         out.config_path.as_deref().unwrap_or("(unavailable)"),
         out.credentials_path.as_deref().unwrap_or("(unavailable)"),
     );
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 pub fn run_show(g: &GlobalArgs) -> Result<()> {
@@ -59,7 +59,7 @@ pub fn run_show(g: &GlobalArgs) -> Result<()> {
         out.username.as_deref().unwrap_or("(not set)"),
         out.has_token,
     );
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 pub fn run_set(g: &GlobalArgs, key: &str, value: &str) -> Result<()> {
@@ -74,7 +74,7 @@ pub fn run_set(g: &GlobalArgs, key: &str, value: &str) -> Result<()> {
             let path = config::save_credentials(&creds)?;
             let human = format!("Set workspace = \"{value}\" in {}", path.display());
             let out = serde_json::json!({ "key": key, "value": value, "path": path.display().to_string() });
-            Formatter::from_json_flag(g.json).print(&out, &human)
+            make_formatter(g).print(&out, &human)
         }
         _ => Err(BitbucketError::Other(format!(
             "unknown config key: {key} (valid: workspace)"

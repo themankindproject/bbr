@@ -54,11 +54,13 @@ pub struct GlobalArgs {
     pub quiet: bool,
 
     /// When to use color: auto (default), always, or never.
-    /// Also controlled by NO_COLOR / CLICOLOR / CLICOLOR_FORCE env vars.
+    ///
+    /// Precedence: `--no-color` > `--color` > `CLICOLOR_FORCE` > `NO_COLOR` >
+    /// `CLICOLOR=0` > TTY detection.
     #[arg(long, global = true, value_enum, default_value = "auto")]
     pub color: ColorChoice,
 
-    /// Disable ANSI color output (equivalent to --color never).
+    /// Disable ANSI color output (same as `--color never`; wins over `--color`).
     #[arg(long, global = true, action = ArgAction::SetTrue)]
     pub no_color: bool,
 

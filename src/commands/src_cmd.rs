@@ -1,9 +1,10 @@
 //! `bbr src` — remote source browser.
 use crate::cli::GlobalArgs;
-use crate::commands::{client, current_head, make_spinner, resolve_repo, SpinnerGuard};
+use crate::commands::{
+    client, current_head, make_formatter, make_spinner, resolve_repo, SpinnerGuard,
+};
 use crate::error::Result;
 use crate::output::table::Table;
-use crate::output::Formatter;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -37,7 +38,7 @@ pub async fn cat(g: &GlobalArgs, path: &str, git_ref: Option<&str>) -> Result<()
         .await?;
     spinner.finish();
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     if g.json {
         let out = SrcCatOut {
             path: path.to_string(),
@@ -86,7 +87,7 @@ pub async fn ls(g: &GlobalArgs, path: Option<&str>, git_ref: Option<&str>) -> Re
         })
         .collect();
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let mut table = Table::new().headers(["Type", "Path", "Size", "Commit", "Date"]);
     for e in &out {
         table = table.add_row([

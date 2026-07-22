@@ -4,9 +4,10 @@ use serde::Serialize;
 
 use crate::api::status::{BuildStatus, BuildStatusRequest};
 use crate::cli::GlobalArgs;
-use crate::commands::{client, current_head, make_spinner, resolve_repo, SpinnerGuard};
+use crate::commands::{
+    client, current_head, make_formatter, make_spinner, resolve_repo, SpinnerGuard,
+};
 use crate::error::{BitbucketError, Result};
-use crate::output::Formatter;
 
 #[derive(Debug, Serialize)]
 pub struct CommitStatusOut {
@@ -59,7 +60,7 @@ pub async fn set_status(
         short_commit(&out.commit),
         out.state
     );
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 fn normalize_state(state: &str) -> Result<String> {

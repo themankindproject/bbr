@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`BitbucketClient::from_credentials`** — preferred client factory; removed `Credentials::into_client` coupling.
+- **`table_or_empty`** — consistent "No X found" human messages for empty list commands.
+- **PR lifecycle + `prs_for_branch` API tests** — create/approve/merge/decline and status branch lookup covered with wiremock.
 - **`bbr pr stack use <name>`** — select which stack `add`/`list`/`rebase`/`land`/`abort` operate on (stored as `active` in `.bbr/stack.toml`; legacy configs without `active` still use the first stack).
 - **`Paginated<T>` now implements `Default`** — empty page helper without `T: Default` bound.
 - **`bbr pr diff` optional ID** — omit the PR id to resolve the open PR for the current branch (same as `diffstat` / `patch`).
@@ -37,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Command formatters** — handlers use `make_formatter(g)` so `--no-pager` is honored consistently (not only `--json`).
+- **Color flag docs** — documented precedence: `--no-color` > `--color` > env (`CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR`) > TTY.
 - **README** — comprehensive rewrite with full command reference, API scopes table, scripting patterns, output/theme docs, and conventions.
 - **Pretty diff line numbers** — width scales to the largest line number in each file (no longer hard-capped at 4 columns).
 - **`DiffRenderOptions`** — dropped unused `syntax_highlight` field.

@@ -5,7 +5,9 @@
 //! workspaces that have the issue tracker enabled.
 
 use crate::cli::GlobalArgs;
-use crate::commands::{client, make_spinner, resolve_repo, truncate, SpinnerGuard};
+use crate::commands::{
+    client, make_formatter, make_spinner, resolve_repo, table_or_empty, truncate, SpinnerGuard,
+};
 use crate::error::Result;
 use crate::output::table::Table;
 use crate::output::Formatter;
@@ -110,7 +112,7 @@ pub async fn list(
 
     let out: Vec<IssueOut> = issues.iter().map(issue_to_out).collect();
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let mut table = Table::new().headers([
         "ID", "State", "Kind", "Priority", "Title", "Assignee", "Comments",
     ]);
@@ -125,11 +127,7 @@ pub async fn list(
             issue.comment_count.to_string(),
         ]);
     }
-    let human = if issues.is_empty() {
-        "No issues found.".into()
-    } else {
-        table.render()
-    };
+    let human = table_or_empty(issues.len(), "No issues found.", table.render());
     fmt.print(&out, &human)
 }
 
@@ -175,7 +173,7 @@ pub async fn view(g: &GlobalArgs, id: u64, show_comments: bool) -> Result<()> {
         url: issue.links.html.href.clone(),
     };
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let sep = "─".repeat(50);
     let human = format!(
         "Issue #{id} — {title}\n{sep}\n  State: {state:<12} Kind: {kind:<12} Priority: {priority}\n  Reporter: {reporter:<20} Assignee: {assignee}\n  Created: {created}\n  URL: {url}\n\nDescription:\n{body_indented}\n\n[{cmts} comments, {votes} votes, {watches} watchers]",
@@ -272,7 +270,7 @@ pub async fn create(
         .await?;
     spinner.finish();
     let out = issue_to_out(&issue);
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = format!(
         "Created issue #{}\n  {}",
         issue.id,
@@ -311,7 +309,7 @@ pub async fn update(
         .await?;
     spinner.finish();
     let out = issue_to_out(&issue);
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = format!("Updated issue #{}", issue.id);
     fmt.print(&out, &human)
 }
@@ -336,7 +334,7 @@ pub async fn comment(g: &GlobalArgs, id: u64, body: &str) -> Result<()> {
             .unwrap_or_default(),
         created_on: c.created_on.as_ref().map(|d| d.chars().take(10).collect()),
     };
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = format!("Posted comment #{} on issue #{}", c.id, id);
     fmt.print(&out, &human)
 }
@@ -366,7 +364,7 @@ pub async fn list_comments(g: &GlobalArgs, id: u64, limit: u32) -> Result<()> {
         })
         .collect();
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let mut table = Table::new().headers(["ID", "Author", "Date", "Body"]);
     for c in &out {
         table = table.add_row([
@@ -376,11 +374,11 @@ pub async fn list_comments(g: &GlobalArgs, id: u64, limit: u32) -> Result<()> {
             truncate(&c.body, 80),
         ]);
     }
-    let human = if comments.is_empty() {
-        format!("No comments on issue #{id}")
-    } else {
-        table.render()
-    };
+    let human = table_or_empty(
+        comments.len(),
+        &format!("No comments on issue #{id}"),
+        table.render(),
+    );
     fmt.print(&out, &human)
 }
 

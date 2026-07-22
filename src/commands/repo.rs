@@ -3,10 +3,11 @@
 use serde::Serialize;
 
 use crate::cli::GlobalArgs;
-use crate::commands::{client, make_spinner, resolve_repo, truncate, SpinnerGuard};
+use crate::commands::{
+    client, make_formatter, make_spinner, resolve_repo, table_or_empty, truncate, SpinnerGuard,
+};
 use crate::error::Result;
 use crate::output::table::Table;
-use crate::output::Formatter;
 
 #[derive(Debug, Serialize)]
 pub struct RepoInfoOut {
@@ -56,7 +57,7 @@ pub async fn info(g: &GlobalArgs) -> Result<()> {
         web_url: info.links.html.href.clone(),
     };
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let theme = crate::output::theme::Theme::current();
     let mut human = format!(
         "{}{}\n{}{}\n{}{}\n{}{}\n{}{}\n{}{}\n{}{}",
@@ -99,12 +100,12 @@ pub async fn list_branches(g: &GlobalArgs, limit: u32) -> Result<()> {
         })
         .collect();
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let mut table = Table::new().headers(["Branch"]);
     for b in &branches {
         table = table.add_row([b.name.clone()]);
     }
-    let human = table.render();
+    let human = table_or_empty(branches.len(), "No branches found.", table.render());
     fmt.print(&branches, &human)
 }
 
@@ -126,7 +127,7 @@ pub async fn list_tags(g: &GlobalArgs, limit: u32) -> Result<()> {
         })
         .collect();
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let mut table = Table::new().headers(["Tag", "Target", "Date"]);
     for t in &tags {
         table = table.add_row([
@@ -138,7 +139,7 @@ pub async fn list_tags(g: &GlobalArgs, limit: u32) -> Result<()> {
             t.date.clone().unwrap_or_else(|| "-".into()),
         ]);
     }
-    let human = table.render();
+    let human = table_or_empty(tags.len(), "No tags found.", table.render());
     fmt.print(&tags, &human)
 }
 
@@ -161,7 +162,7 @@ pub async fn list_commits(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> R
         .collect();
     spinner.finish();
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let mut table = Table::new().headers(["Hash", "Date", "Author", "Message"]);
     for c in &commits {
         table = table.add_row([
@@ -171,7 +172,7 @@ pub async fn list_commits(g: &GlobalArgs, branch: Option<&str>, limit: u32) -> R
             c.message.clone(),
         ]);
     }
-    let human = table.render();
+    let human = table_or_empty(commits.len(), "No commits found.", table.render());
     fmt.print(&commits, &human)
 }
 
@@ -204,7 +205,7 @@ pub async fn create(
         web_url: repo.links.html.href,
     };
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = format!(
         "Created repository {}/{} ({})\nprivate: {}\nlanguage: {}\nurl:       {}",
         out.workspace,
@@ -235,7 +236,7 @@ pub async fn delete(g: &GlobalArgs, slug: &str, yes: bool) -> Result<()> {
 
     let out = serde_json::json!({"deleted": true, "workspace": ws, "slug": slug});
     let human = format!("Deleted {ws}/{slug}");
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 pub async fn fork(
@@ -266,7 +267,7 @@ pub async fn fork(
         forked.full_name,
         forked.links.html.href.as_deref().unwrap_or("-")
     );
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 pub async fn create_branch(g: &GlobalArgs, name: &str, from: Option<&str>) -> Result<()> {
@@ -298,7 +299,7 @@ pub async fn create_branch(g: &GlobalArgs, name: &str, from: Option<&str>) -> Re
             .map(|t| t.hash.as_str())
             .unwrap_or("?")
     );
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 pub async fn create_tag(
@@ -332,7 +333,7 @@ pub async fn create_tag(
         tag.name,
         tag.target.as_ref().map(|t| t.hash.as_str()).unwrap_or("?")
     );
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 pub async fn permissions(g: &GlobalArgs) -> Result<()> {
@@ -385,7 +386,7 @@ pub async fn permissions(g: &GlobalArgs) -> Result<()> {
     }
     human.push_str(&table.render());
 
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 fn first_line(s: &str) -> String {

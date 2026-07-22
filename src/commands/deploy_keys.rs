@@ -1,9 +1,11 @@
 //! `bbr deploy-keys` — repository deploy key management.
 use crate::cli::GlobalArgs;
-use crate::commands::{client, confirm, make_spinner, resolve_repo, truncate, SpinnerGuard};
+use crate::commands::{
+    client, confirm, make_formatter, make_spinner, resolve_repo, table_or_empty, truncate,
+    SpinnerGuard,
+};
 use crate::error::Result;
 use crate::output::table::Table;
-use crate::output::Formatter;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -39,7 +41,7 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
         })
         .collect();
 
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let mut table = Table::new().headers(["ID", "Label", "Key", "Created"]);
     for k in &keys {
         table = table.add_row([
@@ -49,11 +51,7 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
             k.created_on.clone().unwrap_or_default(),
         ]);
     }
-    let human = if keys.is_empty() {
-        "No deploy keys configured.".into()
-    } else {
-        table.render()
-    };
+    let human = table_or_empty(keys.len(), "No deploy keys configured.", table.render());
     fmt.print(&out, &human)
 }
 
@@ -75,7 +73,7 @@ pub async fn add(g: &GlobalArgs, key: &str, label: &str) -> Result<()> {
         created_on: dk.created_on.clone(),
         last_used: dk.last_used.clone(),
     };
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = format!(
         "Added deploy key #{}\n  Label: {}\n  Key:   {}",
         dk.id,
@@ -103,7 +101,7 @@ pub async fn view(g: &GlobalArgs, key_id: u64) -> Result<()> {
         created_on: dk.created_on.clone(),
         last_used: dk.last_used.clone(),
     };
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let human = format!(
         "Deploy Key #{}\n  Label:   {}\n  Key:     {}\n  Comment: {}\n  Created: {}\n  Used:    {}",
         dk.id,
@@ -131,7 +129,7 @@ pub async fn delete(g: &GlobalArgs, key_id: u64, yes: bool) -> Result<()> {
         .delete_deploy_key(&repo.workspace, &repo.slug, key_id)
         .await?;
     spinner.finish();
-    let fmt = Formatter::from_json_flag(g.json);
+    let fmt = make_formatter(g);
     let out = serde_json::json!({"deleted": key_id});
     fmt.print(&out, &format!("Deleted deploy key #{key_id}"))
 }

@@ -71,8 +71,8 @@ These flags are available on **every** subcommand:
 | `--api-base <URL>` | | Override the Bitbucket API base URL (env: `BITBUCKET_API_BASE`) |
 | `--no-pager` | | Disable output paging (don't pipe through `less`) |
 | `--quiet` | `-q` | Suppress spinners and non-essential output (env: `BBR_QUIET`) |
-| `--color` | | Force ANSI color output |
-| `--no-color` | | Disable ANSI color output |
+| `--color <WHEN>` | | Color output: `auto` (default), `always`, or `never` |
+| `--no-color` | | Disable color (same as `--color never`; wins over `--color`) |
 | `--no-unicode` | | Use ASCII instead of Unicode (for terminals without UTF-8 support) |
 | `--timeout <SECS>` | | HTTP request timeout in seconds (env: `BBR_TIMEOUT`, default: 30) |
 
@@ -1146,6 +1146,8 @@ Exit codes are stable — scripts can branch on `$?`.
 | `BB_SLUG` | Default repo slug override | — |
 | `BBR_QUIET` | Suppress spinners and non-essential output | — |
 | `BBR_TIMEOUT` | HTTP request timeout in seconds | 30 |
-| `NO_COLOR` | Disable color output | — |
+| `NO_COLOR` | Disable color output (any value) | — |
+| `CLICOLOR_FORCE` | Force color on (unless `0`) | — |
+| `CLICOLOR` | Set to `0` to disable color | — |
 | `XDG_CONFIG_HOME` | Config directory (Linux) | `~/.config` |
 | `RUST_LOG` | Tracing log filter (overrides `--verbose`) | — |

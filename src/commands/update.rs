@@ -13,9 +13,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::Deserialize;
 
 use crate::cli::GlobalArgs;
+use crate::commands::make_formatter;
 use crate::error::{BitbucketError, Result};
 use crate::output::theme::Theme;
-use crate::output::Formatter;
 
 // ---------------------------------------------------------------------------
 // GitHub API types
@@ -277,7 +277,7 @@ pub async fn run(g: &GlobalArgs, check_only: bool) -> Result<()> {
             install_hint: None,
         };
         let human = render_update(&out);
-        return Formatter::from_json_flag(g.json).print(&out, &human);
+        return make_formatter(g).print(&out, &human);
     }
 
     loading.finish();
@@ -294,7 +294,7 @@ pub async fn run(g: &GlobalArgs, check_only: bool) -> Result<()> {
             install_hint: Some("Run `bbr update` to install.".into()),
         };
         let human = render_update(&out);
-        return Formatter::from_json_flag(g.json).print(&out, &human);
+        return make_formatter(g).print(&out, &human);
     }
 
     let loading =

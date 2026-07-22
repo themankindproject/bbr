@@ -44,7 +44,11 @@ impl Theme {
 
     /// Detect color support from environment variables and TTY state.
     ///
-    /// Precedence:
+    /// Used when no CLI override is set (`--color auto` without `--no-color`).
+    /// CLI flags are applied earlier via [`Theme::set_color_override`] and win
+    /// over env vars (`--no-color` > `--color` > env > TTY).
+    ///
+    /// Env/TTY precedence when auto:
     /// 1. `CLICOLOR_FORCE` (non-"0" value) → force colors on
     /// 2. `NO_COLOR` (any value) → force colors off
     /// 3. `CLICOLOR=0` → force colors off

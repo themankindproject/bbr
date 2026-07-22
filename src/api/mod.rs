@@ -86,6 +86,20 @@ impl std::fmt::Debug for BitbucketClient {
 }
 
 impl BitbucketClient {
+    /// Preferred entry point: build a client from resolved credentials.
+    pub fn from_credentials(base_url: &str, creds: Credentials) -> Result<Self> {
+        Self::new(base_url, creds)
+    }
+
+    /// Preferred entry point with an explicit request timeout (seconds).
+    pub fn from_credentials_with_timeout(
+        base_url: &str,
+        creds: Credentials,
+        timeout_secs: u64,
+    ) -> Result<Self> {
+        Self::with_timeout(base_url, creds, timeout_secs)
+    }
+
     /// Construct a new client. Uses rustls and a configurable timeout (default 30s).
     /// Auth is always HTTP Basic for Atlassian API tokens.
     pub fn new(base_url: &str, creds: Credentials) -> Result<Self> {

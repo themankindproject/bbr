@@ -118,3 +118,26 @@ fn schema_prints_specific_model() {
         .stdout(predicate::str::contains("\"title\": \"StatusOut\""))
         .stdout(predicate::str::contains("\"required\":"));
 }
+
+#[test]
+fn pr_stack_help_lists_use() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["pr", "stack", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("use"))
+        .stdout(predicate::str::contains("Select which stack"));
+}
+
+#[test]
+fn pr_help_lists_create_merge_approve() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["pr", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("create"))
+        .stdout(predicate::str::contains("merge"))
+        .stdout(predicate::str::contains("approve"));
+}

@@ -3,9 +3,8 @@
 use serde::Serialize;
 
 use crate::cli::{GlobalArgs, OpenAction};
-use crate::commands::{client, current_head, resolve_repo};
+use crate::commands::{client, current_head, make_formatter, resolve_repo};
 use crate::error::{BitbucketError, Result};
-use crate::output::Formatter;
 
 #[derive(Debug, Serialize)]
 pub struct OpenOut {
@@ -44,7 +43,7 @@ pub async fn run(g: &GlobalArgs, action: Option<OpenAction>) -> Result<()> {
         opened,
     };
     let human = if opened { format!("Opened {url}") } else { url };
-    Formatter::from_json_flag(g.json).print(&out, &human)
+    make_formatter(g).print(&out, &human)
 }
 
 async fn repo_url(g: &GlobalArgs) -> Result<(String, String)> {
