@@ -502,9 +502,27 @@ Live-tail a running pipeline. Exits with code `5` on pipeline failure.
 ```bash
 bbr ci watch                         # current branch
 bbr ci watch --branch main
-bbr ci watch --logs                  # print failing step log on failure
+bbr ci watch --logs                  # stream step logs in real-time while watching
 bbr ci watch --interval-secs 10      # poll interval (default 5)
 ```
+
+When `--logs` is active, step output is streamed with box-drawn headers as it arrives. Without `--logs`, only the last 120 lines of a failing step are shown on failure.
+
+#### `bbr ci tail`
+
+Stream logs from a running (or just-finished) step in real time using HTTP Range requests.
+
+```bash
+bbr ci tail                          # first in-progress step, latest pipeline, current branch
+bbr ci tail "Build & Test"           # by step name
+bbr ci tail <step-uuid>              # by step UUID
+bbr ci tail --pipeline <uuid>        # specific pipeline
+bbr ci tail --branch main            # specific branch
+bbr ci tail --interval 2             # poll every 2s (default 3)
+bbr ci tail --follow                 # keep polling after terminal state (flush)
+```
+
+Output: raw log text streamed to stdout with a header line (`==> StepName :: #42 :: uuid :: STATE`) and an exit summary showing elapsed time.
 
 #### `bbr ci trigger`
 
@@ -937,6 +955,40 @@ has_token:        true
 ```
 
 The only settable key is `workspace`. Once set, `--workspace` overrides and the git remote inference is skipped.
+
+---
+
+### `bbr context`
+
+Manage named workspace/repo profiles for quick switching between projects.
+
+```bash
+bbr context create work --set-workspace mycompany --set-slug api --set-active
+bbr context create personal --set-workspace myuser
+bbr context list                     # shows all contexts (* = active)
+bbr context use personal             # switch active context
+bbr context delete personal
+bbr context list --json
+```
+
+**Resolution priority** for workspace/slug:
+1. `--workspace` / `--slug` CLI flags (highest)
+2. Active context from `~/.config/bbr/config.toml`
+3. Git remote detection (lowest)
+
+Config file format (`~/.config/bbr/config.toml`):
+```toml
+active_context = "work"
+
+[contexts.work]
+workspace = "mycompany"
+slug = "api"
+
+[contexts.personal]
+workspace = "myuser"
+```
+
+The `slug` field is optional — when omitted, slug is still inferred from the git remote.
 
 ---
 
