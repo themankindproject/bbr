@@ -690,8 +690,26 @@ pub enum CiAction {
         branch: Option<String>,
         #[arg(long, help = "poll interval in seconds", default_value_t = 5)]
         interval: u64,
-        #[arg(long, help = "print failing step log when the pipeline fails")]
+        #[arg(long, help = "stream step logs in real-time while watching")]
         logs: bool,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Stream logs from a running (or just-finished) step in real time.
+    Tail {
+        /// Step UUID (with or without braces) or step name. Defaults to the
+        /// first in-progress/running step of the latest pipeline on the current branch.
+        step: Option<String>,
+        #[arg(long, help = "pipeline UUID (defaults to latest on current branch)")]
+        pipeline: Option<String>,
+        #[arg(long, help = "branch name (default: current branch)")]
+        branch: Option<String>,
+        #[arg(long, help = "poll interval in seconds", default_value_t = 3)]
+        interval: u64,
+        /// Follow mode: keep polling even after the step reaches a terminal
+        /// state (logs may still be flushing).
+        #[arg(long)]
+        follow: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },

@@ -486,6 +486,53 @@ impl BitbucketClient {
         Ok(all)
     }
 
+    /// Issue a GET request with a `Range: bytes={start}-` header and return
+    /// the raw text body. Returns an empty string when the server responds
+    /// with 416 (Range Not Satisfiable), meaning we've already fetched all
+    /// available content. ETag caching is bypassed — each range request may
+    /// return different content at the same path.
+    pub async fn send_raw_range(&self, path: &str, start_byte: u64) -> Result<String> {
+        let path = path.to_string();
+        let range_hdr = format!("bytes={start_byte}-");
+        self.with_retries(&path, || {
+            let path = path.clone();
+            let range_hdr = range_hdr.clone();
+            async move {
+                let url = self.url(&path);
+                let resp = self
+                    .inner
+                    .request(Method::GET, &url)
+                    .header(AUTHORIZATION, self.auth_header_value())
+                    .header(ACCEPT, "*/*")
+                    .header("Range", range_hdr.as_str())
+                    .send()
+                    .await
+                    .map_err(BitbucketError::Http)?;
+                let status = resp.status();
+                let headers = resp.headers().clone();
+                self.update_rate_limit(&headers);
+                let retry_after = Self::retry_after_secs(&headers);
+                if status == StatusCode::RANGE_NOT_SATISFIABLE {
+                    return Ok(RetryOutcome::Done(Ok(String::new())));
+                }
+                let body = resp.text().await.map_err(BitbucketError::Http)?;
+                if status.is_success() {
+                    return Ok(RetryOutcome::Done(Ok(body)));
+                }
+                let err = map_error(status, &body, &path);
+                if Self::is_retryable_error(&err) {
+                    Ok(RetryOutcome::Retry {
+                        err,
+                        retry_after_secs: retry_after,
+                    })
+                } else {
+                    Ok(RetryOutcome::Done(Err(err)))
+                }
+            }
+        })
+        .await
+    }
+
     /// Issue a request and return the raw text body.
     /// Used for non-JSON endpoints (e.g. diff, logs).
     pub async fn send_raw(&self, method: Method, path: &str, accept: &str) -> Result<String> {

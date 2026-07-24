@@ -1,6 +1,6 @@
 //! `bbr ci` — status / watch / logs.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tokio::time;
@@ -227,9 +227,92 @@ pub async fn watch(
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.println(format!("Watching pipeline {uuid} on {branch}..."));
 
+    // Track per-step byte offsets, last known state for transition detection,
+    // and whether we've printed the step header yet.
+    #[derive(Default)]
+    struct StepLogState {
+        offset: u64,
+        prev_state: String,
+        header_printed: bool,
+    }
+
+    let mut log_state: Option<std::collections::HashMap<String, StepLogState>> = if include_logs {
+        Some(std::collections::HashMap::new())
+    } else {
+        None
+    };
+
     let mut current = initial;
     loop {
-        if current.is_terminal() {
+        let is_terminal = current.is_terminal();
+
+        if include_logs {
+            let steps = client
+                .list_steps(&repo.workspace, &repo.slug, &uuid)
+                .await
+                .map(|s| s.values)
+                .unwrap_or_default();
+
+            for step in &steps {
+                let state = log_state
+                    .as_mut()
+                    .unwrap()
+                    .entry(step.uuid.clone())
+                    .or_default();
+
+                let step_state_name = step.state_name().to_string();
+
+                // Print state transition
+                if !state.prev_state.is_empty()
+                    && state.prev_state != step_state_name
+                    && state.header_printed
+                {
+                    spinner.println(render_step_transition(
+                        theme,
+                        Some(&step.name),
+                        "│",
+                        &state.prev_state,
+                        &step_state_name,
+                    ));
+                }
+                state.prev_state = step_state_name;
+
+                let chunk = client
+                    .step_log_range(&repo.workspace, &repo.slug, &uuid, &step.uuid, state.offset)
+                    .await
+                    .unwrap_or_default();
+
+                if !chunk.is_empty() {
+                    if !state.header_printed {
+                        spinner.println(render_watch_step_header(
+                            theme,
+                            &step.name,
+                            step.state_name(),
+                        ));
+                        state.header_printed = true;
+                    }
+
+                    // Determine how much of the chunk contains complete lines.
+                    // If the chunk doesn't end with '\n', the trailing partial
+                    // line is held back — we only advance offset to the last
+                    // complete newline so the next poll re-fetches it whole.
+                    let printable_end = if chunk.ends_with('\n') {
+                        chunk.len()
+                    } else {
+                        chunk.rfind('\n').map(|i| i + 1).unwrap_or(0)
+                    };
+
+                    if printable_end > 0 {
+                        for line in chunk[..printable_end].lines() {
+                            spinner.println(render_watch_log_line(theme, line));
+                        }
+                    }
+                    state.offset += printable_end as u64;
+                }
+            }
+        }
+
+        if is_terminal {
             break;
         }
         spinner.set_message(format!("state: {}", current.state_name()));
@@ -248,7 +331,10 @@ pub async fn watch(
     let final_state = current.state_name().to_string();
     let success = final_state.eq_ignore_ascii_case("SUCCESSFUL");
     let failing_step = raw_steps.iter().find(|s| s.is_failed());
-    let failure_log = if !success && include_logs {
+    let failure_log = if !success && !include_logs {
+        // If --logs was on, we already streamed everything — no need to
+        // dump the tail again. Only fetch the tail when --logs is off
+        // (classic behavior: show last 120 lines of failing step on failure).
         let step = failing_step
             .or_else(|| raw_steps.last())
             .ok_or_else(|| BitbucketError::NotFound("no steps for pipeline".into()))?;
@@ -307,6 +393,184 @@ pub async fn watch(
             branch: Some(branch),
         });
     }
+    Ok(())
+}
+
+/// Stream step logs in real time using HTTP Range requests.
+pub async fn tail(
+    g: &GlobalArgs,
+    step: Option<&str>,
+    pipeline: Option<&str>,
+    branch: Option<&str>,
+    interval: u64,
+    follow: bool,
+) -> Result<()> {
+    let repo = resolve_repo(g)?;
+    let branch: String = if let Some(b) = branch {
+        b.to_string()
+    } else {
+        current_head()?.branch
+    };
+    let client = client(g)?;
+    let theme = Theme::current();
+
+    // Resolve the pipeline UUID.
+    let pipeline_uuid = match pipeline {
+        Some(u) => ensure_uuid_braces(u),
+        None => {
+            let p = client
+                .latest_pipeline(&repo.workspace, &repo.slug, Some(&branch))
+                .await?
+                .ok_or_else(|| {
+                    BitbucketError::NotFound(format!("no pipeline for branch '{branch}'"))
+                })?;
+            p.uuid
+        }
+    };
+
+    // Resolve which step to tail.
+    let steps = client
+        .list_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
+        .await?;
+
+    let selected = match step {
+        Some(selector) => {
+            let selector_uuid = normalize_uuid(selector);
+            steps
+                .values
+                .iter()
+                .find(|s| {
+                    normalize_uuid(&s.uuid) == selector_uuid
+                        || s.name.eq_ignore_ascii_case(selector)
+                })
+                .ok_or_else(|| BitbucketError::NotFound(format!("no step matching '{selector}'")))?
+                .clone()
+        }
+        None => steps
+            .values
+            .iter()
+            .find(|s| !s.is_terminal())
+            .or_else(|| steps.values.last())
+            .ok_or_else(|| BitbucketError::NotFound("no steps for pipeline".into()))?
+            .clone(),
+    };
+
+    let step_name = selected.name.clone();
+    let step_uuid = selected.uuid.clone();
+    let short_uuid = step_uuid.trim_matches(|c| c == '{' || c == '}');
+
+    // Fetch the pipeline to get its build number.
+    let pipeline = client
+        .get_pipeline(&repo.workspace, &repo.slug, &pipeline_uuid)
+        .await?;
+    let build_number = pipeline.build_number;
+    let pipe_state = pipeline.state_name().to_string();
+
+    // Clear the spinner before streaming.
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
+    spinner.finish();
+
+    let header = render_tail_header(
+        theme,
+        &step_name,
+        build_number,
+        short_uuid,
+        pipe_state.as_str(),
+    );
+    if !g.json {
+        crate::output::print_block(&format!("{header}\n"))?;
+    }
+
+    let mut offset: u64 = 0;
+    let mut prev_state = selected.state_name().to_string();
+    let mut step_is_terminal = selected.is_terminal();
+    let started = Instant::now();
+
+    loop {
+        let chunk = client
+            .step_log_range(
+                &repo.workspace,
+                &repo.slug,
+                &pipeline_uuid,
+                &step_uuid,
+                offset,
+            )
+            .await
+            .unwrap_or_default();
+
+        if !chunk.is_empty() {
+            // Only print up to the last complete line. If the chunk
+            // doesn't end with '\n', hold back the partial trailing line
+            // so the next poll re-fetches it complete.
+            let printable_end = if chunk.ends_with('\n') {
+                chunk.len()
+            } else {
+                chunk.rfind('\n').map(|i| i + 1).unwrap_or(0)
+            };
+
+            if printable_end > 0 && !g.json {
+                crate::output::print_block(&chunk[..printable_end])?;
+            }
+            offset += printable_end as u64;
+        }
+
+        if step_is_terminal {
+            break;
+        }
+
+        time::sleep(Duration::from_secs(interval.max(1))).await;
+        let fresh_steps = client
+            .list_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
+            .await
+            .map(|s| s.values)
+            .unwrap_or_default();
+        if let Some(fresh) = fresh_steps.iter().find(|s| s.uuid == step_uuid) {
+            let new_state = fresh.state_name().to_string();
+            if new_state != prev_state {
+                if !g.json {
+                    crate::output::print_block(&format!(
+                        "{}\n",
+                        render_step_transition(theme, None, "──", &prev_state, &new_state)
+                    ))?;
+                }
+                prev_state = new_state;
+            }
+            step_is_terminal = fresh.is_terminal();
+        }
+    }
+
+    // If --follow, keep polling for a bit after terminal to catch flushing logs.
+    if follow {
+        for _ in 0..3 {
+            time::sleep(Duration::from_secs(interval.max(1))).await;
+            let chunk = client
+                .step_log_range(
+                    &repo.workspace,
+                    &repo.slug,
+                    &pipeline_uuid,
+                    &step_uuid,
+                    offset,
+                )
+                .await
+                .unwrap_or_default();
+            if chunk.is_empty() {
+                break;
+            }
+            if !g.json {
+                crate::output::print_block(&chunk)?;
+            }
+            offset += chunk.len() as u64;
+        }
+    }
+
+    // Exit summary
+    if !g.json {
+        let elapsed = started.elapsed();
+        let summary =
+            render_tail_exit_summary(theme, &step_name, &prev_state, elapsed.as_secs_f64());
+        crate::output::print_block(&format!("\n{summary}\n"))?;
+    }
+
     Ok(())
 }
 
@@ -757,6 +1021,89 @@ fn last_lines(s: &str, n: usize) -> String {
     result.join("\n")
 }
 
+/// Format the header line for `bbr ci tail`.
+fn render_tail_header(
+    theme: &Theme,
+    step_name: &str,
+    build_number: u64,
+    step_uuid: &str,
+    pipe_state: &str,
+) -> String {
+    format!(
+        "{} {} :: #{} :: {} :: {}",
+        theme.dim("==>"),
+        theme.bold(step_name),
+        build_number,
+        theme.dim(step_uuid),
+        theme.dim(pipe_state)
+    )
+}
+
+/// Format a state transition line for step logs.
+fn render_step_transition(
+    theme: &Theme,
+    step_name: Option<&str>,
+    prefix: &str,
+    prev_state: &str,
+    new_state: &str,
+) -> String {
+    let prev_glyph = theme.status_glyph(prev_state);
+    let curr_glyph = theme.status_glyph(new_state);
+    if let Some(name) = step_name {
+        format!(
+            "{} {} {} {}{} {}",
+            theme.dim(prefix),
+            theme.bold(name),
+            prev_glyph,
+            theme.dim("→"),
+            curr_glyph,
+            theme.dim(new_state)
+        )
+    } else {
+        format!(
+            "{} {} {}{} {}",
+            theme.dim(prefix),
+            prev_glyph,
+            theme.dim("→"),
+            curr_glyph,
+            theme.bold(new_state)
+        )
+    }
+}
+
+/// Format a step header for `bbr ci watch --logs`.
+fn render_watch_step_header(theme: &Theme, step_name: &str, state: &str) -> String {
+    format!(
+        "{} {}  {} {}",
+        theme.dim("┌"),
+        theme.bold(step_name),
+        theme.status_glyph(state),
+        theme.dim(state)
+    )
+}
+
+/// Format a log line for live streaming with the gutter character.
+fn render_watch_log_line(theme: &Theme, line: &str) -> String {
+    format!("{} {}", theme.dim("│"), line)
+}
+
+/// Format the exit summary for `bbr ci tail`.
+fn render_tail_exit_summary(
+    theme: &Theme,
+    step_name: &str,
+    final_state: &str,
+    elapsed_secs: f64,
+) -> String {
+    format!(
+        "{} {} {}  {}  {}",
+        theme.dim("──"),
+        theme.bold(step_name),
+        theme.status_glyph(final_state),
+        theme.dim(final_state),
+        theme.dim(&format!("({:.1}s)", elapsed_secs))
+    )
+}
+
 fn render_status(out: &CiStatusOut) -> String {
     let theme = Theme::current();
     let mut s = format!("{}\n", theme.bold(&out.branch));
@@ -927,5 +1274,171 @@ mod tests {
         assert_eq!(out.name, "Build");
         assert_eq!(out.state, "SUCCESSFUL");
         assert_eq!(out.duration_seconds, 1);
+    }
+
+    // ---- UI formatting tests ------------------------------------------------
+
+    fn no_color_theme() -> Theme {
+        Theme::test_instance(false, true)
+    }
+
+    #[test]
+    fn tail_header_includes_step_name_and_build_number() {
+        let t = no_color_theme();
+        let h = render_tail_header(&t, "Build & Test", 42, "abc-123", "IN_PROGRESS");
+        assert!(h.contains("==>"));
+        assert!(h.contains("Build & Test"));
+        assert!(h.contains("#42"));
+        assert!(h.contains("abc-123"));
+        assert!(h.contains("IN_PROGRESS"));
+    }
+
+    #[test]
+    fn tail_header_separator_is_double_colon() {
+        let t = no_color_theme();
+        let h = render_tail_header(&t, "Build", 1, "uuid", "PENDING");
+        assert!(h.contains(" :: "), "header must use :: as field separator");
+        // 5 fields: ==> step :: #N :: uuid :: state → 4 gaps → 3 " :: " strings
+        assert_eq!(h.matches(" :: ").count(), 3);
+    }
+
+    #[test]
+    fn tail_header_excludes_newline() {
+        let t = no_color_theme();
+        let h = render_tail_header(&t, "Build", 1, "uuid", "RUNNING");
+        assert!(!h.contains('\n'));
+    }
+
+    #[test]
+    fn tail_exit_summary_includes_step_and_state_and_elapsed() {
+        let t = no_color_theme();
+        let s = render_tail_exit_summary(&t, "Build", "SUCCESSFUL", 42.5);
+        assert!(s.contains("Build"));
+        assert!(s.contains("[ok]"));
+        assert!(s.contains("SUCCESSFUL"));
+        assert!(s.contains("42.5s"));
+    }
+
+    #[test]
+    fn tail_exit_summary_starts_with_dash_prefix() {
+        let t = no_color_theme();
+        let s = render_tail_exit_summary(&t, "Build", "FAILED", 1.0);
+        assert!(s.starts_with("──"));
+    }
+
+    #[test]
+    fn tail_exit_summary_handles_exact_one_second() {
+        let t = no_color_theme();
+        let s = render_tail_exit_summary(&t, "Test", "SUCCESSFUL", 1.0);
+        assert!(s.contains("(1.0s)"));
+    }
+
+    #[test]
+    fn tail_exit_summary_handles_sub_second() {
+        let t = no_color_theme();
+        let s = render_tail_exit_summary(&t, "Build", "ERROR", 0.3);
+        assert!(s.contains("(0.3s)"));
+    }
+
+    #[test]
+    fn step_transition_with_name_includes_step_name() {
+        let t = no_color_theme();
+        let s = render_step_transition(&t, Some("Build"), "│", "IN_PROGRESS", "SUCCESSFUL");
+        assert!(s.contains("Build"));
+        assert!(s.contains("[~]")); // in_progress
+        assert!(s.contains("[ok]")); // successful
+        assert!(s.contains("→"));
+    }
+
+    #[test]
+    fn step_transition_without_name_excludes_step_name() {
+        let t = no_color_theme();
+        let s = render_step_transition(&t, None, "──", "IN_PROGRESS", "FAILED");
+        assert!(!s.contains("Build"));
+        assert!(s.contains("[~]"));
+        assert!(s.contains("[X]"));
+        assert!(s.contains("→"));
+    }
+
+    #[test]
+    fn step_transition_shows_old_then_new_state() {
+        let t = no_color_theme();
+        let s = render_step_transition(&t, None, "──", "PENDING", "SUCCESSFUL");
+        let pending_pos = s.find("[.]").unwrap();
+        let ok_pos = s.find("[ok]").unwrap();
+        assert!(
+            pending_pos < ok_pos,
+            "old state [.] must appear before new state [ok]"
+        );
+    }
+
+    #[test]
+    fn step_transition_excludes_newline() {
+        let t = no_color_theme();
+        let s = render_step_transition(&t, Some("Build"), "│", "RUNNING", "SUCCESSFUL");
+        assert!(!s.contains('\n'));
+    }
+
+    #[test]
+    fn watch_step_header_uses_box_drawing_char() {
+        let t = no_color_theme();
+        let h = render_watch_step_header(&t, "Build", "IN_PROGRESS");
+        assert!(h.contains("┌"), "header must start with box-drawing ┌");
+    }
+
+    #[test]
+    fn watch_step_header_includes_step_name_and_state() {
+        let t = no_color_theme();
+        let h = render_watch_step_header(&t, "Test Suite", "FAILED");
+        assert!(h.contains("Test Suite"));
+        assert!(h.contains("[X]"));
+        assert!(h.contains("FAILED"));
+    }
+
+    #[test]
+    fn watch_step_header_shows_different_states() {
+        let t = no_color_theme();
+        let running = render_watch_step_header(&t, "Build", "IN_PROGRESS");
+        let success = render_watch_step_header(&t, "Build", "SUCCESSFUL");
+        let failed = render_watch_step_header(&t, "Build", "FAILED");
+        assert!(running.contains("[~]"));
+        assert!(success.contains("[ok]"));
+        assert!(failed.contains("[X]"));
+    }
+
+    #[test]
+    fn watch_log_line_uses_vertical_bar_gutter() {
+        let t = no_color_theme();
+        let line = render_watch_log_line(&t, "cargo build --release");
+        assert!(
+            line.starts_with("│ "),
+            "log line must start with box gutter"
+        );
+        assert!(line.contains("cargo build --release"));
+    }
+
+    #[test]
+    fn watch_log_line_preserves_user_content() {
+        let t = no_color_theme();
+        let line = render_watch_log_line(&t, "    Compiling bbr v0.2.0");
+        assert!(line.contains("Compiling bbr v0.2.0"));
+        assert!(line.starts_with("│     "));
+    }
+
+    #[test]
+    fn watch_log_line_excludes_newline() {
+        let t = no_color_theme();
+        let line = render_watch_log_line(&t, "hello");
+        assert!(!line.contains('\n'));
+    }
+
+    #[test]
+    fn all_formatters_are_no_newline() {
+        let t = no_color_theme();
+        assert!(!render_tail_header(&t, "B", 1, "u", "s").contains('\n'));
+        assert!(!render_watch_step_header(&t, "B", "s").contains('\n'));
+        assert!(!render_watch_log_line(&t, "l").contains('\n'));
+        assert!(!render_tail_exit_summary(&t, "B", "s", 1.0).contains('\n'));
+        assert!(!render_step_transition(&t, None, "│", "a", "b").contains('\n'));
     }
 }

@@ -140,6 +140,13 @@ impl PipelineStep {
             "FAILED" | "ERROR" | "STOPPED"
         )
     }
+
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self.state_name().to_ascii_uppercase().as_str(),
+            "SUCCESSFUL" | "FAILED" | "ERROR" | "STOPPED"
+        )
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -306,6 +313,20 @@ impl BitbucketClient {
         let path = format!("/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/{step}/log");
         let text = self.send_raw(reqwest::Method::GET, &path, "*/*").await?;
         Ok(StepLog { text })
+    }
+
+    /// Fetch a byte-range of a step log. Returns new content appended since `start_byte`.
+    /// Returns an empty string when the server responds with 416 (no new content).
+    pub async fn step_log_range(
+        &self,
+        workspace: &str,
+        slug: &str,
+        uuid: &str,
+        step: &str,
+        start_byte: u64,
+    ) -> Result<String> {
+        let path = format!("/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/{step}/log");
+        self.send_raw_range(&path, start_byte).await
     }
 
     /// `POST /repositories/{ws}/{slug}/pipelines/` — trigger a new pipeline.

@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`bbr ci tail`** — stream step logs in real time from a running pipeline using HTTP Range
+  requests (`Range: bytes={N}-`). Defaults to the first in-progress step of the latest
+  pipeline on the current branch. Supports `--pipeline <uuid>`, `--branch <name>`,
+  `--interval <secs>` (default 3s), and `--follow` (keep polling after the step reaches
+  a terminal state to catch flushing logs). Accepts step UUID or step name as positional arg.
+- **`bbr ci watch --logs` live log streaming** — the `--logs` flag on `bbr ci watch` now
+  streams logs from all running steps in real time alongside the pipeline-state polling loop,
+  instead of only dumping the tail on failure. Each step's new output is printed with its
+  name header and line count. Log tail dump on failure is suppressed when `--logs` is active
+  (since everything was already streamed).
+- **`BitbucketClient::send_raw_range`** — issues `Range: bytes={N}-` GET requests with full
+  retry support (429/5xx), handling `416 Range Not Satisfiable` as an empty-body signal.
+  ETag conditional GET is bypassed for range requests since content is append-only.
+- **`PipelineStep::is_terminal`** — checks whether a step has reached a terminal state
+  (SUCCESSFUL, FAILED, ERROR, STOPPED), used by both `tail` and `watch --logs` to know
+  when to stop polling.
+- **`step_log_range`** in `pipeline.rs` — thin API wrapper that delegates to
+  `send_raw_range` for the step log endpoint.
+- **Partial-line handling** — when a range response ends mid-line, the byte offset backs up
+  to the last newline so the next poll fetches the complete line. This prevents garbled output
+  from split ANSI sequences or multi-byte characters.
+- **Rich UI output for log streaming** — extracted formatting functions with dedicated test coverage:
+  - `render_tail_header` — `==> StepName :: #42 :: uuid :: IN_PROGRESS` header with build number
+  - `render_step_transition` — inline state change display: `── [~] → [ok] SUCCESSFUL`
+  - `render_watch_step_header` — box-drawn step header: `┌ StepName [~] IN_PROGRESS`
+  - `render_watch_log_line` — gutter-indented log line: `│ cargo build --release`
+  - `render_tail_exit_summary` — final summary with elapsed time: `── Build [ok] SUCCESSFUL (42.5s)`
+  - `StepLogState` struct for stateful log tracking (offset, consumed, prev_state, header_printed)
+  - State transitions printed inline without scrolling past user's visible area
+
+### Testing
+
+- **15 new unit tests** for API error handling, pagination, and raw body retrieval.
+- **6 new integration tests** for `send_raw_range` (partial content, byte offsets, 416 empty, auth header, 401 error, 429 retry).
+- **18 new UI formatting unit tests** — every visual rendering function is independently tested:
+  - header formats, field separators, step name inclusion
+  - transition glyph ordering (old → new), state-specific glyphs
+  - box-drawing characters, vertical bar gutter indentation
+  - elapsed time formatting (whole seconds, sub-second, exact 1.0s)
+  - newline exclusion contract (all formatters return raw strings without `\n`)
+- Total: 286 unit + 66 integration + 12 smoke = **364 tests, all passing**.
+
 ## [0.2.0] - 2026-07-22
 
 ### Fixed

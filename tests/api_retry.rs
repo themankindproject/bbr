@@ -372,3 +372,125 @@ async fn error_envelope_includes_message() {
     assert!(msg.contains("repo:write"));
     assert!(msg.contains("MISSING"));
 }
+
+// ---------------------------------------------------------------------------
+// send_raw_range — HTTP Range request for step log streaming
+// ---------------------------------------------------------------------------
+
+const LOG_PATH: &str = "/repositories/ws/slug/pipelines/p-uuid/steps/s-uuid/log";
+
+#[tokio::test]
+async fn send_raw_range_fetches_partial_content() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path(LOG_PATH))
+        .and(header("Range", "bytes=0-"))
+        .respond_with(
+            ResponseTemplate::new(206)
+                .set_body_string("cargo build --release\n")
+                .insert_header("content-type", "text/plain"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let c = client(&server.uri()).await;
+    let body = c.send_raw_range(LOG_PATH, 0).await.unwrap();
+    assert_eq!(body, "cargo build --release\n");
+}
+
+#[tokio::test]
+async fn send_raw_range_respects_byte_offset() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path(LOG_PATH))
+        .and(header("Range", "bytes=42-"))
+        .respond_with(ResponseTemplate::new(206).set_body_string("second chunk\n"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let c = client(&server.uri()).await;
+    let body = c.send_raw_range(LOG_PATH, 42).await.unwrap();
+    assert_eq!(body, "second chunk\n");
+}
+
+#[tokio::test]
+async fn send_raw_range_returns_empty_on_416() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path(LOG_PATH))
+        .and(header("Range", "bytes=999999-"))
+        .respond_with(ResponseTemplate::new(416))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let c = client(&server.uri()).await;
+    let body = c.send_raw_range(LOG_PATH, 999999).await.unwrap();
+    assert!(body.is_empty(), "416 must yield empty string, not an error");
+}
+
+#[tokio::test]
+async fn send_raw_range_includes_auth_header() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path(LOG_PATH))
+        .and(header("Authorization", AUTH_BASIC))
+        .and(header("Range", "bytes=0-"))
+        .respond_with(ResponseTemplate::new(206).set_body_string("line1\n"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let c = client(&server.uri()).await;
+    let body = c.send_raw_range(LOG_PATH, 0).await.unwrap();
+    assert_eq!(body, "line1\n");
+}
+
+#[tokio::test]
+async fn send_raw_range_returns_error_on_401() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path(LOG_PATH))
+        .respond_with(ResponseTemplate::new(401).set_body_string("unauthorized"))
+        .mount(&server)
+        .await;
+
+    let c = client(&server.uri()).await;
+    let err = c
+        .send_raw_range(LOG_PATH, 0)
+        .await
+        .expect_err("should fail with 401");
+    let msg = format!("{err}");
+    assert!(msg.contains("401"));
+}
+
+#[tokio::test]
+async fn send_raw_range_retries_on_429_then_succeeds() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path(LOG_PATH))
+        .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "1"))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path(LOG_PATH))
+        .respond_with(ResponseTemplate::new(206).set_body_string("after retry\n"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let c = client(&server.uri()).await;
+    let body = c.send_raw_range(LOG_PATH, 0).await.unwrap();
+    assert_eq!(body, "after retry\n");
+}
