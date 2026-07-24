@@ -1,5 +1,6 @@
 //! Filesystem paths and credential/config file parsing.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -174,6 +175,54 @@ pub fn delete_credentials() -> Result<bool> {
     Ok(true)
 }
 
+/// On-disk shape of `config.toml` (contexts, active context, etc.).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ConfigFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_context: Option<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub contexts: HashMap<String, ContextEntry>,
+}
+
+/// A named workspace/slug profile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextEntry {
+    pub workspace: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
+}
+
+/// Load `config.toml`. Returns a default (empty) config if the file does not exist.
+pub fn load_config() -> Result<ConfigFile> {
+    let path = match config_path() {
+        Some(p) => p,
+        None => return Ok(ConfigFile::default()),
+    };
+    if !path.exists() {
+        return Ok(ConfigFile::default());
+    }
+    let raw = fs::read_to_string(&path)
+        .map_err(|e| BitbucketError::Config(format!("reading {}: {e}", path.display())))?;
+    let parsed: ConfigFile = toml::from_str(&raw)
+        .map_err(|e| BitbucketError::Config(format!("parsing {}: {e}", path.display())))?;
+    Ok(parsed)
+}
+
+/// Write `config.toml`. Creates the parent directory if needed.
+pub fn save_config(cfg: &ConfigFile) -> Result<PathBuf> {
+    let path = config_path()
+        .ok_or_else(|| BitbucketError::Config("no writable config directory".into()))?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| BitbucketError::Config(format!("creating {}: {e}", parent.display())))?;
+    }
+    let serialized = toml::to_string_pretty(cfg)
+        .map_err(|e| BitbucketError::Config(format!("serializing config: {e}")))?;
+    fs::write(&path, serialized)
+        .map_err(|e| BitbucketError::Config(format!("writing {}: {e}", path.display())))?;
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,5 +269,74 @@ mod tests {
         assert_eq!(creds.default.username, "u");
         assert_eq!(creds.default.secret(), Some("t"));
         std::env::remove_var("XDG_CONFIG_HOME");
+    }
+
+    #[test]
+    fn config_file_roundtrip() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = tempdir().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+
+        let mut cfg = ConfigFile {
+            active_context: Some("work".into()),
+            contexts: HashMap::new(),
+        };
+        cfg.contexts.insert(
+            "work".into(),
+            ContextEntry {
+                workspace: "mycompany".into(),
+                slug: Some("main-repo".into()),
+            },
+        );
+        cfg.contexts.insert(
+            "personal".into(),
+            ContextEntry {
+                workspace: "myuser".into(),
+                slug: None,
+            },
+        );
+
+        save_config(&cfg).unwrap();
+        let loaded = load_config().unwrap();
+        assert_eq!(loaded.active_context, Some("work".into()));
+        assert_eq!(loaded.contexts.len(), 2);
+        assert_eq!(loaded.contexts["work"].workspace, "mycompany");
+        assert_eq!(loaded.contexts["work"].slug, Some("main-repo".into()));
+        assert_eq!(loaded.contexts["personal"].workspace, "myuser");
+        assert_eq!(loaded.contexts["personal"].slug, None);
+
+        std::env::remove_var("XDG_CONFIG_HOME");
+    }
+
+    #[test]
+    fn load_config_returns_default_when_missing() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = tempdir().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+
+        let cfg = load_config().unwrap();
+        assert!(cfg.active_context.is_none());
+        assert!(cfg.contexts.is_empty());
+
+        std::env::remove_var("XDG_CONFIG_HOME");
+    }
+
+    #[test]
+    fn config_file_parses_toml_with_contexts() {
+        let toml_str = r#"
+active_context = "dev"
+
+[contexts.dev]
+workspace = "devteam"
+slug = "api"
+
+[contexts.staging]
+workspace = "devteam"
+"#;
+        let cfg: ConfigFile = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.active_context, Some("dev".into()));
+        assert_eq!(cfg.contexts.len(), 2);
+        assert_eq!(cfg.contexts["dev"].slug, Some("api".into()));
+        assert_eq!(cfg.contexts["staging"].slug, None);
     }
 }

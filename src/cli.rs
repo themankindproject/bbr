@@ -160,6 +160,11 @@ pub enum Command {
         #[command(subcommand)]
         action: ConfigAction,
     },
+    /// Manage named workspace/repo profiles.
+    Context {
+        #[command(subcommand)]
+        action: ContextAction,
+    },
     /// Make an authenticated API request to any Bitbucket endpoint.
     Api {
         /// HTTP method (GET, POST, PUT, DELETE).
@@ -1093,6 +1098,45 @@ pub enum ConfigAction {
         key: String,
         /// Config value.
         value: String,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ContextAction {
+    /// Create a new context.
+    Create {
+        /// Context name.
+        name: String,
+        /// Workspace for the context.
+        #[arg(long = "set-workspace", id = "ctx_workspace")]
+        workspace: String,
+        /// Repository slug for the context (optional).
+        #[arg(long = "set-slug", id = "ctx_slug")]
+        slug: Option<String>,
+        /// Set as active context immediately.
+        #[arg(long)]
+        set_active: bool,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// List all contexts.
+    List {
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Switch to a context (set it as active).
+    Use {
+        /// Context name to activate.
+        name: String,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Delete a context.
+    Delete {
+        /// Context name to delete.
+        name: String,
         #[command(flatten)]
         g: GlobalArgs,
     },

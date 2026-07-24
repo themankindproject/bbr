@@ -11,6 +11,7 @@ pub mod ci_vars;
 pub mod commit;
 pub mod completion;
 pub mod config;
+pub mod context;
 pub mod dashboard;
 pub mod deploy;
 pub mod deploy_keys;
@@ -60,21 +61,55 @@ pub fn resolve_repo(g: &GlobalArgs) -> Result<RepoIdentity> {
             slug: slug.clone(),
         }),
         (Some(ws), None) => {
-            let slug = current_repo()?.slug;
+            let slug = context_slug().or_else(|| current_repo().ok().map(|r| r.slug));
             Ok(RepoIdentity {
                 workspace: ws.clone(),
-                slug,
+                slug: slug.unwrap_or_else(|| current_repo().map(|r| r.slug).unwrap_or_default()),
             })
         }
         (None, Some(slug)) => {
-            let ws = current_repo()?.workspace;
+            let ws = context_workspace().or_else(|| current_repo().ok().map(|r| r.workspace));
             Ok(RepoIdentity {
-                workspace: ws,
+                workspace: ws
+                    .unwrap_or_else(|| current_repo().map(|r| r.workspace).unwrap_or_default()),
                 slug: slug.clone(),
             })
         }
-        (None, None) => current_repo(),
+        (None, None) => {
+            if let Some(identity) = resolve_from_context() {
+                return Ok(identity);
+            }
+            current_repo()
+        }
     }
+}
+
+fn resolve_from_context() -> Option<RepoIdentity> {
+    let cfg = crate::config::load_config().ok()?;
+    let name = cfg.active_context.as_ref()?;
+    let entry = cfg.contexts.get(name)?;
+    let slug = entry
+        .slug
+        .clone()
+        .or_else(|| current_repo().ok().map(|r| r.slug))?;
+    Some(RepoIdentity {
+        workspace: entry.workspace.clone(),
+        slug,
+    })
+}
+
+fn context_workspace() -> Option<String> {
+    let cfg = crate::config::load_config().ok()?;
+    let name = cfg.active_context.as_ref()?;
+    let entry = cfg.contexts.get(name)?;
+    Some(entry.workspace.clone())
+}
+
+fn context_slug() -> Option<String> {
+    let cfg = crate::config::load_config().ok()?;
+    let name = cfg.active_context.as_ref()?;
+    let entry = cfg.contexts.get(name)?;
+    entry.slug.clone()
 }
 
 /// Detect the current repo identity from git (cached per process).

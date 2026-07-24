@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`bbr context` command group** — manage named workspace/repo profiles for quick switching:
+  - `bbr context create <name> --set-workspace <ws> [--set-slug <repo>] [--set-active]`
+  - `bbr context list` (active context marked with `*`)
+  - `bbr context use <name>` (switch active context)
+  - `bbr context delete <name>`
+  - Active context supplies workspace/slug defaults to all commands when no `--workspace`/`--slug`
+    flags are passed and no git remote is detected. Priority: CLI flags > active context > git remote.
+  - All commands support `--json`.
+  - Contexts stored in `~/.config/bbr/config.toml`.
 - **`bbr ci tail`** — stream step logs in real time from a running pipeline using HTTP Range
   requests (`Range: bytes={N}-`). Defaults to the first in-progress step of the latest
   pipeline on the current branch. Supports `--pipeline <uuid>`, `--branch <name>`,

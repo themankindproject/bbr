@@ -7,9 +7,9 @@ use clap_complete::{generate, Shell};
 
 use crate::cli::{
     AuthAction, BatchAction, CiAction, CiSchedulesAction, CiVarsAction, Cli, Command, CommitAction,
-    CommitStatusAction, ConfigAction, DeployAction, DeployEnvAction, DeployEnvVarsAction,
-    DeployKeysAction, GlobalArgs, IssueAction, PrAction, RepoAction, SrcAction, StackAction,
-    VariableAction, WebhookAction, WorkspaceAction,
+    CommitStatusAction, ConfigAction, ContextAction, DeployAction, DeployEnvAction,
+    DeployEnvVarsAction, DeployKeysAction, GlobalArgs, IssueAction, PrAction, RepoAction,
+    SrcAction, StackAction, VariableAction, WebhookAction, WorkspaceAction,
 };
 use crate::commands;
 use crate::error::Result;
@@ -75,6 +75,7 @@ pub(crate) async fn dispatch(cli: Cli) -> Result<()> {
             ConfigAction::Show { g } => commands::config::run_show(&g),
             ConfigAction::Set { key, value, g } => commands::config::run_set(&g, &key, &value),
         },
+        Some(Command::Context { action }) => dispatch_context(action),
         Some(Command::Api {
             method,
             path,
@@ -705,5 +706,20 @@ async fn dispatch_deploy_keys(action: DeployKeysAction) -> Result<()> {
         DeployKeysAction::Delete { key_id, yes, g } => {
             commands::deploy_keys::delete(&g, key_id, yes).await
         }
+    }
+}
+
+fn dispatch_context(action: ContextAction) -> Result<()> {
+    match action {
+        ContextAction::Create {
+            name,
+            workspace,
+            slug,
+            set_active,
+            g,
+        } => commands::context::create(&g, &name, &workspace, slug.as_deref(), set_active),
+        ContextAction::List { g } => commands::context::list(&g),
+        ContextAction::Use { name, g } => commands::context::use_context(&g, &name),
+        ContextAction::Delete { name, g } => commands::context::delete(&g, &name),
     }
 }
