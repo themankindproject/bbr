@@ -765,7 +765,7 @@ fn render_addition_content(
                 for seg in segments {
                     match seg.kind {
                         crate::diff::word_diff::WordChange::Inserted => {
-                            tinted.push_word_hl("42", "32", &seg.text);
+                            tinted.push_word_hl("102", "32", &seg.text);
                         }
                         crate::diff::word_diff::WordChange::Deleted => {}
                         crate::diff::word_diff::WordChange::Equal => {
@@ -820,7 +820,7 @@ fn render_deletion_content(
                 for seg in segments {
                     match seg.kind {
                         crate::diff::word_diff::WordChange::Deleted => {
-                            tinted.push_word_hl("41", "31", &seg.text);
+                            tinted.push_word_hl("101", "31", &seg.text);
                         }
                         crate::diff::word_diff::WordChange::Inserted => {}
                         crate::diff::word_diff::WordChange::Equal => {
@@ -1241,7 +1241,7 @@ fn render_side_by_side_row(
                     for seg in segments {
                         match seg.kind {
                             crate::diff::word_diff::WordChange::Deleted => {
-                                col.push_str(&format!("\x1b[30;41m{}\x1b[0m", seg.text));
+                                col.push_str(&format!("\x1b[30;101m{}\x1b[0m", seg.text));
                                 left_w += seg.text.width();
                             }
                             crate::diff::word_diff::WordChange::Equal => {
@@ -1300,7 +1300,7 @@ fn render_side_by_side_row(
                     for seg in segments {
                         match seg.kind {
                             crate::diff::word_diff::WordChange::Inserted => {
-                                col.push_str(&format!("\x1b[30;42m{}\x1b[0m", seg.text));
+                                col.push_str(&format!("\x1b[30;102m{}\x1b[0m", seg.text));
                                 right_w += seg.text.width();
                             }
                             crate::diff::word_diff::WordChange::Equal => {
@@ -2091,9 +2091,8 @@ diff --git a/a.rs b/a.rs
             ..Default::default()
         };
         let result = render(&files, &options, &test_theme_colored());
-        // Word-diff uses 42/41 bright bg highlights; without word_diff those should be absent.
         assert!(
-            !result.contains("\x1b[30;42m") && !result.contains("\x1b[30;41m"),
+            !result.contains("\x1b[30;102m") && !result.contains("\x1b[30;101m"),
             "word-diff highlight should be off, got:\n{result}"
         );
     }
