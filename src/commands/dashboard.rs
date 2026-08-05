@@ -106,17 +106,21 @@ pub async fn run_dashboard(
         repos
     };
 
-    let repo_count = filtered_repos.len();
-
-    // Fetch PRs concurrently from filtered repositories
-    spinner.set_message(format!("Fetching PRs from {} repos...", repo_count));
-    let mut futures = Vec::new();
-    // Fetch only from top 15 most recently updated repos to be fast and avoid hitting rate limits
+    // Fetch PRs concurrently from filtered repositories. The scan is capped
+    // at 15 repos to stay fast and avoid rate-limit spikes; surface the cap so
+    // the dashboard never silently shows a subset of the requested repos.
     let scan_repos = if filtered_repos.len() > 15 {
+        spinner.println(format!(
+            "Note: scanning the 15 most recently updated of {} repos (use --repos to raise the fetch cap).",
+            filtered_repos.len()
+        ));
         &filtered_repos[..15]
     } else {
         &filtered_repos[..]
     };
+    spinner.set_message(format!("Fetching PRs from {} repos...", scan_repos.len()));
+
+    let mut futures = Vec::new();
 
     for r in scan_repos {
         let ws_clone = ws.clone();
@@ -243,7 +247,8 @@ pub async fn run_dashboard(
         needs_review,
         my_prs,
         recent_activity,
-        repo_count,
+        // Report the number of repos actually scanned, not the total matched.
+        repo_count: scan_repos.len(),
     };
 
     let human = render_dashboard(&out);
@@ -252,10 +257,12 @@ pub async fn run_dashboard(
 
 fn render_dashboard(out: &DashboardOut) -> String {
     let theme = Theme::current();
+    let arrow = if theme.unicode_enabled() { "→" } else { "->" };
     let mut s = String::new();
 
+    let dash = if theme.unicode_enabled() { "—" } else { "-" };
     s.push_str(&format!(
-        "{} PR Dashboard — {} (@{})\n",
+        "{} PR Dashboard {dash} {} (@{})\n",
         theme.bullet(),
         out.workspace,
         out.user
@@ -271,7 +278,7 @@ fn render_dashboard(out: &DashboardOut) -> String {
     } else {
         for pr in &out.needs_review {
             s.push_str(&format!(
-                "  PR #{:<3}  {:<14}  \"{}\" → {}  by @{}\n",
+                "  PR #{:<3}  {:<14}  \"{}\" {arrow} {}  by @{}\n",
                 pr.id,
                 truncate(&pr.repo, 14),
                 truncate(&pr.title, 35),
@@ -290,7 +297,7 @@ fn render_dashboard(out: &DashboardOut) -> String {
     } else {
         for pr in &out.my_prs {
             s.push_str(&format!(
-                "  PR #{:<3}  {:<14}  \"{}\" → {}  OPEN  {} approvals\n",
+                "  PR #{:<3}  {:<14}  \"{}\" {arrow} {}  OPEN  {} approvals\n",
                 pr.id,
                 truncate(&pr.repo, 14),
                 truncate(&pr.title, 35),

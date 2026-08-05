@@ -155,7 +155,7 @@ pub async fn add(g: &GlobalArgs, branch: &str, parent: Option<&str>) -> Result<(
     crate::git::push_branch_async(branch).await?;
 
     spinner.set_message(format!(
-        "Creating pull request: {} → {}...",
+        "Creating pull request: {} -> {}...",
         branch, parent_branch
     ));
     let pr_req = CreatePrRequest {
@@ -518,8 +518,9 @@ fn render_stack_list(out: &StackListOut) -> String {
                 .map(|id| format!("PR #{}", id))
                 .unwrap_or_else(|| "No PR".to_string());
             let state_str = pr.state.as_deref().unwrap_or("PENDING");
+            let arrow = if theme.unicode_enabled() { "→" } else { "->" };
             s.push_str(&format!(
-                "  {}. {:<16}  {:<8}  {:<10}  → {}\n",
+                "  {}. {:<16}  {:<8}  {:<10}  {arrow} {}\n",
                 i + 1,
                 pr.branch,
                 id_str,
@@ -545,9 +546,15 @@ fn render_rebase(out: &StackRebaseOut) -> String {
 
     for step in &out.steps {
         let prefix = if step.status == "ok" {
-            theme.success("  ✓")
-        } else {
+            if theme.unicode_enabled() {
+                theme.success("  ✓")
+            } else {
+                theme.success("  OK")
+            }
+        } else if theme.unicode_enabled() {
             theme.error("  ✗")
+        } else {
+            theme.error("  X")
         };
         s.push_str(&format!("{} {}: {}\n", prefix, step.branch, step.message));
     }

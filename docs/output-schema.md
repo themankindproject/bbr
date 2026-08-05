@@ -346,7 +346,10 @@ On failure, `success` is `false` and the process exits with code `5`.
 `binary` is `true` for binary file changes (omitted when false).  
 `hunks` is empty for binary files or files with no parseable diff content.
 
-Pass `--raw --json` for the legacy flat shape `{ "id": 467, "diff": "..." }`.
+`--json` takes precedence over `--raw` / `--name-only` / `--name-status`:
+when `--json` is set the structured shape above is always emitted (never the
+legacy flat `{ "id", "diff" }` shape, which was ambiguous and produced
+corrupted stdout when combined with `--json`).
 
 ## Exit codes
 
@@ -358,3 +361,4 @@ Pass `--raw --json` for the legacy flat shape `{ "id": 467, "diff": "..." }`.
 | 3 | not found |
 | 4 | rate limited |
 | 5 | pipeline failed (`bbr ci watch`) |
+| 64 | usage error (invalid flags/arguments — distinct from operation failures) |

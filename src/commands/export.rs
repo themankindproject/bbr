@@ -2,6 +2,25 @@
 
 use crate::commands::status::{OverviewOut, StatusOut};
 
+/// ASCII-safe bullet for Slack exports (Slack mrkdwn renders `•` fine, but
+/// keep `-` for terminal purity when unicode is disabled).
+fn bullet() -> &'static str {
+    if crate::output::theme::Theme::current().unicode_enabled() {
+        "•"
+    } else {
+        "-"
+    }
+}
+
+/// ASCII-safe arrow for exports.
+fn arrow() -> &'static str {
+    if crate::output::theme::Theme::current().unicode_enabled() {
+        "→"
+    } else {
+        "->"
+    }
+}
+
 pub fn format_slack(out: &StatusOut) -> String {
     let mut s = String::new();
     s.push_str(&format!(
@@ -11,13 +30,15 @@ pub fn format_slack(out: &StatusOut) -> String {
     match &out.pr {
         Some(pr) => {
             s.push_str(&format!(
-                "• PR #{} \"{}\" — *{}*\n",
+                "{} PR #{} \"{}\" — *{}*\n",
+                bullet(),
                 pr.id,
                 pr.title,
                 pr.state.to_ascii_uppercase()
             ));
             s.push_str(&format!(
-                "  → {} | by @{}",
+                "  {} {} | by @{}",
+                arrow(),
                 pr.destination,
                 pr.author.as_deref().unwrap_or("unknown")
             ));
@@ -41,18 +62,20 @@ pub fn format_slack(out: &StatusOut) -> String {
             }
         }
         None => {
-            s.push_str("• PR: None\n");
+            s.push_str(&format!("{} PR: None\n", bullet()));
         }
     }
     match &out.pipeline {
         Some(p) => {
             s.push_str(&format!(
-                "• Pipeline — *{}*\n",
+                "{} Pipeline — *{}*\n",
+                bullet(),
                 p.state.to_ascii_uppercase()
             ));
             if !p.failing_steps.is_empty() {
                 s.push_str(&format!(
-                    "  → Build step \"{}\" failed\n",
+                    "  {} Build step \"{}\" failed\n",
+                    arrow(),
                     p.failing_steps.join(", ")
                 ));
             }
@@ -62,7 +85,7 @@ pub fn format_slack(out: &StatusOut) -> String {
             ));
         }
         None => {
-            s.push_str("• Pipeline: None\n");
+            s.push_str(&format!("{} Pipeline: None\n", bullet()));
         }
     }
     if !out.commit_statuses.is_empty() {
@@ -80,7 +103,11 @@ pub fn format_slack(out: &StatusOut) -> String {
                 format!("{} {}", glyph, c.key)
             })
             .collect();
-        s.push_str(&format!("• Status checks: {}\n", checks.join(", ")));
+        s.push_str(&format!(
+            "{} Status checks: {}\n",
+            bullet(),
+            checks.join(", ")
+        ));
     }
     s
 }
@@ -95,10 +122,11 @@ pub fn format_markdown(out: &StatusOut) -> String {
     match &out.pr {
         Some(pr) => {
             s.push_str(&format!(
-                "- **#{}** \"{}\" — {} → {} (by @{})\n",
+                "- **#{}** \"{}\" — {} {} {} (by @{})\n",
                 pr.id,
                 pr.title,
                 pr.state.to_ascii_uppercase(),
+                arrow(),
                 pr.destination,
                 pr.author.as_deref().unwrap_or("unknown")
             ));
@@ -168,27 +196,29 @@ pub fn format_overview_slack(out: &OverviewOut) -> String {
     ));
     if let Some(pr) = &out.pr {
         s.push_str(&format!(
-            "• Current PR #{} \"{}\" — *{}*\n",
+            "{} Current PR #{} \"{}\" — *{}*\n",
+            bullet(),
             pr.id,
             pr.title,
             pr.state.to_ascii_uppercase()
         ));
     }
     if !out.recent_prs.is_empty() {
-        s.push_str("• *Recent PRs*:\n");
+        s.push_str(&format!("{} *Recent PRs*:\n", bullet()));
         for pr in &out.recent_prs {
             s.push_str(&format!(
-                "  - #{} \"{}\" ({}) → {} by @{}\n",
+                "  - #{} \"{}\" ({}) {} {} by @{}\n",
                 pr.id,
                 pr.title,
                 pr.state,
+                arrow(),
                 pr.destination,
                 pr.author.as_deref().unwrap_or("unknown")
             ));
         }
     }
     if !out.recent_ci.is_empty() {
-        s.push_str("• *Recent Pipelines*:\n");
+        s.push_str(&format!("{} *Recent Pipelines*:\n", bullet()));
         for ci in &out.recent_ci {
             s.push_str(&format!(
                 "  - #{} ({}) on branch {} (Duration: {})\n",
@@ -220,10 +250,11 @@ pub fn format_overview_markdown(out: &OverviewOut) -> String {
         s.push_str("### Recent PRs\n");
         for pr in &out.recent_prs {
             s.push_str(&format!(
-                "- **#{}** \"{}\" ({}) → {} (by @{})\n",
+                "- **#{}** \"{}\" ({}) {} {} (by @{})\n",
                 pr.id,
                 pr.title,
                 pr.state,
+                arrow(),
                 pr.destination,
                 pr.author.as_deref().unwrap_or("unknown")
             ));

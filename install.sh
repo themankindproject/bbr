@@ -104,12 +104,30 @@ install -m 0755 "$TMP/${APP}" "$DEST/${APP}"
 echo "Installed ${APP} to ${DEST}/${APP}"
 
 # ---- shell completions (optional) ------------------------------------------
+# Prefer user-local completion dirs; fall back to system dirs only when
+# writable (no hard `sudo` dependency — keeps one-liner installs working
+# on machines without passwordless sudo).
 if command -v "${APP}" &>/dev/null; then
   SHELLNAME="$(basename "${SHELL:-bash}")"
   case "$SHELLNAME" in
-    bash) "${APP}" completion bash | sudo tee /usr/share/bash-completion/completions/"${APP}" &>/dev/null || true ;;
-    zsh)  "${APP}" completion zsh  | sudo tee /usr/local/share/zsh/site-functions/_"${APP}" &>/dev/null || true ;;
-    fish) "${APP}" completion fish > "${HOME}/.config/fish/completions/${APP}.fish" 2>/dev/null || true ;;
+    bash)
+      if [ -d "${HOME}/.local/share/bash-completion/completions" ]; then
+        "${APP}" completion bash > "${HOME}/.local/share/bash-completion/completions/${APP}" 2>/dev/null || true
+      elif [ -w "/usr/share/bash-completion/completions" ]; then
+        "${APP}" completion bash > "/usr/share/bash-completion/completions/${APP}" 2>/dev/null || true
+      fi
+      ;;
+    zsh)
+      if [ -d "${HOME}/.zsh/completions" ]; then
+        "${APP}" completion zsh > "${HOME}/.zsh/completions/_${APP}" 2>/dev/null || true
+      elif [ -w "/usr/local/share/zsh/site-functions" ]; then
+        "${APP}" completion zsh > "/usr/local/share/zsh/site-functions/_${APP}" 2>/dev/null || true
+      fi
+      ;;
+    fish)
+      mkdir -p "${HOME}/.config/fish/completions"
+      "${APP}" completion fish > "${HOME}/.config/fish/completions/${APP}.fish" 2>/dev/null || true
+      ;;
   esac
 fi
 

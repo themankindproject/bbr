@@ -10,6 +10,7 @@ use crate::commands::{
 };
 use crate::error::Result;
 use crate::output::table::Table;
+use crate::output::theme::Theme;
 use crate::output::Formatter;
 use serde::Serialize;
 
@@ -174,7 +175,7 @@ pub async fn view(g: &GlobalArgs, id: u64, show_comments: bool) -> Result<()> {
     };
 
     let fmt = make_formatter(g);
-    let sep = "─".repeat(50);
+    let sep = Theme::current().separator();
     let human = format!(
         "Issue #{id} — {title}\n{sep}\n  State: {state:<12} Kind: {kind:<12} Priority: {priority}\n  Reporter: {reporter:<20} Assignee: {assignee}\n  Created: {created}\n  URL: {url}\n\nDescription:\n{body_indented}\n\n[{cmts} comments, {votes} votes, {watches} watchers]",
         id = issue.id,
@@ -224,8 +225,11 @@ pub async fn view(g: &GlobalArgs, id: u64, show_comments: bool) -> Result<()> {
             let human = String::new();
             return Formatter::from_json_flag(true).print(&combined, &human);
         }
-        eprintln!("\nComments ({})", comments.len());
-        eprintln!("{}", "─".repeat(50));
+        // Human path: fold comments into the single formatted output so
+        // `--comments` output stays on stdout in one block (pipes cleanly).
+        let theme = Theme::current();
+        let sep = theme.separator();
+        let mut extra = format!("\nComments ({})\n{}", comments.len(), sep);
         for c in &comments {
             let author = c
                 .author
@@ -238,8 +242,9 @@ pub async fn view(g: &GlobalArgs, id: u64, show_comments: bool) -> Result<()> {
                 .map(|d| d.chars().take(10).collect())
                 .unwrap_or_else(|| "-".into());
             let body = c.content.as_ref().map(|ct| ct.raw.as_str()).unwrap_or("");
-            eprintln!("  @{author} on {date}\n  {body}\n");
+            extra.push_str(&format!("\n  @{author} on {date}\n  {body}\n"));
         }
+        print!("{extra}");
     }
     Ok(())
 }

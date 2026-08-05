@@ -54,6 +54,11 @@ static CACHED_REPO: OnceLock<RepoIdentity> = OnceLock::new();
 static CACHED_HEAD: OnceLock<Head> = OnceLock::new();
 
 /// Detect the current repo identity respecting `--workspace` and `--slug` overrides.
+///
+/// A partial override (only workspace or only slug) still requires the other
+/// half to be resolvable — from the active context or the git remote. If it
+/// can't be resolved, we return a clear error instead of a half-empty identity
+/// that would produce confusing API 404s.
 pub fn resolve_repo(g: &GlobalArgs) -> Result<RepoIdentity> {
     match (&g.workspace, &g.repo_slug) {
         (Some(ws), Some(slug)) => Ok(RepoIdentity {
@@ -62,18 +67,31 @@ pub fn resolve_repo(g: &GlobalArgs) -> Result<RepoIdentity> {
         }),
         (Some(ws), None) => {
             let slug = context_slug().or_else(|| current_repo().ok().map(|r| r.slug));
-            Ok(RepoIdentity {
-                workspace: ws.clone(),
-                slug: slug.unwrap_or_else(|| current_repo().map(|r| r.slug).unwrap_or_default()),
-            })
+            match slug {
+                Some(slug) => Ok(RepoIdentity {
+                    workspace: ws.clone(),
+                    slug,
+                }),
+                None => Err(BitbucketError::Git(
+                    "--workspace was provided but the repo slug could not be resolved \
+                     (no active context slug, no git remote). Pass --slug too."
+                        .into(),
+                )),
+            }
         }
         (None, Some(slug)) => {
             let ws = context_workspace().or_else(|| current_repo().ok().map(|r| r.workspace));
-            Ok(RepoIdentity {
-                workspace: ws
-                    .unwrap_or_else(|| current_repo().map(|r| r.workspace).unwrap_or_default()),
-                slug: slug.clone(),
-            })
+            match ws {
+                Some(ws) => Ok(RepoIdentity {
+                    workspace: ws,
+                    slug: slug.clone(),
+                }),
+                None => Err(BitbucketError::Git(
+                    "--slug was provided but the workspace could not be resolved \
+                     (no active context workspace, no git remote). Pass --workspace too."
+                        .into(),
+                )),
+            }
         }
         (None, None) => {
             if let Some(identity) = resolve_from_context() {
@@ -278,7 +296,11 @@ pub fn truncate(s: &str, n: usize) -> String {
         out.push(ch);
         width += cw;
     }
-    out.push('…');
+    if crate::output::theme::Theme::current().unicode_enabled() {
+        out.push('…');
+    } else {
+        out.push_str("...");
+    }
     out
 }
 

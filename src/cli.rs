@@ -7,7 +7,14 @@ use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use tracing_subscriber::EnvFilter;
 
-use crate::error::{report, ExitCode as AppExitCode, Result};
+use crate::error::{report, report_json, ExitCode as AppExitCode, Result};
+
+/// Exit code clap uses for usage errors (unknown flags, bad values).
+///
+/// This deliberately differs from [`AppExitCode::Generic`] so that usage
+/// errors don't collide with the documented exit-code contract (scripts can
+/// distinguish "you typed it wrong" from "the operation failed").
+const USAGE_ERROR_EXIT: u8 = 64;
 
 /// When to emit ANSI color output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -33,7 +40,7 @@ pub struct GlobalArgs {
     #[arg(long, global = true, env = "BITBUCKET_API_BASE", hide = true)]
     pub api_base: Option<String>,
 
-    /// Increase verbosity (-v info, -vv debug).
+    /// Increase verbosity (-v debug, -vv trace).
     #[arg(short, long, global = true, action = ArgAction::Count)]
     pub verbose: u8,
 
@@ -251,7 +258,7 @@ pub enum WorkspaceAction {
     /// List workspaces you have access to.
     List {
         /// Filter by role (member, contributor, admin).
-        #[arg(long)]
+        #[arg(long, value_parser = ["member", "contributor", "admin"])]
         role: Option<String>,
         /// Max results.
         #[arg(long, default_value_t = 25)]
@@ -512,6 +519,9 @@ pub enum PrAction {
         strategy: Option<String>,
         #[arg(long, help = "custom merge commit message")]
         message: Option<String>,
+        /// Skip the interactive confirmation prompt.
+        #[arg(long)]
+        yes: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -958,6 +968,9 @@ pub enum BatchAction {
         /// Merge strategy (merge_commit|squash|fast_forward).
         #[arg(long)]
         strategy: Option<String>,
+        /// Close the source branch after merging (off by default).
+        #[arg(long)]
+        close_source_branch: bool,
         /// Skip confirmation.
         #[arg(long, short)]
         yes: bool,
@@ -1516,7 +1529,23 @@ pub async fn run() -> ExitCode {
     let cli = match Cli::try_parse() {
         Ok(c) => c,
         Err(e) => {
-            e.exit();
+            use clap::error::ErrorKind as K;
+            match e.kind() {
+                // Help/version are successful usage paths (exit 0).
+                K::DisplayHelp | K::DisplayVersion => {
+                    e.print().ok();
+                    if matches!(e.kind(), K::DisplayHelp) {
+                        println!();
+                    }
+                    return ExitCode::SUCCESS;
+                }
+                // Everything else is a usage error. Use a distinct code so
+                // scripts can tell bad input from operation failure.
+                _ => {
+                    let _ = e.print();
+                    return ExitCode::from(USAGE_ERROR_EXIT);
+                }
+            }
         }
     };
 
@@ -1536,10 +1565,13 @@ pub async fn run() -> ExitCode {
         crate::output::theme::Theme::set_unicode_override(false);
     }
 
+    // Remember the JSON flag before `cli` is moved into dispatch().
+    let json = cli.global.json;
     let result: Result<()> = crate::dispatch::dispatch(cli).await;
 
     match result {
         Ok(()) => AppExitCode::Success.as_process(),
+        Err(e) if json => report_json(&e),
         Err(e) => report(&e),
     }
 }
@@ -1556,4 +1588,16 @@ fn init_tracing(verbose: u8) {
         .with_writer(std::io::stderr)
         .with_ansi(io::stderr().is_terminal())
         .init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usage_error_exit_is_distinct_from_generic() {
+        assert_ne!(USAGE_ERROR_EXIT, AppExitCode::Generic as u8);
+        assert_ne!(USAGE_ERROR_EXIT, AppExitCode::Auth as u8);
+        assert_eq!(USAGE_ERROR_EXIT, 64);
+    }
 }

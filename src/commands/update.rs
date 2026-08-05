@@ -135,6 +135,17 @@ fn asset_name() -> Option<String> {
 // ---------------------------------------------------------------------------
 
 fn install_dir() -> Option<PathBuf> {
+    // If the binary we're running was installed to a specific location, upgrade
+    // it in place — this covers `cargo install` (which drops the binary in
+    // ~/.cargo/bin) and other non-standard install paths. Falls back to the
+    // conventional ~/.local/bin when the real path is unknowable.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            if parent.is_dir() && !exe.is_symlink() {
+                return Some(parent.to_path_buf());
+            }
+        }
+    }
     if let Ok(home) = std::env::var("HOME") {
         let candidates = [
             PathBuf::from(&home).join(".local").join("bin"),
@@ -299,7 +310,12 @@ pub async fn run(g: &GlobalArgs, check_only: bool) -> Result<()> {
 
     let loading =
         crate::commands::SpinnerGuard::new(crate::commands::make_spinner(g.json, g.quiet));
-    loading.set_message(format!("Updating bbr {} → {}...", current, latest));
+    let arrow = if crate::output::theme::Theme::current().unicode_enabled() {
+        "→"
+    } else {
+        "->"
+    };
+    loading.set_message(format!("Updating bbr {} {arrow} {}...", current, latest));
 
     download_and_install(&release, &latest).await?;
 
@@ -325,11 +341,12 @@ fn render_update(out: &UpdateOut) -> String {
     let mut s = String::new();
 
     if out.up_to_date {
+        let mark = if theme.unicode_enabled() { "✓" } else { "OK" };
         let _ = std::fmt::Write::write_fmt(
             &mut s,
             format_args!(
                 "{}  bbr {} — up to date\n",
-                theme.success("✓"),
+                theme.success(mark),
                 out.current_version
             ),
         );
@@ -446,8 +463,13 @@ async fn download_and_install(release: &GithubRelease, _latest: &str) -> Result<
             "No checksums asset in release; proceeding without integrity verification. \
              Consider adding a checksums.txt asset to releases for supply-chain security."
         );
+        let mark = if crate::output::theme::Theme::current().unicode_enabled() {
+            "⚠"
+        } else {
+            "!"
+        };
         eprintln!(
-            "  ⚠ Warning: No checksum available for this release. \
+            "  {mark} Warning: No checksum available for this release. \
              Binary integrity could not be verified."
         );
     }

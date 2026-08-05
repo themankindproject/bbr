@@ -689,14 +689,20 @@ pub fn map_error(status: StatusCode, body: &str, path: &str) -> BitbucketError {
                         }
                     }
                     if let Some(grant) = granted {
+                        let granted_mark =
+                            if crate::output::theme::Theme::current().unicode_enabled() {
+                                "✓"
+                            } else {
+                                "OK"
+                            };
                         for s in grant.iter().filter_map(|v| v.as_str()) {
                             if !all.iter().any(|(n, _)| *n == s) {
-                                all.push((s, "✓"));
+                                all.push((s, granted_mark));
                             }
                         }
                         for s in grant.iter().filter_map(|v| v.as_str()) {
                             if let Some(entry) = all.iter_mut().find(|(n, _)| *n == s) {
-                                entry.1 = "✓";
+                                entry.1 = granted_mark;
                             }
                         }
                     }
@@ -705,8 +711,13 @@ pub fn map_error(status: StatusCode, body: &str, path: &str) -> BitbucketError {
                             full.push('\n');
                         }
                         let max_w = all.iter().map(|(n, _)| n.len()).max().unwrap_or(0).max(5);
+                        let line_ch = if crate::output::theme::Theme::current().unicode_enabled() {
+                            "─"
+                        } else {
+                            "-"
+                        };
                         full.push_str(&format!("\n  {:<width$}  Status", "Scope", width = max_w));
-                        full.push_str(&format!("\n  {}", "─".repeat(max_w + 8)));
+                        full.push_str(&format!("\n  {}", line_ch.repeat(max_w + 8)));
                         for (name, status) in &all {
                             full.push_str(&format!(
                                 "\n  {:<width$}  {}",
@@ -916,6 +927,14 @@ mod tests {
         assert!(msg.contains("repo:write"));
         assert!(msg.contains("MISSING"));
         assert!(msg.contains("repo:read"));
+        // The granted mark follows the active theme's unicode setting.
+        let mark = if crate::output::theme::Theme::current().unicode_enabled() {
+            "✓"
+        } else {
+            "OK"
+        };
+        assert!(msg.contains(mark));
+        assert!(msg.contains("Status"));
     }
 
     #[test]

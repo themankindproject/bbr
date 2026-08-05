@@ -267,10 +267,11 @@ pub async fn watch(
                     && state.prev_state != step_state_name
                     && state.header_printed
                 {
+                    let prefix = if theme.unicode_enabled() { "│" } else { "|" };
                     spinner.println(render_step_transition(
                         theme,
                         Some(&step.name),
-                        "│",
+                        prefix,
                         &state.prev_state,
                         &step_state_name,
                     ));
@@ -528,9 +529,14 @@ pub async fn tail(
             let new_state = fresh.state_name().to_string();
             if new_state != prev_state {
                 if !g.json {
+                    let dash = if theme.unicode_enabled() {
+                        "──"
+                    } else {
+                        "--"
+                    };
                     crate::output::print_block(&format!(
                         "{}\n",
-                        render_step_transition(theme, None, "──", &prev_state, &new_state)
+                        render_step_transition(theme, None, dash, &prev_state, &new_state)
                     ))?;
                 }
                 prev_state = new_state;
@@ -1049,13 +1055,14 @@ fn render_step_transition(
 ) -> String {
     let prev_glyph = theme.status_glyph(prev_state);
     let curr_glyph = theme.status_glyph(new_state);
+    let arrow = if theme.unicode_enabled() { "→" } else { "->" };
     if let Some(name) = step_name {
         format!(
             "{} {} {} {}{} {}",
             theme.dim(prefix),
             theme.bold(name),
             prev_glyph,
-            theme.dim("→"),
+            theme.dim(arrow),
             curr_glyph,
             theme.dim(new_state)
         )
@@ -1064,7 +1071,7 @@ fn render_step_transition(
             "{} {} {}{} {}",
             theme.dim(prefix),
             prev_glyph,
-            theme.dim("→"),
+            theme.dim(arrow),
             curr_glyph,
             theme.bold(new_state)
         )
@@ -1073,9 +1080,10 @@ fn render_step_transition(
 
 /// Format a step header for `bbr ci watch --logs`.
 fn render_watch_step_header(theme: &Theme, step_name: &str, state: &str) -> String {
+    let corner = if theme.unicode_enabled() { "┌" } else { "==" };
     format!(
         "{} {}  {} {}",
-        theme.dim("┌"),
+        theme.dim(corner),
         theme.bold(step_name),
         theme.status_glyph(state),
         theme.dim(state)
@@ -1084,7 +1092,8 @@ fn render_watch_step_header(theme: &Theme, step_name: &str, state: &str) -> Stri
 
 /// Format a log line for live streaming with the gutter character.
 fn render_watch_log_line(theme: &Theme, line: &str) -> String {
-    format!("{} {}", theme.dim("│"), line)
+    let gutter = if theme.unicode_enabled() { "│" } else { "|" };
+    format!("{} {}", theme.dim(gutter), line)
 }
 
 /// Format the exit summary for `bbr ci tail`.
@@ -1094,9 +1103,14 @@ fn render_tail_exit_summary(
     final_state: &str,
     elapsed_secs: f64,
 ) -> String {
+    let dash = if theme.unicode_enabled() {
+        "──"
+    } else {
+        "--"
+    };
     format!(
         "{} {} {}  {}  {}",
-        theme.dim("──"),
+        theme.dim(dash),
         theme.bold(step_name),
         theme.status_glyph(final_state),
         theme.dim(final_state),

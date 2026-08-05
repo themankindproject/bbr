@@ -7,6 +7,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`bbr pr merge --yes`** — skip the interactive confirmation prompt for
+  scripted merges (matches `batch merge-approved --yes` and `pr stack land`).
+- **Pre-flight credential check** — API commands now fail fast with a clear
+  auth error (exit 2) before git detection, so running e.g. `bbr repo info`
+  outside a git repo reports "no credentials" instead of a confusing
+  "not a git repository" error.
+
+### Fixed
+
+- **`bbr auth status` truthfulness** — the command no longer claims "no
+  Bitbucket credentials found" (and exits 0) when credentials actually exist
+  but the API call failed. No-credentials is now reported as a status (exit 0);
+  real API failures surface the actual error with the correct non-zero exit
+  code so scripts can detect them.
+- **`bbr pr diff --raw --json` corrupted stdout** — `--json` now wins over
+  `--raw` / `--name-only` / `--name-status` and always emits the single
+  structured JSON document. Previously raw diff text was appended after the
+  JSON, producing invalid output.
+- **`bbr status --export slack --json` dropped `--json`** — the export path
+  now honors `--json` and emits the machine-readable shape instead of always
+  printing the Slack text.
+- **Usage errors exit 64, not 2** — clap usage errors (unknown flags, invalid
+  values) previously exited with `2`, colliding with the documented "auth
+  failure" exit code. They now exit `64` (BSD sysexits) so scripts can tell
+  "you typed it wrong" from "the operation failed".
+- **`bbr completion` panicked on broken pipe** — `bbr completion fish | head`
+  panicked inside `clap_complete` on EPIPE. Completions are now generated into
+  a buffer and written with graceful EPIPE handling (silent exit 0).
+- **`--no-unicode` leaks** — hardcoded Unicode glyphs in `ci` formatters
+  (arrows, box-drawing, step-transition corners), `ci_schedules` spinner
+  messages, audit/stack icons, update glyphs (incl. the no-checksum warning),
+  dashboard arrows, status branch arrows, export bullets/arrows, auth setup
+  checkmarks, the API error-envelope scope table (`✓`/`─`), and truncation
+  ellipses now respect the theme's unicode setting.
+- **Errors under `--json` were human text on stdout** — a failed command with
+  `--json` now emits a structured error object
+  (`{"error": {"kind", "message", "exit_code"}}`) on stderr with stable
+  machine-readable `kind` values, and nothing on stdout.
+- **`bbr issue view --comments` interleaved stderr with JSON** — human
+  comments are now folded into the single stdout block; `--json` keeps the
+  combined `{issue, comments}` document on stdout only.
+- **`bbr batch merge-approved` silently closed source branches** — source
+  branches are no longer closed unless `--close-source-branch` is passed;
+  drafts are skipped; fetch limit follows `--max`.
+- **`--workspace`/`--slug` with unresolvable counterpart** — partial overrides
+  now produce a clear error instead of a half-empty repo identity that
+  generated confusing API 404s.
+- **`bbr pr dashboard` silent 15-repo scan cap** — the cap is now surfaced to
+  the user and `repo_count` reports the repos actually scanned.
+- **`bbr update` installed to the wrong directory** — the install directory is
+  now derived from the running binary's real path (covers `cargo install`),
+  falling back to `~/.local/bin`.
+- **`install.sh` used unconditional `sudo`** for completions — completions now
+  prefer user-local dirs and only fall back to system dirs when writable.
+- **`bbr workspace list --role` accepted arbitrary values** — the role filter
+  is now validated to `member | contributor | admin`.
+
+### Changed
+
+- `-v` help text corrected: `-v` = debug, `-vv` = trace (the code already
+  behaved this way; docs now match).
+- **`bbr status --watch` error rendering** — watch-mode errors now render with
+  the same hint/theme system as other commands (`display_error`) instead of a
+  bare `bbr: {error}` line.
+- **`bbr pr diff --raw`** — raw diff output is now printed directly to stdout
+  (`print_block`) rather than routed through the bat/pager path, so it
+  pipelines cleanly when stdout is not a TTY.
+
+### Testing
+
+- **12 new CLI smoke tests** covering: usage-error exit 64, help/version exit
+  0, `pr merge --yes` help, structured `--json` errors on stderr, human error
+  hints, auth-status truthfulness (no creds → exit 0, bad creds → non-zero,
+  `--json` validity), `pr diff --raw --json` single-doc integrity,
+  `status --export slack --json` JSON output, workspace role validation, and
+  completion EPIPE non-panic.
+
+### Docs
+
+- `USAGE.md`, `README.md`, and `docs/output-schema.md` updated: exit code 64,
+  corrected `--verbose` semantics, `pr diff --json` precedence, and the new
+  `batch merge-approved --close-source-branch` flag.
+
 ## [0.2.1] - 2026-07-25
 
 ### Added

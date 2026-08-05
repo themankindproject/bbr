@@ -163,6 +163,7 @@ bbr pr update 467 --title "New title" --description "New description"
 bbr pr merge 467                                 # merge with confirmation prompt
 bbr pr merge 467 --strategy squash               # squash | merge_commit | fast_forward
 bbr pr merge 467 --close-source-branch
+bbr pr merge 467 --yes                           # skip confirmation
 bbr pr merge-check 467                           # conflicts / statuses / approvals summary
 bbr pr add-reviewer 467 alice                    # username or UUID
 bbr pr remove-reviewer 467 alice
@@ -187,7 +188,7 @@ bbr pr statuses [<id>]      # commit build statuses
 bbr pr diff 467                          # pretty diff (word-level, syntax, line numbers)
 bbr pr diff                              # open PR for the current branch
 bbr pr diff 467 --raw                    # bypass renderer, use bat/less
-bbr pr diff 467 --json                   # structured JSON with file/hunk/line data
+bbr pr diff 467 --json                   # structured JSON (wins over --raw/--name-only)
 bbr pr diff 467 --side-by-side           # side-by-side view
 bbr pr diff 467 --context 5              # more context lines
 bbr pr diff 467 --no-word-diff           # disable intra-line word highlighting
@@ -220,6 +221,7 @@ bbr batch merge-approved                         # merge all fully-approved PRs
 bbr batch merge-approved --strategy squash       # merge strategy
 bbr batch merge-approved --dry-run               # plan only, no changes
 bbr batch merge-approved --max 10                # cap at 10 PRs
+bbr batch merge-approved --close-source-branch   # also close source branches after merge
 
 bbr batch rerun-failed                           # rerun latest failed pipeline per branch
 bbr batch rerun-failed --branch "feat/x"         # single branch filter
@@ -227,6 +229,9 @@ bbr batch rerun-failed --branch "feat/x"         # single branch filter
 bbr batch cleanup-merged-branches               # delete merged local branches
 bbr batch cleanup-merged-branches --remote      # also delete remote branches
 ```
+
+`merge-approved` never closes source branches unless `--close-source-branch` is passed — batch
+tools must be conservative with side effects.
 
 Protected branches (`main`, `master`, `develop`, `production`, `release/*`, `hotfix/*`) are never deleted.
 
@@ -427,7 +432,7 @@ Background version check: running `bbr status` automatically checks for updates 
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--json` | | Emit stable JSON instead of human output |
-| `--verbose` | `-v` | Increase verbosity (`-v` = info, `-vv` = debug) |
+| `--verbose` | `-v` | Increase verbosity (`-v` = debug, `-vv` = trace) |
 | `--workspace <WS>` | | Override workspace (env: `BB_WORKSPACE`) |
 | `--slug <SLUG>` | | Override repo slug (env: `BB_SLUG`) |
 | `--api-base <URL>` | | Override API base URL (env: `BITBUCKET_API_BASE`) |
@@ -450,8 +455,11 @@ Background version check: running `bbr status` automatically checks for updates 
 | 3 | not found |
 | 4 | rate limited |
 | 5 | pipeline failed (`bbr ci watch`) |
+| 64 | usage error (invalid flags/arguments — distinct from operation failures) |
 
-Exit codes are a stable public contract — scripts can branch on `$?`.
+Exit codes are a stable public contract — scripts can branch on `$?`. Usage
+errors (unknown flags, invalid values) exit with `64` (BSD sysexits) so they
+never collide with the operation codes above.
 
 ---
 

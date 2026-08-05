@@ -71,6 +71,7 @@ pub async fn merge_approved(
     repo_arg: Option<&str>,
     dry_run: bool,
     strategy: Option<&str>,
+    close_source_branch: bool,
     yes: bool,
     max: Option<usize>,
 ) -> Result<()> {
@@ -81,12 +82,15 @@ pub async fn merge_approved(
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching open pull requests...");
 
+    // Fetch up to the --max cap (or 100) rather than a fixed page, so the
+    // cap is honored without throwing away results beyond the first page.
+    let fetch_limit = max.unwrap_or(100);
     let prs = client
         .list_prs(
             &repo.workspace,
             slug,
             PrState::Open,
-            100,
+            fetch_limit as u32,
             None,
             None,
             None,
@@ -98,6 +102,10 @@ pub async fn merge_approved(
     let mut approved_actions = Vec::new();
 
     for pr in prs {
+        // Never auto-merge drafts.
+        if pr.draft {
+            continue;
+        }
         // Count approvals from reviewers (preferred) or all participants
         let approval_count = if !pr.reviewers.is_empty() {
             pr.reviewers.iter().filter(|r| r.is_approved()).count()
@@ -120,7 +128,8 @@ pub async fn merge_approved(
 
     spinner.finish();
 
-    // Apply --max safety cap
+    // Apply --max safety cap (already bounded above, but keep the guard for
+    // parity with the other batch commands).
     if let Some(cap) = max {
         if approved_actions.len() > cap {
             let original = approved_actions.len();
@@ -193,7 +202,11 @@ pub async fn merge_approved(
         }
         run_spinner.set_message(format!("Merging PR #{}...", act.pr_id));
         let merge_req = MergePrRequest {
-            close_source_branch: Some(true),
+            close_source_branch: if close_source_branch {
+                Some(true)
+            } else {
+                None
+            },
             merge_strategy: strategy.map(|s| s.to_string()),
             message: None,
         };

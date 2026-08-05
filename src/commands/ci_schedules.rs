@@ -46,7 +46,7 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
     let api = client(g)?;
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
-    spinner.set_message("Fetching schedules…");
+    spinner.set_message("Fetching schedules...");
     let schedules = api.list_schedules(&repo.workspace, &repo.slug).await?;
     spinner.finish();
 
@@ -78,7 +78,7 @@ pub async fn create(
     let api = client(g)?;
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
-    spinner.set_message("Creating schedule…");
+    spinner.set_message("Creating schedule...");
     let mut schedule = api
         .create_schedule(&repo.workspace, &repo.slug, cron, branch, pipeline)
         .await?;
@@ -110,7 +110,7 @@ pub async fn view(g: &GlobalArgs, uuid: &str) -> Result<()> {
     let api = client(g)?;
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
-    spinner.set_message("Fetching schedule…");
+    spinner.set_message("Fetching schedule...");
     let schedule = api.get_schedule(&repo.workspace, &repo.slug, uuid).await?;
     spinner.finish();
 
@@ -138,7 +138,7 @@ pub async fn update(
     let api = client(g)?;
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
-    spinner.set_message("Updating schedule…");
+    spinner.set_message("Updating schedule...");
     let schedule = api
         .update_schedule(&repo.workspace, &repo.slug, uuid, cron, enabled)
         .await?;
@@ -166,7 +166,7 @@ pub async fn delete(g: &GlobalArgs, uuid: &str, yes: bool) -> Result<()> {
     let api = client(g)?;
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
-    spinner.set_message("Deleting schedule…");
+    spinner.set_message("Deleting schedule...");
     api.delete_schedule(&repo.workspace, &repo.slug, uuid)
         .await?;
     spinner.finish();
@@ -182,7 +182,7 @@ pub async fn executions(g: &GlobalArgs, uuid: &str, limit: u32) -> Result<()> {
     let api = client(g)?;
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
-    spinner.set_message("Fetching executions…");
+    spinner.set_message("Fetching executions...");
     let execs = api
         .schedule_executions(&repo.workspace, &repo.slug, uuid, limit)
         .await?;

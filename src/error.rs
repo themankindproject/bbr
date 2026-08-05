@@ -1,6 +1,10 @@
 //! Centralized error type and exit-code mapping for `bbr`.
 
+use std::io::Write;
+
 use thiserror::Error;
+
+use crate::output::theme::Theme;
 
 /// Numeric exit codes used by `bbr`.
 ///
@@ -81,48 +85,128 @@ impl BitbucketError {
             _ => ExitCode::Generic,
         }
     }
+
+    /// Stable machine-readable error kind (used by `--json` mode).
+    pub fn kind(&self) -> &'static str {
+        match self {
+            BitbucketError::NoCredentials | BitbucketError::AuthFailed(_) => "auth",
+            BitbucketError::NotFound(_) => "not_found",
+            BitbucketError::RateLimit(_) => "rate_limit",
+            BitbucketError::Http(_) => "http",
+            BitbucketError::Json(_) => "json",
+            BitbucketError::Config(_) => "config",
+            BitbucketError::Git(_) => "git",
+            BitbucketError::Io(_) => "io",
+            BitbucketError::PipelineFailed { .. } => "pipeline_failed",
+            BitbucketError::Other(_) => "generic",
+            BitbucketError::BadRequest(_) => "bad_request",
+        }
+    }
 }
 
 pub type Result<T, E = BitbucketError> = std::result::Result<T, E>;
 
-/// Convenience for the top-level `main`: print a friendly message to stderr
-/// and return the right process exit code.
-pub fn report(e: &BitbucketError) -> std::process::ExitCode {
-    eprintln!("bbr: {e}");
+/// Hints to show beneath an error, phrased as actions the user can take.
+fn hints(e: &BitbucketError) -> Vec<String> {
+    let mut out = Vec::new();
     match e {
         BitbucketError::NoCredentials => {
-            eprintln!("  hint: run `bbr auth setup`, or set BITBUCKET_USERNAME + BITBUCKET_TOKEN");
+            out.push("run `bbr auth setup`, or set BITBUCKET_USERNAME + BITBUCKET_TOKEN".into());
         }
         BitbucketError::AuthFailed(_) => {
-            eprintln!("  hint: verify your token is valid and has the required scopes.");
-            eprintln!("  hint: create a new token at https://id.atlassian.com/manage-profile/security/api-tokens");
-            eprintln!("  hint: required scopes include at minimum:");
-            eprintln!("         read:user:bitbucket, read:repository:bitbucket,");
-            eprintln!("         read:pullrequest:bitbucket, read:pipeline:bitbucket");
+            out.push("verify your token is valid and has the required scopes.".into());
+            out.push(
+                "create a new token at https://id.atlassian.com/manage-profile/security/api-tokens"
+                    .into(),
+            );
+            out.push(
+                "required scopes include at minimum: read:user:bitbucket, \
+                 read:repository:bitbucket, read:pullrequest:bitbucket, \
+                 read:pipeline:bitbucket"
+                    .into(),
+            );
         }
         BitbucketError::RateLimit(_) => {
-            eprintln!("  hint: wait a few minutes or lower your request frequency.");
+            out.push("wait a few minutes or lower your request frequency.".into());
+        }
+        BitbucketError::NotFound(_) => {
+            out.push("double-check the ID / name, or the workspace and repo slug.".into());
+        }
+        BitbucketError::Git(msg) => {
+            if msg.contains("no git remote") {
+                out.push("run bbr from inside a Bitbucket repo, or pass".into());
+                out.push("--workspace <ws> --slug <slug> to point at a repo.".into());
+            } else if msg.contains("not a git repository") {
+                out.push("run bbr from inside a Bitbucket git repository.".into());
+            } else if msg.contains("HEAD is detached") {
+                out.push("check out a branch first: `git switch <branch>`.".into());
+            }
+        }
+        BitbucketError::Config(_) => {
+            out.push("check `bbr config show` and `bbr config path` for the active file.".into());
         }
         BitbucketError::Http(e) if e.is_timeout() => {
-            eprintln!(
-                "  hint: the request timed out (default: 30s). Try again or check your network."
+            out.push(
+                "the request timed out (default: 30s). Try again or check your network.".into(),
             );
+            out.push("adjust with --timeout <secs> or BBR_TIMEOUT.".into());
+        }
+        BitbucketError::Http(_) => {
+            out.push("the request failed at the network layer. Check your connection.".into());
         }
         BitbucketError::PipelineFailed {
             build_number,
             branch,
         } => {
             if let Some(bn) = build_number {
-                eprintln!("  hint: pipeline build #{bn} failed.");
+                out.push(format!("pipeline build #{bn} failed."));
             }
             if let Some(br) = branch {
-                eprintln!("  hint: branch: {br}");
+                out.push(format!("branch: {br}"));
             }
-            eprintln!("  hint: run `bbr ci logs` to see the failure output.");
+            out.push("run `bbr ci logs` to see the failure output.".into());
+        }
+        BitbucketError::BadRequest(_) => {
+            out.push("check the arguments you passed — the API rejected the request.".into());
         }
         _ => {}
     }
+    out
+}
+
+/// Render a `BitbucketError` for a human, as a single block of `stderr` text
+/// (no trailing newline). Honors the active [`Theme`] for color / unicode.
+pub fn display_error(e: &BitbucketError) -> String {
+    let theme = Theme::current();
+    let mut s = format!("bbr: {}", theme.error(&e.to_string()));
+    for h in hints(e) {
+        s.push_str(&format!("\n  {} {h}", theme.dim("hint:")));
+    }
+    s
+}
+
+/// Print a human-readable error to stderr and return the mapped exit code.
+/// Honors the active theme; safe to call in non-TTY and `--no-color` contexts.
+pub fn report(e: &BitbucketError) -> std::process::ExitCode {
+    eprintln!("{}", display_error(e));
     e.exit_code().as_process()
+}
+
+/// Emit a stable machine-readable error object to stderr and return the
+/// mapped exit code. Used when `--json` is set so scripts can parse failures.
+pub fn report_json(e: &BitbucketError) -> std::process::ExitCode {
+    let code = e.exit_code() as u8;
+    let body = serde_json::json!({
+        "error": {
+            "kind": e.kind(),
+            "exit_code": code,
+            "message": e.to_string(),
+        }
+    });
+    let mut err = std::io::stderr().lock();
+    let _ = serde_json::to_writer_pretty(&mut err, &body);
+    let _ = err.write_all(b"\n");
+    code.into()
 }
 
 #[cfg(test)]
@@ -182,5 +266,48 @@ mod tests {
         let e = BitbucketError::Other("disk full".into());
         let msg = format!("{e}");
         assert!(msg.contains("disk full"));
+    }
+
+    #[test]
+    fn kind_covers_all_variants() {
+        assert_eq!(BitbucketError::NoCredentials.kind(), "auth");
+        assert_eq!(BitbucketError::AuthFailed("x".into()).kind(), "auth");
+        assert_eq!(BitbucketError::NotFound("x".into()).kind(), "not_found");
+        assert_eq!(BitbucketError::RateLimit("x".into()).kind(), "rate_limit");
+        assert_eq!(BitbucketError::Config("x".into()).kind(), "config");
+        assert_eq!(BitbucketError::Git("x".into()).kind(), "git");
+        assert_eq!(BitbucketError::Io(std::io::Error::other("x")).kind(), "io");
+        assert_eq!(
+            BitbucketError::PipelineFailed {
+                build_number: None,
+                branch: None,
+            }
+            .kind(),
+            "pipeline_failed"
+        );
+        assert_eq!(BitbucketError::Other("x".into()).kind(), "generic");
+        assert_eq!(BitbucketError::BadRequest("x".into()).kind(), "bad_request");
+    }
+
+    #[test]
+    fn hints_exist_for_common_errors() {
+        assert!(!hints(&BitbucketError::NoCredentials).is_empty());
+        assert!(!hints(&BitbucketError::AuthFailed("x".into())).is_empty());
+        assert!(!hints(&BitbucketError::RateLimit("x".into())).is_empty());
+        assert!(!hints(&BitbucketError::NotFound("x".into())).is_empty());
+        assert!(!hints(&BitbucketError::Config("x".into())).is_empty());
+        assert!(!hints(&BitbucketError::BadRequest("x".into())).is_empty());
+        assert!(!hints(&BitbucketError::Git("no git remote found".into())).is_empty());
+        assert!(!hints(&BitbucketError::Git("HEAD is detached".into())).is_empty());
+        assert!(hints(&BitbucketError::Other("x".into())).is_empty());
+    }
+
+    #[test]
+    fn display_error_includes_hints() {
+        let e = BitbucketError::NoCredentials;
+        let s = display_error(&e);
+        assert!(s.contains("bbr:"));
+        assert!(s.contains("hint:"));
+        assert!(s.contains("auth setup"));
     }
 }

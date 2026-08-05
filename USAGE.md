@@ -65,7 +65,7 @@ These flags are available on **every** subcommand:
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--json` | | Emit stable JSON instead of human output |
-| `--verbose` | `-v` | Increase verbosity (`-v` = info, `-vv` = debug) |
+| `--verbose` | `-v` | Increase verbosity (`-v` = debug, `-vv` = trace) |
 | `--workspace <WS>` | | Override workspace inferred from git remote (env: `BB_WORKSPACE`) |
 | `--slug <SLUG>` | | Override repo slug inferred from git remote (env: `BB_SLUG`) |
 | `--api-base <URL>` | | Override the Bitbucket API base URL (env: `BITBUCKET_API_BASE`) |
@@ -238,6 +238,7 @@ bbr pr merge 467                                 # merge with confirmation promp
 bbr pr merge 467 --close-source-branch           # close source branch after merge
 bbr pr merge 467 --strategy squash               # merge strategy: merge_commit | squash | fast_forward
 bbr pr merge 467 --message "closes #123"         # custom merge commit message
+bbr pr merge 467 --yes                           # skip the confirmation prompt
 bbr pr merge-check 467                           # can this PR merge? (conflicts/statuses/approvals)
 bbr pr add-reviewer 467 alice                    # username or UUID
 bbr pr remove-reviewer 467 alice
@@ -421,8 +422,11 @@ bbr batch merge-approved --strategy squash       # merge strategy
 bbr batch merge-approved --dry-run               # plan only, no changes
 bbr batch merge-approved --yes                   # skip confirmation
 bbr batch merge-approved --max 10                # process at most 10 PRs
+bbr batch merge-approved --close-source-branch   # also close source branches after merge
 bbr batch merge-approved --json                  # machine-readable plan/result
 ```
+
+Source branches are never closed unless `--close-source-branch` is passed.
 
 Plan output:
 
@@ -1112,6 +1116,11 @@ Platform paths:
 | 3 | not found |
 | 4 | rate limited |
 | 5 | pipeline failed (`bbr ci watch`) |
+| 64 | usage error (invalid flags/arguments — distinct from operation failures) |
+
+Exit codes are a stable public contract — scripts can branch on `$?`. Usage
+errors (unknown flags, invalid values) exit with `64` (BSD sysexits) so they
+never collide with the operation codes above.
 
 ---
 

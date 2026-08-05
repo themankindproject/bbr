@@ -818,6 +818,7 @@ pub async fn merge(
     close_source_branch: bool,
     strategy: Option<&str>,
     message: Option<&str>,
+    yes: bool,
 ) -> Result<()> {
     let repo = resolve_repo(g)?;
     let client = client(g)?;
@@ -837,7 +838,8 @@ pub async fn merge(
     let pr = client.get_pr(&repo.workspace, &repo.slug, id).await?;
     spinner.finish();
 
-    if !g.json
+    if !yes
+        && !g.json
         && !confirm(&format!(
             "Merge PR #{} ({}) from {} into {}? [y/N] ",
             pr.id,
@@ -981,6 +983,7 @@ pub async fn diff(
         crate::diff::filter_raw_diff(&body, paths)
     };
 
+    // `--json` wins over every display mode: emit the structured shape.
     if g.json {
         let files = crate::diff::filter_files(crate::diff::parser::parse(&body), paths);
         let output = serde_json::json!({
@@ -1008,8 +1011,7 @@ pub async fn diff(
             print_paginated(&rendered)
         }
     } else if raw {
-        let fmt = Formatter::from_json_flag(false);
-        fmt.print_diff(&serde_json::json!({ "id": id, "diff": body }), &body)
+        print_block(&body)
     } else {
         let theme = Theme::current();
         let files = crate::diff::filter_files(crate::diff::parser::parse(&body), paths);
@@ -1473,8 +1475,9 @@ fn render_view(out: &PrViewOut) -> String {
             truncate_desc(d, 200)
         ));
     }
+    let arrow = if theme.unicode_enabled() { "→" } else { "->" };
     s.push_str(&format!(
-        "  {} {} → {}\n",
+        "  {} {} {arrow} {}\n",
         theme.label("Branches:"),
         out.source,
         out.destination
@@ -1515,7 +1518,11 @@ fn truncate_desc(s: &str, n: usize) -> String {
         }
     } else {
         let mut out: String = first.chars().take(n.saturating_sub(1)).collect();
-        out.push('…');
+        if crate::output::theme::Theme::current().unicode_enabled() {
+            out.push('…');
+        } else {
+            out.push_str("...");
+        }
         out.push_str(&format!("\n  (... {}, use --json for full)", "truncated"));
         out
     }

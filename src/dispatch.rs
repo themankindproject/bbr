@@ -16,6 +16,14 @@ use crate::error::Result;
 
 pub(crate) async fn dispatch(cli: Cli) -> Result<()> {
     let g = &cli.global;
+
+    // Fail fast on missing credentials BEFORE git detection so the error
+    // says "auth first", not "not a git repo". Commands that legitimately
+    // work without credentials are excluded.
+    if command_needs_auth(&cli.command) {
+        crate::auth::resolve()?;
+    }
+
     match cli.command {
         None => {
             let result = commands::status::run_overview(g).await;
@@ -66,7 +74,18 @@ pub(crate) async fn dispatch(cli: Cli) -> Result<()> {
                 commands::completion::install(shell)?;
             } else {
                 let shell = shell.unwrap_or(Shell::Bash);
-                generate(shell, &mut Cli::command(), "bbr", &mut io::stdout());
+                // Generate into a buffer first: clap_complete panics on write
+                // errors (e.g. EPIPE when piped to `head`). Writing the buffer
+                // ourselves turns that into a clean exit.
+                let mut buf: Vec<u8> = Vec::new();
+                generate(shell, &mut Cli::command(), "bbr", &mut buf);
+                use std::io::Write;
+                match io::stdout().write_all(&buf) {
+                    // `head`-style consumers closing early is normal; don't
+                    // treat it as an error.
+                    Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+                    other => other?,
+                }
             }
             Ok(())
         }
@@ -125,6 +144,11 @@ async fn dispatch_status(
 ) -> Result<()> {
     if let Some(fmt) = export {
         let status_res = commands::status::run_inner(&g).await?;
+        if g.json {
+            // `--json` wins over `--export`: emit the machine-readable shape.
+            let formatter = crate::output::Formatter::from_json_flag(true);
+            return formatter.print(&status_res, "");
+        }
         let text = match fmt.as_str() {
             "slack" => commands::export::format_slack(&status_res),
             "markdown" => commands::export::format_markdown(&status_res),
@@ -249,6 +273,7 @@ async fn dispatch_pr(g: &GlobalArgs, action: PrAction) -> Result<()> {
             close_source_branch,
             strategy,
             message,
+            yes,
             g,
         } => {
             commands::pr::merge(
@@ -257,6 +282,7 @@ async fn dispatch_pr(g: &GlobalArgs, action: PrAction) -> Result<()> {
                 close_source_branch,
                 strategy.as_deref(),
                 message.as_deref(),
+                yes,
             )
             .await
         }
@@ -500,6 +526,7 @@ async fn dispatch_batch(g: &GlobalArgs, action: BatchAction) -> Result<()> {
             repo,
             dry_run,
             strategy,
+            close_source_branch,
             yes,
             max,
         } => {
@@ -508,6 +535,7 @@ async fn dispatch_batch(g: &GlobalArgs, action: BatchAction) -> Result<()> {
                 repo.as_deref(),
                 dry_run,
                 strategy.as_deref(),
+                close_source_branch,
                 yes,
                 max,
             )
@@ -721,5 +749,42 @@ fn dispatch_context(action: ContextAction) -> Result<()> {
         ContextAction::List { g } => commands::context::list(&g),
         ContextAction::Use { name, g } => commands::context::use_context(&g, &name),
         ContextAction::Delete { name, g } => commands::context::delete(&g, &name),
+    }
+}
+
+/// Whether a top-level command needs valid Bitbucket credentials to run.
+///
+/// Commands in this list fail fast in `dispatch()` with an auth error even in
+/// a non-git directory, instead of surfacing a confusing "not a git repo" or
+/// API 404. Commands excluded here either manage credentials themselves,
+/// read local state only, or explicitly report on auth state.
+fn command_needs_auth(cmd: &Option<Command>) -> bool {
+    match cmd {
+        None => true, // `bbr` overview hits the API
+        Some(Command::Status { .. }) | Some(Command::Pr { .. }) | Some(Command::Batch { .. }) => {
+            true
+        }
+        Some(Command::Ci { .. })
+        | Some(Command::Repo { .. })
+        | Some(Command::Commit { .. })
+        | Some(Command::Api { .. })
+        | Some(Command::Webhook { .. })
+        | Some(Command::Src { .. })
+        | Some(Command::Deploy { .. })
+        | Some(Command::Issue { .. })
+        | Some(Command::Search { .. })
+        | Some(Command::Workspace { .. })
+        | Some(Command::Variable { .. })
+        | Some(Command::DeployKeys { .. }) => true,
+        // `open` resolves URLs via the API but its local path is still useful
+        // without creds; let the handler produce its own error.
+        Some(Command::Open { .. }) => false,
+        // Local / self-service commands.
+        Some(Command::Auth { .. })
+        | Some(Command::Completion { .. })
+        | Some(Command::Config { .. })
+        | Some(Command::Context { .. })
+        | Some(Command::Schema { .. })
+        | Some(Command::Update { .. }) => false,
     }
 }

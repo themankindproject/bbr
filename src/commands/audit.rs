@@ -230,18 +230,28 @@ fn render_audit(out: &AuditOut) -> String {
 
     for repo in &out.repos {
         if repo.issues.is_empty() {
+            let mark = if theme.unicode_enabled() { "✓" } else { "OK" };
             s.push_str(&format!(
-                "{} {} ✓\n",
+                "{} {} {}\n",
                 repo.slug,
+                theme.success(mark),
                 theme.success("(0 issues)")
             ));
         } else {
             s.push_str(&format!("{} ({} issues)\n", repo.slug, repo.issues.len()));
             for issue in &repo.issues {
                 let prefix = match issue.severity.as_str() {
-                    "error" => theme.error("  ✖"),
-                    "warning" => theme.warn("  ⚠"),
-                    "info" => theme.dim("  ℹ"),
+                    "error" => theme.error("  X"),
+                    "warning" => theme.warn(if theme.unicode_enabled() {
+                        "  ⚠"
+                    } else {
+                        "  !"
+                    }),
+                    "info" => theme.dim(if theme.unicode_enabled() {
+                        "  ℹ"
+                    } else {
+                        "  i"
+                    }),
                     _ => "  ?".into(),
                 };
                 s.push_str(&format!("{} {}\n", prefix, issue.message));

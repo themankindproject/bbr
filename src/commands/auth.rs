@@ -32,16 +32,21 @@ pub fn setup(username: Option<String>, token: Option<String>) -> Result<()> {
             println!("bbr auth setup");
             println!("  Need an API token? {API_TOKEN_URL}");
             println!("  Required scopes (select ALL for full CLI access):");
-            println!("    ✓ read:user:bitbucket");
-            println!("    ✓ read:repository:bitbucket");
-            println!("    ✓ write:repository:bitbucket  (for commit statuses)");
-            println!("    ✓ read:pullrequest:bitbucket");
-            println!("    ✓ write:pullrequest:bitbucket  (create/merge/approve PRs)");
-            println!("    ✓ read:pipeline:bitbucket");
-            println!("    ✓ write:pipeline:bitbucket    (rerun/stop pipelines)");
-            println!("    ✓ read:issue:bitbucket        (optional — issue tracking)");
-            println!("    ✓ write:issue:bitbucket       (optional — create issues)");
-            println!("    ✓ webhook:bitbucket           (optional — webhook management)");
+            let check = if crate::output::theme::Theme::current().unicode_enabled() {
+                "✓"
+            } else {
+                "*"
+            };
+            println!("    {check} read:user:bitbucket");
+            println!("    {check} read:repository:bitbucket");
+            println!("    {check} write:repository:bitbucket  (for commit statuses)");
+            println!("    {check} read:pullrequest:bitbucket");
+            println!("    {check} write:pullrequest:bitbucket  (create/merge/approve PRs)");
+            println!("    {check} read:pipeline:bitbucket");
+            println!("    {check} write:pipeline:bitbucket    (rerun/stop pipelines)");
+            println!("    {check} read:issue:bitbucket        (optional — issue tracking)");
+            println!("    {check} write:issue:bitbucket       (optional — create issues)");
+            println!("    {check} webhook:bitbucket           (optional — webhook management)");
             println!();
 
             let u = prompt("Bitbucket username (email): ")?;
@@ -88,6 +93,12 @@ pub fn setup(username: Option<String>, token: Option<String>) -> Result<()> {
 }
 
 /// Verify auth works by calling `GET /user`.
+///
+/// Unlike most commands this is a *status* command: it reports what it finds
+/// rather than failing loudly. When no credentials exist the human output says
+/// exactly that (exit 0 — the report is the answer). When credentials exist
+/// but the API call fails, the failure is reported truthfully and mapped to
+/// its stable exit code so scripts can branch on it.
 pub async fn status(g: &GlobalArgs) -> Result<()> {
     let creds = auth::resolve();
     let (username, kind) = match creds {
@@ -106,64 +117,55 @@ pub async fn status(g: &GlobalArgs) -> Result<()> {
         "none"
     };
 
-    let client = client(g);
-    let (authenticated, display_name, account_id, error_msg, rate_limit_remaining) = match client {
-        Ok(c) => match c.current_user().await {
-            Ok(u) => (
-                true,
-                Some(u.display_name),
-                u.uuid,
-                None,
-                c.rate_limit_remaining(),
-            ),
-            Err(e) => (
-                false,
-                None,
-                None,
-                Some(e.to_string()),
-                c.rate_limit_remaining(),
-            ),
-        },
-        Err(e) => (false, None, None, Some(e.to_string()), None),
-    };
-
-    let out = AuthStatusOut {
-        authenticated,
+    let mut out = AuthStatusOut {
+        authenticated: false,
         username,
         credential_kind: kind.map(|k| match k {
             CredentialKind::ApiToken => "atlassian_api_token".into(),
         }),
-        display_name,
-        account_id,
+        display_name: None,
+        account_id: None,
         source,
-        rate_limit_remaining,
+        rate_limit_remaining: None,
     };
 
+    // No credentials at all: report it (exit 0 — this *is* the status).
+    if kind.is_none() {
+        let fmt = make_formatter(g);
+        let human = "No Bitbucket credentials found. Run `bbr auth setup` or set \
+                     BITBUCKET_USERNAME + BITBUCKET_TOKEN."
+            .to_string();
+        return fmt.print(&out, &human);
+    }
+
+    let client = client(g)?;
+    match client.current_user().await {
+        Ok(u) => {
+            out.authenticated = true;
+            out.display_name = Some(u.display_name);
+            out.account_id = u.uuid;
+            out.rate_limit_remaining = client.rate_limit_remaining();
+        }
+        Err(e) => {
+            // Credentials exist but the API rejected/errored: surface the
+            // real failure. Exit non-zero so scripts can detect it.
+            return Err(e);
+        }
+    }
+
     let fmt = make_formatter(g);
-    let human = if out.authenticated {
-        let mut msg = format!(
-            "Authenticated as {} ({}) via {}",
-            out.display_name.as_deref().unwrap_or(&out.username),
-            out.username,
-            out.source
-        );
-        if let Some(remaining) = out.rate_limit_remaining {
-            msg.push_str(&format!("\nAPI rate limit remaining: {remaining}"));
-            if remaining < 50 {
-                msg.push_str(" (low — consider slowing batch operations)");
-            }
+    let mut human = format!(
+        "Authenticated as {} ({}) via {}",
+        out.display_name.as_deref().unwrap_or(&out.username),
+        out.username,
+        out.source
+    );
+    if let Some(remaining) = out.rate_limit_remaining {
+        human.push_str(&format!("\nAPI rate limit remaining: {remaining}"));
+        if remaining < 50 {
+            human.push_str(" (low — consider slowing batch operations)");
         }
-        msg
-    } else {
-        let mut msg = String::new();
-        if let Some(err) = &error_msg {
-            msg.push_str(err);
-        } else {
-            msg.push_str("Not authenticated.");
-        }
-        msg.push_str("\nRun `bbr auth setup`.");
-        msg
-    };
+    }
     fmt.print(&out, &human)
 }
 
@@ -180,8 +182,14 @@ pub async fn test(g: &GlobalArgs) -> Result<()> {
         "credential_type": "atlassian_api_token",
     });
     let human = format!(
-        "✓ Authenticated as {} ({})",
-        user.display_name, creds.username
+        "{} Authenticated as {} ({})",
+        if crate::output::theme::Theme::current().unicode_enabled() {
+            "✓"
+        } else {
+            "OK"
+        },
+        user.display_name,
+        creds.username
     );
     make_formatter(g).print(&out, &human)
 }
@@ -216,7 +224,12 @@ fn prompt_secret(msg: &str) -> Result<String> {
     let s = rpassword::prompt_password(msg).map_err(BitbucketError::Io)?;
     let s = strip_bracketed_paste(&s);
     let s = s.trim().to_string();
-    eprintln!("  ✓ Token read ({} characters)", s.len());
+    let check = if crate::output::theme::Theme::current().unicode_enabled() {
+        "✓"
+    } else {
+        "OK"
+    };
+    eprintln!("  {check} Token read ({} characters)", s.len());
     Ok(s)
 }
 

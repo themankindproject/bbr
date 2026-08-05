@@ -10,7 +10,7 @@ use crate::commands::{
     client, current_head, human_duration, make_formatter, make_spinner, resolve_repo, truncate,
     SpinnerGuard,
 };
-use crate::error::{BitbucketError, Result};
+use crate::error::{display_error, BitbucketError, Result};
 use crate::git::Head;
 use crate::output::table::Table;
 use crate::output::theme::Theme;
@@ -277,7 +277,7 @@ pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
                 if io::stdout().is_terminal() {
                     eprint!("\x1B[2J\x1B[H");
                 }
-                eprintln!("bbr: {e}");
+                eprintln!("{}", display_error(&e));
                 if matches!(
                     e,
                     crate::error::BitbucketError::AuthFailed(_)
@@ -709,8 +709,9 @@ fn render_pr_section(
             rel_str
         ));
         s.push_str(&format!("{}\n", theme.separator()));
+        let arrow = if theme.unicode_enabled() { "→" } else { "->" };
         s.push_str(&format!(
-            "  {} {} → {}\n",
+            "  {} {} {arrow} {}\n",
             theme.label("Branches:"),
             pr.source,
             pr.destination
