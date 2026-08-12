@@ -1379,19 +1379,19 @@ fn render_side_by_side_row(
             })
             .unwrap_or(" ");
         // #10: left edge pipe in plain mode too
-        out.push_str(&format!(
-            "{}{}{}{}{}{}{}{}{}{}",
-            pipe,
-            left_lineno,
-            sep,
-            left_sign,
-            " ",
-            left_content,
-            sep,
-            right_lineno,
-            &format!("{}{}{}\n", sep, right_sign, right_content),
-            "",
-        ));
+        out.push_str(pipe);
+        out.push_str(&left_lineno);
+        out.push_str(&sep);
+        out.push_str(left_sign);
+        out.push(' ');
+        out.push_str(&left_content);
+        out.push_str(&sep);
+        out.push_str(&right_lineno);
+        out.push_str(&sep);
+        out.push_str(right_sign);
+        out.push(' ');
+        out.push_str(&right_content);
+        out.push('\n');
     }
     match (del, add) {
         (Some(l), Some(r)) if std::ptr::eq(l, r) => append_no_newline_marker(l, theme, out),
@@ -1494,36 +1494,6 @@ fn dim<'a>(s: &'a str, theme: &Theme) -> Cow<'a, str> {
     } else {
         Cow::Borrowed(s)
     }
-}
-
-/// Truncate a string in the middle if it exceeds max_width.
-#[allow(dead_code)]
-fn truncate_mid(s: &str, max_width: usize) -> String {
-    let w = s.width();
-    if w <= max_width || max_width < 5 {
-        return s.to_string();
-    }
-    // Show start and end, with "…" in the middle
-    let each = (max_width - 1) / 2; // 1 for "…"
-
-    // Collect char indices for safe slicing
-    let char_indices: Vec<(usize, char)> = s.char_indices().collect();
-    let char_count = char_indices.len();
-
-    let mut result = String::with_capacity(max_width);
-
-    // Take `each` chars from the start
-    for &(_byte_idx, ch) in char_indices.iter().take(each) {
-        result.push(ch);
-    }
-    result.push('\u{2026}');
-
-    // Take `each` chars from the end
-    let end_char_start = char_count.saturating_sub(each);
-    for &(_byte_idx, ch) in char_indices.iter().skip(end_char_start) {
-        result.push(ch);
-    }
-    result
 }
 
 fn truncate_code_raw(s: &str, max_width: usize) -> String {
@@ -2095,37 +2065,6 @@ diff --git a/a.rs b/a.rs
             !result.contains("\x1b[30;102m") && !result.contains("\x1b[30;101m"),
             "word-diff highlight should be off, got:\n{result}"
         );
-    }
-
-    #[test]
-    fn test_truncate_mid_ascii() {
-        let s = "abcdefghijklmnopqrstuvwxyz";
-        let result = truncate_mid(s, 11);
-        assert_eq!(result.len(), 11 + 2); // "…" is 3 bytes
-        assert!(result.contains('\u{2026}'));
-    }
-
-    #[test]
-    fn test_truncate_mid_short_string() {
-        let s = "hello";
-        let result = truncate_mid(s, 10);
-        assert_eq!(result, "hello");
-    }
-
-    #[test]
-    fn test_truncate_mid_utf8_no_panic() {
-        // Multi-byte characters: each emoji is 4 bytes
-        let s = "\u{1f980}\u{1f980}\u{1f980}\u{1f980}\u{1f980}\u{1f980}\u{1f980}\u{1f980}\u{1f980}\u{1f980}";
-        let result = truncate_mid(s, 7);
-        assert!(result.contains('\u{2026}'));
-        // Should not panic - that's the main thing we're testing
-    }
-
-    #[test]
-    fn test_truncate_mid_mixed_utf8_no_panic() {
-        let s = "h\u{e9}llo w\u{f6}rld caf\u{e9} r\u{e9}sum\u{e9} na\u{ef}ve";
-        let result = truncate_mid(s, 12);
-        assert!(result.contains('\u{2026}'));
     }
 
     #[test]

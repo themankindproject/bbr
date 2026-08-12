@@ -3,13 +3,12 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use bbr::api::BitbucketClient;
-use bbr::auth::{CredentialKind, Credentials};
+use bbr::auth::Credentials;
 
 async fn client(base: &str) -> BitbucketClient {
     let creds = Credentials {
         username: "u@example.com".into(),
         secret: "tok".into(),
-        kind: CredentialKind::ApiToken,
     };
     BitbucketClient::new(base, creds).unwrap()
 }

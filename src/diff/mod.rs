@@ -15,7 +15,7 @@ pub use parser::{
     filter_raw_diff, parse, parse_diff_git_paths, DiffFile, DiffHunk, DiffLine, DiffLineKind,
     FileStatus,
 };
-pub use pathspec::{matches_any as pathspec_matches_any, matches_one as pathspec_matches};
+pub use pathspec::matches_any as pathspec_matches_any;
 pub use renderer::{
     render, render_name_only, render_name_status, render_to, DiffRenderOptions, RenderMode,
 };

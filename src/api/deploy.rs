@@ -13,8 +13,6 @@ pub struct DeployKey {
     pub key: String,
     #[serde(default)]
     pub label: String,
-    #[serde(default, rename = "type")]
-    pub key_type: Option<String>,
     #[serde(default)]
     pub created_on: Option<String>,
     #[serde(default)]
@@ -32,11 +30,7 @@ pub struct DeploymentEnvironment {
     #[serde(default)]
     pub environment_type: EnvironmentType,
     #[serde(default)]
-    pub slug: Option<String>,
-    #[serde(default)]
     pub rank: u32,
-    #[serde(default)]
-    pub hidden: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

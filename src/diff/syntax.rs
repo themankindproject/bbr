@@ -68,10 +68,6 @@ impl FileHighlighter {
             _ => Vec::new(),
         }
     }
-
-    pub fn enabled(&self) -> bool {
-        self.inner.is_some()
-    }
 }
 
 /// One-shot highlight (no multi-line state) — used for side-by-side rows.

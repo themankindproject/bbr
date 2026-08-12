@@ -1169,7 +1169,7 @@ fn render_status(out: &CiStatusOut) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::pipeline::{Named, PipelineState};
+    use crate::api::pipeline::PipelineState;
 
     fn step(uuid: &str, name: &str, state: &str) -> PipelineStep {
         PipelineStep {
@@ -1177,15 +1177,11 @@ mod tests {
             name: name.into(),
             state: PipelineState {
                 name: state.into(),
-                stage: Some(Named { name: "x".into() }),
                 result: None,
             },
             duration_in_seconds: 1,
             started_on: None,
             completed_on: None,
-            setup_commands: None,
-            commands: None,
-            script_commands: None,
             links: Default::default(),
         }
     }

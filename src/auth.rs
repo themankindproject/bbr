@@ -8,7 +8,6 @@
 //! HTTP Basic authentication — no legacy PAT or AppPassword support.
 
 use secrecy::SecretString;
-use serde::{Deserialize, Serialize};
 
 use crate::config::load_credentials;
 use crate::error::{BitbucketError, Result};
@@ -24,7 +23,6 @@ pub const ENV_TOKEN: &str = "BITBUCKET_TOKEN";
 pub struct Credentials {
     pub username: String,
     pub secret: SecretString,
-    pub kind: CredentialKind,
 }
 
 impl std::fmt::Debug for Credentials {
@@ -32,16 +30,8 @@ impl std::fmt::Debug for Credentials {
         f.debug_struct("Credentials")
             .field("username", &self.username)
             .field("secret", &"[REDACTED]")
-            .field("kind", &self.kind)
             .finish()
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CredentialKind {
-    /// Atlassian API token from id.atlassian.com (Basic auth).
-    ApiToken,
 }
 
 /// Resolve credentials from the environment first, then the config file.
@@ -77,7 +67,6 @@ fn from_env() -> Option<Credentials> {
     Some(Credentials {
         username,
         secret: SecretString::from(token_trimmed),
-        kind: CredentialKind::ApiToken,
     })
 }
 
@@ -96,7 +85,6 @@ fn from_config() -> Result<Option<Credentials>> {
     Ok(Some(Credentials {
         username: username.to_string(),
         secret: SecretString::from(secret.to_string()),
-        kind: CredentialKind::ApiToken,
     }))
 }
 
@@ -113,7 +101,6 @@ mod tests {
         std::env::set_var(ENV_USERNAME, "u@example.com");
         std::env::set_var(ENV_TOKEN, "ATATT-example");
         let c = from_env().unwrap();
-        assert_eq!(c.kind, CredentialKind::ApiToken);
         assert_eq!(c.username, "u@example.com");
         std::env::remove_var(ENV_TOKEN);
         std::env::remove_var(ENV_USERNAME);

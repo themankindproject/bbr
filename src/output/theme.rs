@@ -198,30 +198,12 @@ impl Theme {
         }
     }
 
-    /// Standardized empty state message.
-    pub fn empty(&self, msg: &str) -> String {
-        if self.colors {
-            format!("  {} {}\n", "—".dimmed(), msg.dimmed())
-        } else {
-            format!("  — {msg}\n")
-        }
-    }
-
     /// Standardized checkmark for success indicators.
     pub fn checkmark(&self) -> &'static str {
         if self.unicode {
             "✓"
         } else {
             "OK"
-        }
-    }
-
-    /// Standardized cross for failure indicators.
-    pub fn cross(&self) -> &'static str {
-        if self.unicode {
-            "✗"
-        } else {
-            "X"
         }
     }
 

@@ -1321,15 +1321,12 @@ mod tests {
                 name: "COMPLETED".into(),
                 result: Some(crate::api::pipeline::PipelineResult {
                     name: "SUCCESSFUL".into(),
-                    type_: None,
                 }),
-                stage: None,
             },
             duration_in_seconds: 120,
             target: crate::api::pipeline::PipelineTarget {
                 ref_name: Some("main".into()),
                 commit: Some(crate::api::pipeline::CommitRef { hash: "abc".into() }),
-                ..Default::default()
             },
             links: crate::api::pr::Links {
                 html: crate::api::pr::Link {
@@ -1345,7 +1342,6 @@ mod tests {
             state: crate::api::pipeline::PipelineState {
                 name: "SUCCESSFUL".into(),
                 result: None,
-                stage: None,
             },
             duration_in_seconds: 60,
             ..Default::default()
@@ -1366,9 +1362,7 @@ mod tests {
                 name: "COMPLETED".into(),
                 result: Some(crate::api::pipeline::PipelineResult {
                     name: "FAILED".into(),
-                    type_: None,
                 }),
-                stage: None,
             },
             duration_in_seconds: 60,
             ..Default::default()
@@ -1379,7 +1373,6 @@ mod tests {
             state: crate::api::pipeline::PipelineState {
                 name: "SUCCESSFUL".into(),
                 result: None,
-                stage: None,
             },
             ..Default::default()
         };
@@ -1389,7 +1382,6 @@ mod tests {
             state: crate::api::pipeline::PipelineState {
                 name: "FAILED".into(),
                 result: None,
-                stage: None,
             },
             ..Default::default()
         };

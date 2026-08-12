@@ -190,13 +190,6 @@ pub fn checkout_branch(branch: &str) -> Result<()> {
     }
 }
 
-/// Convenience: detect the repo identity and current HEAD together.
-pub fn context() -> Result<(RepoIdentity, Head)> {
-    let repo = detect_repo()?;
-    let head = head()?;
-    Ok((repo, head))
-}
-
 /// Run git status --porcelain to see if working tree is dirty.
 pub fn git_status_porcelain() -> Result<String> {
     git(&["status", "--porcelain"])

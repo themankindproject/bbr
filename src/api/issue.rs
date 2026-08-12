@@ -238,11 +238,6 @@ impl BitbucketClient {
         self.send(reqwest::Method::PUT, &path, Some(&raw)).await
     }
 
-    pub async fn delete_issue(&self, workspace: &str, slug: &str, id: u64) -> Result<()> {
-        let path = format!("/repositories/{workspace}/{slug}/issues/{id}");
-        self.send_empty(reqwest::Method::DELETE, &path, None).await
-    }
-
     pub async fn list_issue_comments(
         &self,
         workspace: &str,

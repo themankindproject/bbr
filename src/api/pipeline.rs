@@ -60,22 +60,11 @@ pub struct PipelineState {
     #[serde(default)]
     pub name: String,
     #[serde(default)]
-    pub stage: Option<Named>,
-    #[serde(default)]
     pub result: Option<PipelineResult>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PipelineResult {
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    #[serde(rename = "type")]
-    pub type_: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Named {
     #[serde(default)]
     pub name: String,
 }
@@ -85,13 +74,7 @@ pub struct PipelineTarget {
     #[serde(default)]
     pub ref_name: Option<String>,
     #[serde(default)]
-    pub ref_type: Option<String>,
-    #[serde(default)]
     pub commit: Option<CommitRef>,
-    #[serde(default)]
-    pub selector: Option<Named>,
-    #[serde(rename = "type", default)]
-    pub kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -114,12 +97,6 @@ pub struct PipelineStep {
     pub started_on: Option<String>,
     #[serde(default)]
     pub completed_on: Option<String>,
-    #[serde(default)]
-    pub setup_commands: Option<Vec<Command>>,
-    #[serde(default)]
-    pub commands: Option<Vec<Command>>,
-    #[serde(default)]
-    pub script_commands: Option<Vec<Command>>,
     #[serde(default)]
     pub links: super::pr::Links,
 }
@@ -147,14 +124,6 @@ impl PipelineStep {
             "SUCCESSFUL" | "FAILED" | "ERROR" | "STOPPED"
         )
     }
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct Command {
-    #[serde(default)]
-    pub command: String,
-    #[serde(default)]
-    pub name: Option<String>,
 }
 
 pub struct StepLog {
@@ -327,17 +296,6 @@ impl BitbucketClient {
     ) -> Result<String> {
         let path = format!("/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/{step}/log");
         self.send_raw_range(&path, start_byte).await
-    }
-
-    /// `POST /repositories/{ws}/{slug}/pipelines/` — trigger a new pipeline.
-    pub async fn trigger_pipeline(
-        &self,
-        workspace: &str,
-        slug: &str,
-        branch: &str,
-    ) -> Result<Pipeline> {
-        self.trigger_pipeline_with_variables(workspace, slug, branch, None)
-            .await
     }
 
     /// `POST /repositories/{ws}/{slug}/pipelines/` — trigger a new pipeline with optional variables.
@@ -628,11 +586,9 @@ mod tests {
             state: PipelineState {
                 name: "IN_PROGRESS".into(),
                 result: None,
-                stage: None,
             },
             result: Some(PipelineResult {
                 name: result_name.into(),
-                type_: None,
             }),
             ..Default::default()
         }
@@ -645,10 +601,6 @@ mod tests {
                 name: "COMPLETED".into(),
                 result: Some(PipelineResult {
                     name: state_result.into(),
-                    type_: None,
-                }),
-                stage: Some(Named {
-                    name: "pipeline".into(),
                 }),
             },
             result: None,
@@ -682,7 +634,6 @@ mod tests {
             state: PipelineState {
                 name: "PENDING".into(),
                 result: None,
-                stage: None,
             },
             result: None,
             ..Default::default()
@@ -705,7 +656,6 @@ mod tests {
                 state: PipelineState {
                     name: state.to_string(),
                     result: None,
-                    stage: None,
                 },
                 ..Default::default()
             };
@@ -721,7 +671,6 @@ mod tests {
             state: PipelineState {
                 name: "SUCCESSFUL".into(),
                 result: None,
-                stage: None,
             },
             ..Default::default()
         };
@@ -737,9 +686,7 @@ mod tests {
                 name: "COMPLETED".into(),
                 result: Some(PipelineResult {
                     name: "FAILED".into(),
-                    type_: None,
                 }),
-                stage: None,
             },
             ..Default::default()
         };
@@ -754,7 +701,6 @@ mod tests {
             state: PipelineState {
                 name: "RUNNING".into(),
                 result: None,
-                stage: None,
             },
             ..Default::default()
         };

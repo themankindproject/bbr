@@ -197,8 +197,6 @@ pub struct User {
 pub struct Markdown {
     #[serde(default)]
     pub raw: String,
-    #[serde(default)]
-    pub markup: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -470,20 +468,6 @@ impl BitbucketClient {
             .next())
     }
 
-    /// Look up the latest open PR whose source branch is `branch`, if any.
-    pub async fn pr_for_branch(
-        &self,
-        workspace: &str,
-        slug: &str,
-        branch: &str,
-    ) -> Result<Option<PullRequest>> {
-        Ok(self
-            .prs_for_branch(workspace, slug, branch)
-            .await?
-            .into_iter()
-            .next())
-    }
-
     /// Look up all open PRs whose source branch is `branch`.
     pub async fn prs_for_branch(
         &self,
@@ -568,24 +552,6 @@ impl BitbucketClient {
         let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}");
         let raw = serde_json::to_string(body)?;
         self.send(reqwest::Method::PUT, &path, Some(&raw)).await
-    }
-
-    /// Replace the reviewer list on an existing pull request.
-    pub async fn set_pr_reviewers(
-        &self,
-        workspace: &str,
-        slug: &str,
-        id: u64,
-        reviewers: Vec<ReviewerRef>,
-    ) -> Result<PullRequest> {
-        let pr = self.get_pr(workspace, slug, id).await?;
-        let body = UpdatePrRequest {
-            title: pr.title,
-            description: None,
-            close_source_branch: None,
-            reviewers: Some(reviewers),
-        };
-        self.update_pr(workspace, slug, id, &body).await
     }
 
     /// Add a reviewer (by UUID) to an existing pull request.

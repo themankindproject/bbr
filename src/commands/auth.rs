@@ -4,7 +4,7 @@ use std::io::{self, BufRead, Write};
 
 use serde::Serialize;
 
-use crate::auth::{self, CredentialKind};
+use crate::auth;
 use crate::cli::GlobalArgs;
 use crate::commands::{client, make_formatter};
 use crate::config::{self, CredentialProfile, CredentialsFile};
@@ -101,8 +101,8 @@ pub fn setup(username: Option<String>, token: Option<String>) -> Result<()> {
 /// its stable exit code so scripts can branch on it.
 pub async fn status(g: &GlobalArgs) -> Result<()> {
     let creds = auth::resolve();
-    let (username, kind) = match creds {
-        Ok(c) => (c.username, Some(c.kind)),
+    let (username, credential_kind) = match creds {
+        Ok(c) => (c.username, Some("atlassian_api_token".to_string())),
         Err(_) => (String::new(), None),
     };
 
@@ -120,9 +120,7 @@ pub async fn status(g: &GlobalArgs) -> Result<()> {
     let mut out = AuthStatusOut {
         authenticated: false,
         username,
-        credential_kind: kind.map(|k| match k {
-            CredentialKind::ApiToken => "atlassian_api_token".into(),
-        }),
+        credential_kind: credential_kind.clone(),
         display_name: None,
         account_id: None,
         source,
@@ -130,7 +128,7 @@ pub async fn status(g: &GlobalArgs) -> Result<()> {
     };
 
     // No credentials at all: report it (exit 0 — this *is* the status).
-    if kind.is_none() {
+    if credential_kind.is_none() {
         let fmt = make_formatter(g);
         let human = "No Bitbucket credentials found. Run `bbr auth setup` or set \
                      BITBUCKET_USERNAME + BITBUCKET_TOKEN."

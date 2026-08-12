@@ -19,11 +19,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
-use crate::auth::{CredentialKind, Credentials};
+use crate::auth::Credentials;
 use crate::error::{BitbucketError, Result};
-
-/// Default page size when listing collections.
-pub const DEFAULT_PAGE_SIZE: u32 = 25;
 
 /// Warn when remaining API quota drops below this threshold.
 const RATE_LIMIT_WARN_THRESHOLD: u64 = 50;
@@ -108,13 +105,9 @@ impl BitbucketClient {
 
     /// Construct a new client with a specific timeout in seconds.
     pub fn with_timeout(base_url: &str, creds: Credentials, timeout_secs: u64) -> Result<Self> {
-        let auth_header = match creds.kind {
-            CredentialKind::ApiToken => {
-                let raw = format!("{}:{}", creds.username, creds.secret.expose_secret());
-                let encoded = base64_encode(raw.as_bytes());
-                SecretString::from(format!("Basic {encoded}"))
-            }
-        };
+        let raw = format!("{}:{}", creds.username, creds.secret.expose_secret());
+        let encoded = base64_encode(raw.as_bytes());
+        let auth_header = SecretString::from(format!("Basic {encoded}"));
         let inner = Client::builder()
             .user_agent(concat!("bbr/", env!("CARGO_PKG_VERSION")))
             .timeout(std::time::Duration::from_secs(timeout_secs))
@@ -872,7 +865,6 @@ mod tests {
             creds: crate::auth::Credentials {
                 username: "u".into(),
                 secret: "s".into(),
-                kind: crate::auth::CredentialKind::ApiToken,
             },
             auth_header: SecretString::from("Basic dTpz".to_string()),
             etag_cache: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
