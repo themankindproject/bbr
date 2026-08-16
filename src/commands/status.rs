@@ -254,6 +254,9 @@ pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
     use std::io::{self, IsTerminal};
     let theme = Theme::current();
     loop {
+        // Re-read branch/commit from git each tick so new commits and
+        // branch switches show up without restarting the watch loop.
+        let _ = crate::commands::refresh_head();
         // Run status and capture output
         let result = run_inner(g).await;
         match result {
@@ -266,9 +269,16 @@ pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
                 } else {
                     eprintln!("{}", theme.separator());
                 }
+                // now_local() can fail in multi-threaded processes (time crate
+                // soundness rule) — fall back to UTC rather than an empty stamp.
+                let stamp = time::OffsetDateTime::now_local()
+                    .unwrap_or_else(|_| time::OffsetDateTime::now_utc())
+                    .format(&time::format_description::well_known::Rfc2822)
+                    .unwrap_or_default();
                 eprint!(
-                    "{} (refreshing every {interval_secs}s — Ctrl+C to stop)\n\n",
-                    theme.bold("bbr status --watch")
+                    "{} (refreshing every {interval_secs}s — Ctrl+C to stop)  {}\n\n",
+                    theme.bold("bbr status --watch"),
+                    theme.dim(&stamp)
                 );
                 let fmt = make_formatter(g);
                 fmt.print(&out, &human)?;

@@ -317,7 +317,7 @@ pub async fn run(g: &GlobalArgs, check_only: bool) -> Result<()> {
     };
     loading.set_message(format!("Updating bbr {} {arrow} {}...", current, latest));
 
-    download_and_install(&release, &latest).await?;
+    download_and_install(&release, &latest, g.quiet).await?;
 
     loading.finish();
 
@@ -375,7 +375,7 @@ fn render_update(out: &UpdateOut) -> String {
 // Download + extract helper
 // ---------------------------------------------------------------------------
 
-async fn download_and_install(release: &GithubRelease, _latest: &str) -> Result<()> {
+async fn download_and_install(release: &GithubRelease, _latest: &str, quiet: bool) -> Result<()> {
     let target_name = asset_name().ok_or_else(|| {
         BitbucketError::Other(format!(
             "Unsupported platform: {}-{}",
@@ -401,6 +401,17 @@ async fn download_and_install(release: &GithubRelease, _latest: &str) -> Result<
     })?;
     let dest_path = dest_dir.join("bbr");
 
+    // Probe writability BEFORE downloading so a permission problem fails fast
+    // with an actionable message instead of after a multi-MB download.
+    if let Err(e) = tempfile::NamedTempFile::new_in(&dest_dir) {
+        return Err(BitbucketError::Other(format!(
+            "Install directory {} is not writable: {e}.\n\
+             Re-run with elevated permissions (e.g. `sudo bbr update`) \
+             or install bbr somewhere on your PATH that you own.",
+            dest_dir.display()
+        )));
+    }
+
     let client = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .timeout(Duration::from_secs(120))
@@ -420,10 +431,53 @@ async fn download_and_install(release: &GithubRelease, _latest: &str) -> Result<
         )));
     }
 
-    let bytes = resp.bytes().await.map_err(BitbucketError::Http)?;
+    // Stream the download with a progress bar — multi-MB binaries on slow
+    // links otherwise look like a hang.
+    let total_size = resp.content_length();
+    let mut stream = resp.bytes_stream();
+    let mut buf: Vec<u8> = Vec::with_capacity(total_size.unwrap_or(0) as usize);
 
-    // --- SHA256 integrity verification ---
+    let pb = if quiet || std::env::var_os("BBR_QUIET").is_some() {
+        indicatif::ProgressBar::hidden()
+    } else if let Some(total) = total_size {
+        let pb = indicatif::ProgressBar::new(total);
+        pb.set_draw_target(indicatif::ProgressDrawTarget::stderr_with_hz(20));
+        pb.set_style(
+            indicatif::ProgressStyle::with_template(
+                "{spinner:.cyan} Downloading {msg} {bytes}/{total_bytes} ({eta} left)",
+            )
+            .unwrap_or_else(|_| indicatif::ProgressStyle::default_bar()),
+        );
+        pb.set_message(target_name.clone());
+        pb
+    } else {
+        let pb = indicatif::ProgressBar::new_spinner();
+        pb.set_draw_target(indicatif::ProgressDrawTarget::stderr_with_hz(20));
+        pb.enable_steady_tick(std::time::Duration::from_millis(80));
+        pb.set_style(
+            indicatif::ProgressStyle::with_template("{spinner:.cyan} Downloading {msg} {bytes}")
+                .unwrap_or_else(|_| indicatif::ProgressStyle::default_spinner()),
+        );
+        pb.set_message(target_name.clone());
+        pb
+    };
+
+    use futures::StreamExt;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(BitbucketError::Http)?;
+        buf.extend_from_slice(&chunk);
+        pb.set_position(buf.len() as u64);
+    }
+    pb.finish_and_clear();
+
+    let bytes = buf;
+
+    // --- SHA256 integrity verification (fail-closed) ---
     // Look for a checksums asset (checksums.txt or SHA256SUMS) in the release.
+    // The release pipeline always publishes checksums.txt, so a missing or
+    // incomplete checksum file is treated as a hard failure unless the user
+    // explicitly opts out with BBR_SKIP_CHECKSUM=1.
+    let skip_checksum = std::env::var("BBR_SKIP_CHECKSUM").is_ok();
     let checksum_asset = release.assets.iter().find(|a| {
         let name = a.name.to_ascii_lowercase();
         name == "checksums.txt"
@@ -432,6 +486,7 @@ async fn download_and_install(release: &GithubRelease, _latest: &str) -> Result<
             || name.contains("checksum")
     });
 
+    let mut verified = false;
     if let Some(cs_asset) = checksum_asset {
         let cs_resp = client
             .get(&cs_asset.browser_download_url)
@@ -451,27 +506,38 @@ async fn download_and_install(release: &GithubRelease, _latest: &str) -> Result<
                          Aborting update."
                     )));
                 }
+                verified = true;
                 tracing::debug!("SHA256 checksum verified for {target_name}");
             } else {
-                tracing::warn!(
-                    "Checksum file found but no entry for {target_name}; skipping verification"
-                );
+                tracing::warn!("Checksum file found but no entry for {target_name}");
             }
-        }
-    } else {
-        tracing::warn!(
-            "No checksums asset in release; proceeding without integrity verification. \
-             Consider adding a checksums.txt asset to releases for supply-chain security."
-        );
-        let mark = if crate::output::theme::Theme::current().unicode_enabled() {
-            "⚠"
         } else {
-            "!"
-        };
-        eprintln!(
-            "  {mark} Warning: No checksum available for this release. \
-             Binary integrity could not be verified."
-        );
+            tracing::warn!(
+                "Checksum asset returned HTTP {}; could not verify",
+                cs_resp.status()
+            );
+        }
+    }
+
+    if !verified {
+        if skip_checksum {
+            let mark = if crate::output::theme::Theme::current().unicode_enabled() {
+                "⚠"
+            } else {
+                "!"
+            };
+            eprintln!(
+                "  {mark} Warning: BBR_SKIP_CHECKSUM=1 set — installing without \
+                 integrity verification."
+            );
+        } else {
+            return Err(BitbucketError::Other(format!(
+                "Could not verify the integrity of {target_name}: no usable \
+                 checksum entry in this release.\n\
+                 Refusing to install an unverified binary. If you trust this \
+                 source and accept the risk, re-run with BBR_SKIP_CHECKSUM=1."
+            )));
+        }
     }
 
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(&bytes[..]));

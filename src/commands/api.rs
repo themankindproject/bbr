@@ -1,5 +1,4 @@
 //! `bbr api` — raw Bitbucket API passthrough.
-
 use crate::cli::GlobalArgs;
 use crate::commands::client;
 use crate::error::Result;
@@ -17,21 +16,18 @@ pub async fn run(
         crate::error::BitbucketError::Other(format!("invalid HTTP method: {method}"))
     })?;
 
-    let raw = if paginate {
+    // Keep the response as a `Value` end-to-end: serializing to a string
+    // first and then passing it through the JSON formatter would
+    // double-encode it (a JSON string containing escaped JSON).
+    let value: serde_json::Value = if paginate {
         let values = client
             .fetch_all_pages::<serde_json::Value>(path, usize::MAX)
             .await?;
-        serde_json::to_string_pretty(&values)?
+        serde_json::Value::Array(values)
     } else {
-        if http_method == reqwest::Method::GET && data.is_none() {
-            let val: serde_json::Value = client.send(http_method, path, None).await?;
-            serde_json::to_string_pretty(&val)?
-        } else {
-            let val: serde_json::Value = client.send(http_method, path, data).await?;
-            serde_json::to_string_pretty(&val)?
-        }
+        client.send(http_method, path, data).await?
     };
 
     let fmt = Formatter::from_json_flag(true);
-    fmt.print(&raw, &raw)
+    fmt.print(&value, "")
 }

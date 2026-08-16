@@ -117,14 +117,14 @@ pub async fn list(
     let mut table = Table::new().headers([
         "ID", "State", "Kind", "Priority", "Title", "Assignee", "Comments",
     ]);
-    for (i, issue) in issues.iter().enumerate() {
+    for (issue, out_row) in issues.iter().zip(&out) {
         table = table.add_row([
             issue.id.to_string(),
             issue.state.clone(),
             issue.kind.clone(),
             issue.priority.clone(),
             truncate(&issue.title, 50),
-            out[i].assignee.clone().unwrap_or_else(|| "-".into()),
+            out_row.assignee.clone().unwrap_or_else(|| "-".into()),
             issue.comment_count.to_string(),
         ]);
     }
@@ -139,7 +139,6 @@ pub async fn view(g: &GlobalArgs, id: u64, show_comments: bool) -> Result<()> {
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message(format!("Fetching issue #{id}..."));
     let issue = client.get_issue(&repo.workspace, &repo.slug, id).await?;
-    spinner.finish();
 
     let body = issue
         .content
@@ -174,7 +173,44 @@ pub async fn view(g: &GlobalArgs, id: u64, show_comments: bool) -> Result<()> {
         url: issue.links.html.href.clone(),
     };
 
-    let fmt = make_formatter(g);
+    // Fetch comments BEFORE printing anything: with --json the output must be
+    // a single combined document, not issue JSON followed by a second one.
+    let comments = if show_comments && issue.comment_count > 0 {
+        spinner.set_message(format!("Fetching comments for issue #{id}..."));
+        Some(
+            client
+                .list_issue_comments(&repo.workspace, &repo.slug, id, 50)
+                .await?,
+        )
+    } else {
+        None
+    };
+    spinner.finish();
+
+    if g.json {
+        if let Some(comments) = &comments {
+            let comment_outs: Vec<IssueCommentOut> = comments
+                .iter()
+                .map(|c| IssueCommentOut {
+                    id: c.id,
+                    author: c.author.as_ref().map(|u| u.display_name.clone()),
+                    body: c
+                        .content
+                        .as_ref()
+                        .map(|ct| ct.raw.clone())
+                        .unwrap_or_default(),
+                    created_on: c.created_on.as_ref().map(|d| d.chars().take(10).collect()),
+                })
+                .collect();
+            let combined = serde_json::json!({
+                "issue": out,
+                "comments": comment_outs,
+            });
+            return Formatter::from_json_flag(true).print(&combined, "");
+        }
+        return make_formatter(g).print(&out, "");
+    }
+
     let sep = Theme::current().separator();
     let human = format!(
         "Issue #{id} — {title}\n{sep}\n  State: {state:<12} Kind: {kind:<12} Priority: {priority}\n  Reporter: {reporter:<20} Assignee: {assignee}\n  Created: {created}\n  URL: {url}\n\nDescription:\n{body_indented}\n\n[{cmts} comments, {votes} votes, {watches} watchers]",
@@ -197,40 +233,15 @@ pub async fn view(g: &GlobalArgs, id: u64, show_comments: bool) -> Result<()> {
         votes = issue.votes,
         watches = issue.watches,
     );
+    make_formatter(g).print(&out, &human)?;
 
-    fmt.print(&out, &human)?;
-
-    if show_comments && issue.comment_count > 0 {
-        let comments = client
-            .list_issue_comments(&repo.workspace, &repo.slug, id, 50)
-            .await?;
-        if g.json {
-            let comment_outs: Vec<IssueCommentOut> = comments
-                .iter()
-                .map(|c| IssueCommentOut {
-                    id: c.id,
-                    author: c.author.as_ref().map(|u| u.display_name.clone()),
-                    body: c
-                        .content
-                        .as_ref()
-                        .map(|ct| ct.raw.clone())
-                        .unwrap_or_default(),
-                    created_on: c.created_on.as_ref().map(|d| d.chars().take(10).collect()),
-                })
-                .collect();
-            let combined = serde_json::json!({
-                "issue": out,
-                "comments": comment_outs,
-            });
-            let human = String::new();
-            return Formatter::from_json_flag(true).print(&combined, &human);
-        }
+    if let Some(comments) = &comments {
         // Human path: fold comments into the single formatted output so
         // `--comments` output stays on stdout in one block (pipes cleanly).
         let theme = Theme::current();
         let sep = theme.separator();
         let mut extra = format!("\nComments ({})\n{}", comments.len(), sep);
-        for c in &comments {
+        for c in comments {
             let author = c
                 .author
                 .as_ref()

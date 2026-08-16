@@ -238,10 +238,27 @@ pub fn delete_branch_remote(branch: &str) -> Result<()> {
 }
 
 /// Rebase branch onto another branch.
+///
+/// On conflict the in-progress rebase is aborted and the repository is
+/// restored to the branch it was on before the call, so callers never
+/// inherit a half-finished rebase state.
 pub fn rebase_branch(branch: &str, onto: &str) -> Result<()> {
+    let original = current_branch().ok();
     // switch to the target branch first, then rebase onto the parent
     git(&["switch", "--", branch])?;
-    git_with_timeout(&["rebase", "--", onto], GIT_WRITE_TIMEOUT)?;
+    if let Err(e) = git_with_timeout(&["rebase", "--", onto], GIT_WRITE_TIMEOUT) {
+        // Never leave the repo mid-rebase: abort and go back to where we were.
+        let _ = git(&["rebase", "--abort"]);
+        return match original {
+            Some(orig) => {
+                let _ = git(&["switch", "--", &orig]);
+                Err(BitbucketError::Git(format!(
+                    "{e} (rebase aborted, restored branch `{orig}`)"
+                )))
+            }
+            None => Err(e),
+        };
+    }
     Ok(())
 }
 

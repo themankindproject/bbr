@@ -25,6 +25,11 @@ use crate::error::{BitbucketError, Result};
 /// Warn when remaining API quota drops below this threshold.
 const RATE_LIMIT_WARN_THRESHOLD: u64 = 50;
 
+/// Upper bound on the in-process ETag cache. Long-running watch loops can
+/// touch many paths; when the cap is hit the cache is dropped wholesale
+/// (worst case: one extra full fetch per path).
+const MAX_ETAG_CACHE_ENTRIES: usize = 256;
+
 #[derive(Clone)]
 struct CachedResponse {
     etag: String,
@@ -189,6 +194,9 @@ impl BitbucketClient {
         if let Some(etag) = headers.get(ETAG).and_then(|v| v.to_str().ok()) {
             if !etag.is_empty() {
                 if let Ok(mut cache) = self.etag_cache.lock() {
+                    if cache.len() >= MAX_ETAG_CACHE_ENTRIES && !cache.contains_key(path) {
+                        cache.clear();
+                    }
                     cache.insert(
                         path.to_string(),
                         CachedResponse {
@@ -455,6 +463,10 @@ impl BitbucketClient {
 
         let num_pages = total_needed.div_ceil(effective_pagelen);
 
+        // Fetch remaining pages concurrently but reassemble them in page
+        // order: `buffer_unordered` yields results in *completion* order,
+        // which would scramble the row ordering. Tag each future with its
+        // page index and sort before flattening.
         let mut futures = Vec::new();
         for p in 2..=num_pages {
             let p_path = if path.contains('?') {
@@ -462,16 +474,21 @@ impl BitbucketClient {
             } else {
                 format!("{path}?page={p}")
             };
-            futures
-                .push(async move { self.send::<Paginated<T>>(Method::GET, &p_path, None).await });
+            futures.push(async move {
+                let page = self
+                    .send::<Paginated<T>>(Method::GET, &p_path, None)
+                    .await?;
+                Ok::<_, BitbucketError>((p, page))
+            });
         }
 
-        let results: Vec<Paginated<T>> = futures::stream::iter(futures)
+        let mut results: Vec<(usize, Paginated<T>)> = futures::stream::iter(futures)
             .buffer_unordered(10)
             .try_collect()
             .await?;
+        results.sort_by_key(|(p, _)| *p);
 
-        for page in results {
+        for (_, page) in results {
             all.extend(page.values);
         }
 

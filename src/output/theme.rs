@@ -290,6 +290,61 @@ fn tiocgwinsz(fd: std::os::unix::io::RawFd) -> Option<usize> {
     }
 }
 
+/// Call `TIOCGWINSZ` on the given file descriptor and return the row count.
+#[cfg(unix)]
+fn tiocgwinsz_rows(fd: std::os::unix::io::RawFd) -> Option<usize> {
+    #[repr(C)]
+    struct Winsize {
+        ws_row: u16,
+        ws_col: u16,
+        _ws_xpixel: u16,
+        _ws_ypixel: u16,
+    }
+    let mut ws = Winsize {
+        ws_row: 0,
+        ws_col: 0,
+        _ws_xpixel: 0,
+        _ws_ypixel: 0,
+    };
+    // SAFETY: same as `tiocgwinsz` above.
+    let ret = unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) };
+    if ret == 0 && ws.ws_row > 0 {
+        Some(ws.ws_row as usize)
+    } else {
+        None
+    }
+}
+
+/// Best-effort terminal height (rows).
+///
+/// Resolution order:
+/// 1. `$LINES` environment variable.
+/// 2. `TIOCGWINSZ` ioctl on Unix (no subprocess, instant).
+/// 3. `None` — caller decides the fallback.
+pub fn terminal_height() -> Option<usize> {
+    if let Ok(lines) = std::env::var("LINES") {
+        if let Ok(n) = lines.parse::<usize>() {
+            if n > 0 {
+                return Some(n);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        for fd in [std::io::stdout().as_raw_fd(), std::io::stderr().as_raw_fd()] {
+            if let Some(h) = tiocgwinsz_rows(fd) {
+                if h > 0 {
+                    return Some(h);
+                }
+            }
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

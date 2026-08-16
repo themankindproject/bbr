@@ -159,7 +159,14 @@ pub async fn run_dashboard(
         });
     }
 
-    let results = futures::future::join_all(futures).await;
+    // Cap concurrency: scanning many repos with unbounded fan-out can
+    // burst past Bitbucket's rate limit. Order is irrelevant here — the
+    // results are aggregated into lists below.
+    use futures::StreamExt;
+    let results = futures::stream::iter(futures)
+        .buffer_unordered(5)
+        .collect::<Vec<_>>()
+        .await;
 
     let mut needs_review = Vec::new();
     let mut my_prs = Vec::new();

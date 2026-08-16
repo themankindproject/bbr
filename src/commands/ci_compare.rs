@@ -66,8 +66,9 @@ async fn resolve_pipeline_ref(
             BitbucketError::Other(format!("No pipeline found on branch {current_branch}"))
         })
     } else if let Ok(build_num) = ref_str.parse::<u64>() {
-        let pipelines = client.list_pipelines(workspace, slug, None, 1000).await?;
-        let p = pipelines.into_iter().find(|p| p.build_number == build_num);
+        let p = client
+            .get_pipeline_by_build_number(workspace, slug, build_num)
+            .await?;
         p.ok_or_else(|| {
             BitbucketError::Other(format!("No pipeline found with build number {build_num}"))
         })
@@ -190,7 +191,10 @@ async fn compute_test_deltas(
     steps_a: &[PipelineStep],
     steps_b: &[PipelineStep],
 ) -> Result<Option<TestDelta>> {
-    // Fetch test reports for both pipelines concurrently
+    // Fetch test reports for both pipelines concurrently.
+    // Bounded concurrency: pipelines can have many steps and unbounded
+    // fan-out risks rate-limit spikes.
+    use futures::StreamExt;
     let reports_a_futs: Vec<_> = steps_a
         .iter()
         .map(|step| client.test_report(workspace, slug, &pipe_a.uuid, &step.uuid))
@@ -201,8 +205,12 @@ async fn compute_test_deltas(
         .collect();
 
     let (reports_a, reports_b): (Vec<_>, Vec<_>) = tokio::join!(
-        futures::future::join_all(reports_a_futs),
-        futures::future::join_all(reports_b_futs)
+        futures::stream::iter(reports_a_futs)
+            .buffer_unordered(8)
+            .collect::<Vec<_>>(),
+        futures::stream::iter(reports_b_futs)
+            .buffer_unordered(8)
+            .collect::<Vec<_>>()
     );
 
     let mut total_a = 0u64;
@@ -248,8 +256,12 @@ async fn compute_test_deltas(
         .collect();
 
     let (cases_a, cases_b): (Vec<_>, Vec<_>) = tokio::join!(
-        futures::future::join_all(cases_a_futs),
-        futures::future::join_all(cases_b_futs)
+        futures::stream::iter(cases_a_futs)
+            .buffer_unordered(8)
+            .collect::<Vec<_>>(),
+        futures::stream::iter(cases_b_futs)
+            .buffer_unordered(8)
+            .collect::<Vec<_>>()
     );
 
     let mut failed_cases_a = Vec::new();

@@ -35,6 +35,18 @@ pub struct Repository {
     pub owner: Option<super::pr::User>,
     #[serde(default)]
     pub mainbranch: Option<super::pr::Named>,
+    /// Workspace the repository belongs to (present on repo objects).
+    #[serde(default)]
+    pub workspace: Option<WorkspaceRef>,
+}
+
+/// Minimal workspace reference embedded in repository objects.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceRef {
+    #[serde(default)]
+    pub slug: String,
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -97,8 +97,19 @@ pub fn print_diff(s: &str) -> Result<()> {
     // If the user explicitly set PAGER, respect it instead of sniffing for bat.
     // Otherwise, try bat first.
     if pager_env.is_empty() {
+        // Small diffs that fit on one screen don't need a pager — bat still
+        // provides syntax highlighting with --paging=never.
+        let line_count = s.lines().count() + 1;
+        let fits = crate::output::theme::terminal_height()
+            .map(|h| line_count <= h.saturating_sub(2))
+            .unwrap_or(false);
+        let paging = if fits {
+            "--paging=never"
+        } else {
+            "--paging=always"
+        };
         match Command::new("bat")
-            .args(["--language=diff", "--paging=always", "--color=always"])
+            .args(["--language=diff", paging, "--color=always"])
             .stdin(Stdio::piped())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())

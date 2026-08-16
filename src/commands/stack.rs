@@ -390,15 +390,14 @@ pub async fn land(g: &GlobalArgs, strategy: Option<&str>, yes: bool) -> Result<(
 
     spinner.finish();
 
-    // If all merged successfully, delete the stack config
-    if failed.is_empty() {
+    // Update the stack config. On full success remove only the landed stack —
+    // other stacks defined in the same file must survive. On partial failure
+    // keep the stack with its remaining unmerged PRs.
+    let mut new_config = StackConfig::load().unwrap_or_default();
+    crate::stack::apply_land_result(&mut new_config, &stack.name, &merged, !failed.is_empty());
+    if new_config.stacks.is_empty() {
         let _ = std::fs::remove_file(StackConfig::config_path());
     } else {
-        // Update stack config with remaining PRs
-        let mut new_config = StackConfig::load().unwrap_or_default();
-        if let Some(s) = new_config.find_stack_mut(&stack.name) {
-            s.prs.retain(|p| !merged.contains(&p.pr_id.unwrap_or(0)));
-        }
         let _ = new_config.save();
     }
 

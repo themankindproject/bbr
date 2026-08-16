@@ -51,7 +51,7 @@ pub fn client(g: &GlobalArgs) -> Result<BitbucketClient> {
 }
 
 static CACHED_REPO: OnceLock<RepoIdentity> = OnceLock::new();
-static CACHED_HEAD: OnceLock<Head> = OnceLock::new();
+static CACHED_HEAD: std::sync::Mutex<Option<Head>> = std::sync::Mutex::new(None);
 
 /// Detect the current repo identity respecting `--workspace` and `--slug` overrides.
 ///
@@ -142,11 +142,27 @@ pub fn current_repo() -> Result<RepoIdentity> {
 
 /// Current branch + commit (cached per process).
 pub fn current_head() -> Result<Head> {
-    if let Some(h) = CACHED_HEAD.get() {
-        return Ok(h.clone());
+    if let Ok(cache) = CACHED_HEAD.lock() {
+        if let Some(h) = cache.as_ref() {
+            return Ok(h.clone());
+        }
     }
     let head = git::head()?;
-    let _ = CACHED_HEAD.set(head.clone());
+    if let Ok(mut cache) = CACHED_HEAD.lock() {
+        *cache = Some(head.clone());
+    }
+    Ok(head)
+}
+
+/// Re-read branch + commit from git, bypassing the process cache.
+///
+/// Long-running commands (`status --watch`) call this each tick so new
+/// commits and branch switches become visible without a restart.
+pub fn refresh_head() -> Result<Head> {
+    let head = git::head()?;
+    if let Ok(mut cache) = CACHED_HEAD.lock() {
+        *cache = Some(head.clone());
+    }
     Ok(head)
 }
 

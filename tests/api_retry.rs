@@ -493,3 +493,80 @@ async fn send_raw_range_retries_on_429_then_succeeds() {
     let body = c.send_raw_range(LOG_PATH, 0).await.unwrap();
     assert_eq!(body, "after retry\n");
 }
+
+// ---------------------------------------------------------------------------
+// Parallel pagination must preserve page order
+// ---------------------------------------------------------------------------
+
+fn pr_json(id: u64) -> serde_json::Value {
+    json!({
+        "id": id,
+        "title": format!("PR {id}"),
+        "state": "OPEN",
+        "source": { "branch": { "name": format!("b{id}") },
+                    "repository": { "name": "s", "full_name": "ws/slug", "type": "repository" } },
+        "destination": { "branch": { "name": "main" },
+                         "repository": { "name": "s", "full_name": "ws/slug", "type": "repository" } },
+        "links": { "html": { "href": format!("https://bitbucket.org/ws/slug/pull-requests/{id}") } }
+    })
+}
+
+#[tokio::test]
+async fn parallel_pagination_preserves_page_order() {
+    // Regression: `paginate_from` fetches pages 2..N concurrently via
+    // `buffer_unordered`, which yields results in *completion* order. The
+    // results must be re-sorted by page index before flattening, otherwise
+    // rows come back scrambled. We force out-of-order completion by making
+    // page 2 slow and page 3 fast, then assert the final order is 1..6.
+    use std::time::Duration;
+    let server = MockServer::start().await;
+
+    // Page 1: 2 items, total size 6, numeric `next` link → parallel path.
+    Mock::given(method("GET"))
+        .and(path("/repositories/ws/slug/pullrequests"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 6,
+            "page": 1,
+            "pagelen": 2,
+            "values": [pr_json(1), pr_json(2)],
+            "next": format!("{}/repositories/ws/slug/pullrequests?page=2", server.uri())
+        })))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+
+    // Page 2: deliberately SLOW so it completes after page 3.
+    Mock::given(method("GET"))
+        .and(path("/repositories/ws/slug/pullrequests"))
+        .and(query_param("page", "2"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({
+                    "size": 6, "page": 2, "pagelen": 2,
+                    "values": [pr_json(3), pr_json(4)]
+                }))
+                .set_delay(Duration::from_millis(300)),
+        )
+        .mount(&server)
+        .await;
+
+    // Page 3: fast — completes before page 2.
+    Mock::given(method("GET"))
+        .and(path("/repositories/ws/slug/pullrequests"))
+        .and(query_param("page", "3"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "size": 6, "page": 3, "pagelen": 2,
+            "values": [pr_json(5), pr_json(6)]
+        })))
+        .mount(&server)
+        .await;
+
+    let c = client(&server.uri()).await;
+    let all: Vec<PullRequest> = c
+        .fetch_all_pages("/repositories/ws/slug/pullrequests", 100)
+        .await
+        .unwrap();
+
+    let ids: Vec<u64> = all.iter().map(|p| p.id).collect();
+    assert_eq!(ids, vec![1, 2, 3, 4, 5, 6], "rows must be in page order");
+}

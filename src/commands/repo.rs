@@ -256,8 +256,14 @@ pub async fn fork(
         .await?;
     spinner.finish();
 
+    // Prefer the API's workspace field; fall back to parsing full_name.
+    let fork_workspace = forked
+        .workspace
+        .as_ref()
+        .map(|w| w.slug.clone())
+        .unwrap_or_else(|| forked.full_name.split('/').next().unwrap_or("").to_string());
     let out = serde_json::json!({
-        "workspace": forked.full_name.split('/').next().unwrap_or(""),
+        "workspace": fork_workspace,
         "slug": forked.slug,
         "full_name": forked.full_name,
         "url": forked.links.html.href,

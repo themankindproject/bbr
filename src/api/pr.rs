@@ -397,13 +397,15 @@ impl BitbucketClient {
 
         // Try with fields= first for smaller payloads, fallback without if it fails.
         // Include next/size/pagelen so pagination metadata survives the fields filter.
+        // uuid fields are required by the dashboard's identity matching and by
+        // reviewer add/remove round-trips.
         let fields = "values.id,values.state,values.title,\
              values.source.branch.name,values.destination.branch.name,\
-             values.author.display_name,values.links.html.href,\
+             values.author.display_name,values.author.uuid,values.links.html.href,\
              values.comment_count,values.task_count,values.close_source_branch,\
              values.updated_on,\
-             values.reviewers.display_name,values.reviewers.role,values.reviewers.approved,values.reviewers.state,\
-             values.participants.display_name,values.participants.role,values.participants.approved,values.participants.state,\
+             values.reviewers.display_name,values.reviewers.uuid,values.reviewers.role,values.reviewers.approved,values.reviewers.state,\
+             values.participants.display_name,values.participants.uuid,values.participants.role,values.participants.approved,values.participants.state,\
              size,page,pagelen,next,previous";
 
         let path_with_fields = format!(
@@ -439,15 +441,19 @@ impl BitbucketClient {
     }
 
     /// `GET /repositories/{ws}/{slug}/pullrequests/{id}`
+    ///
+    /// `reviewers.uuid` is included deliberately: add/remove reviewer
+    /// round-trips rebuild the reviewer list from this response, and
+    /// without the UUIDs every existing reviewer would be dropped.
     pub async fn get_pr(&self, workspace: &str, slug: &str, id: u64) -> Result<PullRequest> {
         let path = format!(
             "/repositories/{workspace}/{slug}/pullrequests/{id}?\
              fields=id,state,title,description,\
              source.branch.name,destination.branch.name,\
-             author.display_name,links.html.href,\
+             author.display_name,author.uuid,links.html.href,\
              comment_count,task_count,close_source_branch,\
-             participants.display_name,participants.role,participants.approved,participants.state,\
-             reviewers.display_name,reviewers.role,reviewers.approved,reviewers.state"
+             participants.display_name,participants.uuid,participants.role,participants.approved,participants.state,\
+             reviewers.display_name,reviewers.uuid,reviewers.role,reviewers.approved,reviewers.state"
         );
         self.send(reqwest::Method::GET, &path, None).await
     }
@@ -488,9 +494,9 @@ impl BitbucketClient {
         pagelen: u32,
     ) -> Result<Vec<PullRequest>> {
         let reviewer_fields = if include_reviewers {
-            ",values.participants.display_name,values.participants.role,\
+            ",values.participants.display_name,values.participants.uuid,values.participants.role,\
              values.participants.approved,values.participants.state,\
-             values.reviewers.display_name,values.reviewers.role,\
+             values.reviewers.display_name,values.reviewers.uuid,values.reviewers.role,\
              values.reviewers.approved,values.reviewers.state"
         } else {
             ""

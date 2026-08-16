@@ -48,8 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`{"error": {"kind", "message", "exit_code"}}`) on stderr with stable
   machine-readable `kind` values, and nothing on stdout.
 - **`bbr issue view --comments` interleaved stderr with JSON** — human
-  comments are now folded into the single stdout block; `--json` keeps the
-  combined `{issue, comments}` document on stdout only.
+  comments are now folded into the single stdout block; `--json` emits exactly
+  one combined `{"issue", "comments"}` document (previously the issue JSON was
+  printed first and the combined document second, producing invalid output for
+  JSON parsers).
 - **`bbr batch merge-approved` silently closed source branches** — source
   branches are no longer closed unless `--close-source-branch` is passed;
   drafts are skipped; fetch limit follows `--max`.
@@ -65,11 +67,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prefer user-local dirs and only fall back to system dirs when writable.
 - **`bbr workspace list --role` accepted arbitrary values** — the role filter
   is now validated to `member | contributor | admin`.
+- **Parallel pagination scrambled result order** — `paginate_from` fetches
+  pages 2..N concurrently, but appended them in *completion* order instead of
+  page order, so any fetch spanning multiple pages (PR lists, CI lists,
+  commits) could return rows in nondeterministic order. Pages are now tagged
+  with their index and reassembled in order. Covered by a regression test that
+  forces out-of-order completion.
+- **`bbr pr reviewer add/remove` dropped all existing reviewers** — the
+  `get_pr` field projection omitted `reviewers.uuid`, so the add/remove logic
+  (which rebuilds the reviewer list from that response) silently discarded
+  every existing reviewer on each PUT. `reviewers.uuid` is now requested.
+- **`bbr api --paginate` emitted double-encoded JSON** — the paginated values
+  were serialized to a string and then serialized *again* by the JSON
+  formatter, producing a JSON string containing escaped JSON. The response is
+  now kept as a `Value` end-to-end and printed once.
+- **`bbr pr stack land` deleted other stacks' config** — on full success the
+  command removed the entire `stack.toml`, wiping every other stack defined in
+  the same file. It now removes only the landed stack (and clears `active` if
+  it pointed at it), deleting the file only when no stacks remain. Covered by
+  unit tests.
+- **`bbr pr stack rebase` left the repo mid-rebase on conflict** — a failed
+  rebase previously left the working tree on the switched branch with an
+  unfinished rebase. The rebase is now aborted on failure and the original
+  branch is restored, with the recovery noted in the error message.
+- **`bbr status --watch` never refreshed branch/commit** — the process-cached
+  HEAD meant new commits and branch switches were invisible until restart. The
+  watch loop now re-reads HEAD from git on every tick.
+- **`bbr repo fork` derived the workspace by splitting `full_name`** — it now
+  prefers the API's `workspace.slug` field, falling back to the old parse.
+- **`bbr issue list` indexed a parallel vec by position** — replaced fragile
+  `out[i]` indexing with `zip`, so the two lists can't silently drift.
+
+### Security
+
+- **`bbr update` now fails closed on missing checksums** — a release without a
+  usable `checksums.txt` entry for the target asset is refused instead of
+  installed with only a warning. Opt out explicitly with `BBR_SKIP_CHECKSUM=1`.
+- **`bbr update` probes install-dir writability before downloading** — a
+  permission problem now fails fast with an actionable message (suggesting
+  `sudo bbr update`) instead of erroring after a multi-MB download.
 
 ### Changed
 
 - `-v` help text corrected: `-v` = debug, `-vv` = trace (the code already
   behaved this way; docs now match).
+- **`bbr update` shows a download progress bar** — the binary download now
+  streams with an indicatif progress bar (bytes, ETA) instead of looking like
+  a hang; hidden under `--quiet`/`BBR_QUIET`.
+- **`bbr status --watch` header shows a timestamp** — each refresh prints the
+  current time so it's obvious the display is live.
+- **Small diffs skip the pager** — `pr diff` output that fits on one screen is
+  printed with `bat --paging=never` (still syntax-highlighted) instead of
+  always entering the pager.
+- **Bounded API fan-out** — `pr dashboard` (repo scan) and `ci compare`
+  (test-report/test-case fetches) now cap concurrent requests instead of
+  unbounded `join_all`, reducing rate-limit spikes.
+- **`bbr ci compare <build-number>` uses a server-side query** — resolving a
+  pipeline by build number now issues `?q=build_number=N` (one request)
+  instead of listing up to 1000 pipelines and scanning client-side.
+- **Default `bbr` runs the update check concurrently** — the background
+  version check now overlaps with the overview fetch instead of adding its
+  latency on top.
+- **Stack config path is cached per process** — `stack.toml` location
+  resolution no longer shells out to git on every load/save.
 - **`bbr status --watch` error rendering** — watch-mode errors now render with
   the same hint/theme system as other commands (`display_error`) instead of a
   bare `bbr: {error}` line.
@@ -85,6 +145,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--json` validity), `pr diff --raw --json` single-doc integrity,
   `status --export slack --json` JSON output, workspace role validation, and
   completion EPIPE non-panic.
+- **Parallel-pagination ordering regression test** — forces out-of-order page
+  completion (slow page 2, fast page 3) and asserts rows come back in page
+  order.
+- **`stack land` config-preservation unit tests** — landing one stack keeps
+  sibling stacks, clears `active` only when it pointed at the landed stack,
+  and partial failure retains unmerged PRs.
 
 ### Docs
 

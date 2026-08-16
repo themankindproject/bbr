@@ -30,6 +30,13 @@ pub struct StackPr {
 
 impl StackConfig {
     pub fn config_path() -> PathBuf {
+        // The repo root doesn't move during a process — cache the resolved
+        // path so repeated load()/save() calls don't re-shell out to git.
+        static CACHED_PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+        if let Some(p) = CACHED_PATH.get() {
+            return p.clone();
+        }
+
         // Use a short timeout for git rev-parse (read-only, fast)
         use std::process::Command;
 
@@ -39,15 +46,22 @@ impl StackConfig {
             .stderr(std::process::Stdio::null())
             .output();
 
-        if let Ok(output) = result {
+        let path = if let Ok(output) = result {
             if output.status.success() {
                 let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !root.is_empty() {
-                    return PathBuf::from(root).join(".bbr").join("stack.toml");
+                    PathBuf::from(root).join(".bbr").join("stack.toml")
+                } else {
+                    PathBuf::from(".bbr").join("stack.toml")
                 }
+            } else {
+                PathBuf::from(".bbr").join("stack.toml")
             }
-        }
-        PathBuf::from(".bbr").join("stack.toml")
+        } else {
+            PathBuf::from(".bbr").join("stack.toml")
+        };
+        let _ = CACHED_PATH.set(path.clone());
+        path
     }
 
     pub fn load() -> Result<Self> {
@@ -117,6 +131,27 @@ impl StackConfig {
     pub fn active_stack_mut(&mut self) -> Result<&mut StackDef> {
         let i = self.active_index()?;
         Ok(&mut self.stacks[i])
+    }
+}
+
+/// Apply the outcome of a `stack land` run to the config (pure, testable).
+///
+/// On full success only the landed stack is removed — other stacks defined
+/// in the same file must survive. On partial failure the stack is kept with
+/// its remaining unmerged PRs so the user can resume.
+pub fn apply_land_result(
+    config: &mut StackConfig,
+    stack_name: &str,
+    merged: &[u64],
+    had_failure: bool,
+) {
+    if !had_failure {
+        config.stacks.retain(|s| s.name != stack_name);
+        if config.active.as_deref() == Some(stack_name) {
+            config.active = None;
+        }
+    } else if let Some(s) = config.find_stack_mut(stack_name) {
+        s.prs.retain(|p| !merged.contains(&p.pr_id.unwrap_or(0)));
     }
 }
 
@@ -192,5 +227,62 @@ base_branch = "main"
         .unwrap();
         assert!(parsed.active.is_none());
         assert_eq!(parsed.active_stack().unwrap().name, "a");
+    }
+
+    fn pr(branch: &str, id: Option<u64>, parent: &str) -> StackPr {
+        StackPr {
+            branch: branch.to_string(),
+            pr_id: id,
+            parent_branch: parent.to_string(),
+        }
+    }
+
+    fn cfg_with_prs() -> StackConfig {
+        StackConfig {
+            active: Some("s1".into()),
+            stacks: vec![
+                StackDef {
+                    name: "s1".into(),
+                    base_branch: "main".into(),
+                    prs: vec![pr("b1", Some(101), "main"), pr("b2", Some(102), "b1")],
+                },
+                StackDef {
+                    name: "s2".into(),
+                    base_branch: "main".into(),
+                    prs: vec![pr("c1", Some(201), "main")],
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn land_success_removes_only_landed_stack() {
+        // Regression: landing one stack must not wipe sibling stacks.
+        let mut c = cfg_with_prs();
+        apply_land_result(&mut c, "s1", &[101, 102], false);
+        assert_eq!(c.stacks.len(), 1);
+        assert_eq!(c.stacks[0].name, "s2");
+        assert_eq!(c.stacks[0].prs.len(), 1);
+        assert_eq!(c.active, None);
+    }
+
+    #[test]
+    fn land_success_keeps_active_when_other_stack_active() {
+        let mut c = cfg_with_prs();
+        c.active = Some("s2".into());
+        apply_land_result(&mut c, "s1", &[101, 102], false);
+        assert_eq!(c.active.as_deref(), Some("s2"));
+        assert_eq!(c.stacks.len(), 1);
+    }
+
+    #[test]
+    fn land_partial_failure_retains_unmerged_prs() {
+        let mut c = cfg_with_prs();
+        apply_land_result(&mut c, "s1", &[101], true);
+        assert_eq!(c.stacks.len(), 2);
+        let s1 = c.find_stack("s1").unwrap();
+        assert_eq!(s1.prs.len(), 1);
+        assert_eq!(s1.prs[0].pr_id, Some(102));
+        assert_eq!(c.active.as_deref(), Some("s1"));
     }
 }

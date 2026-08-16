@@ -259,6 +259,25 @@ impl BitbucketClient {
         self.send(reqwest::Method::GET, &path, None).await
     }
 
+    /// Look up a single pipeline by build number using a server-side query.
+    ///
+    /// Cheaper than listing up to 1000 pipelines and scanning client-side.
+    pub async fn get_pipeline_by_build_number(
+        &self,
+        workspace: &str,
+        slug: &str,
+        build_number: u64,
+    ) -> Result<Option<Pipeline>> {
+        let path = format!(
+            "/repositories/{workspace}/{slug}/pipelines/?\
+             fields=values.uuid,values.build_number,values.state,values.result,\
+             values.duration_in_seconds,values.target.ref_name,values.target.commit.hash&\
+             pagelen=1&q=build_number%3D{build_number}"
+        );
+        let page: super::Paginated<Pipeline> = self.send(reqwest::Method::GET, &path, None).await?;
+        Ok(page.values.into_iter().next())
+    }
+
     pub async fn list_steps(
         &self,
         workspace: &str,

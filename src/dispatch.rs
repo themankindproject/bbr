@@ -26,8 +26,12 @@ pub(crate) async fn dispatch(cli: Cli) -> Result<()> {
 
     match cli.command {
         None => {
+            // Run the update check concurrently with the overview fetch so a
+            // cold cache + slow GitHub doesn't add latency to plain `bbr`.
+            // Awaited after the overview so the notice prints after the output.
+            let update_check = tokio::spawn(commands::update::notify_if_outdated());
             let result = commands::status::run_overview(g).await;
-            commands::update::notify_if_outdated().await;
+            let _ = update_check.await;
             result
         }
         Some(Command::Status {
