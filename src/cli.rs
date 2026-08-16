@@ -710,6 +710,12 @@ pub enum CiAction {
         /// Ring the terminal bell when the pipeline reaches a terminal state.
         #[arg(long)]
         notify: bool,
+        /// Prefix streamed log lines with line numbers (with --logs).
+        #[arg(long)]
+        line_numbers: bool,
+        /// Resume streaming from a byte offset (reconnect after a dropped watch).
+        #[arg(long, value_name = "BYTES", default_value_t = 0)]
+        from_offset: u64,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -731,6 +737,16 @@ pub enum CiAction {
         /// Ring the terminal bell when the step reaches a terminal state.
         #[arg(long)]
         notify: bool,
+        /// Auto-advance to the next step when the current one finishes,
+        /// following the whole pipeline.
+        #[arg(long)]
+        all: bool,
+        /// Prefix streamed log lines with line numbers.
+        #[arg(long)]
+        line_numbers: bool,
+        /// Resume streaming from a byte offset (reconnect after a dropped tail).
+        #[arg(long, value_name = "BYTES", default_value_t = 0)]
+        from_offset: u64,
         #[command(flatten)]
         g: GlobalArgs,
     },

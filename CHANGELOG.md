@@ -18,6 +18,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`bbr ci watch --notify` / `bbr ci tail --notify`** — ring the terminal
   bell when the pipeline/step reaches a terminal state, so a long build
   finishing in a background pane grabs attention.
+- **Smart failure extraction** — on pipeline failure, `bbr ci watch` now
+  locates the first error line and shows it with surrounding context (10
+  lines before, 30 after, plus a short tail with an omission marker) instead
+  of a blind last-120-lines dump. Falls back to the tail when nothing in the
+  log classifies as an error.
+- **`bbr ci tail --all`** — auto-advance: when the tailed step finishes and
+  the pipeline is still running, tail switches to the next step (preferring
+  one already running, else the next pending one) and prints a fresh header,
+  following the whole pipeline in one command.
+- **`--line-numbers` on `ci watch --logs` and `ci tail`** — dim line-number
+  gutter on streamed output; numbering continues across chunk boundaries and
+  resets per step when auto-advancing.
+- **`--from-offset <BYTES>` on `ci watch` and `ci tail`** — resume streaming
+  from a byte offset after a dropped connection instead of re-fetching the
+  whole log.
 
 ### Fixed
 
@@ -168,6 +183,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   zero-count summaries ignored), chunk highlighting preserves bytes and
   trailing partial lines when colors are off, step-tag truncation is bounded,
   and pipeline elapsed time anchors to `created_on` with a local fallback.
+- **Smart failure extraction tests** — first-error windowing with context,
+  tail append + omission marker for early errors, fallback to `None` when no
+  error lines exist, and window clamping at log start.
+- **Line-numbered streaming tests** — per-line numbering, numbering
+  continuity across chunk boundaries, and no spurious number on partial-line
+  continuations.
 
 ### Docs
 

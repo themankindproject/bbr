@@ -209,6 +209,8 @@ pub async fn watch(
     interval: u64,
     include_logs: bool,
     notify: bool,
+    line_numbers: bool,
+    from_offset: u64,
 ) -> Result<()> {
     let repo = resolve_repo(g)?;
     let branch = match branch {
@@ -229,12 +231,12 @@ pub async fn watch(
     spinner.println(format!("Watching pipeline {uuid} on {branch}..."));
 
     // Track per-step byte offsets, last known state for transition detection,
-    // and whether we've printed the step header yet.
-    #[derive(Default)]
+    // whether we've printed the step header yet, and per-step line numbers.
     struct StepLogState {
         offset: u64,
         prev_state: String,
         header_printed: bool,
+        line_no: u64,
     }
 
     let mut log_state: Option<std::collections::HashMap<String, StepLogState>> = if include_logs {
@@ -242,6 +244,9 @@ pub async fn watch(
     } else {
         None
     };
+    // --from-offset resumes the first step that streams (the reconnect case);
+    // subsequent steps start at byte 0.
+    let mut resume_offset_remaining = from_offset;
 
     let mut current = initial;
     let watch_started = Instant::now();
@@ -265,12 +270,39 @@ pub async fn watch(
                 .find(|s| !s.is_terminal())
                 .map(|s| s.name.clone());
 
+            // --from-offset: seed the resume byte offset into the step that's
+            // currently running (or the last step if the pipeline already
+            // finished). Applied once, to the first poll that sees steps.
+            if resume_offset_remaining > 0 {
+                if let Some(target) = steps
+                    .iter()
+                    .find(|s| !s.is_terminal())
+                    .or_else(|| steps.last())
+                {
+                    log_state.as_mut().unwrap().insert(
+                        target.uuid.clone(),
+                        StepLogState {
+                            offset: resume_offset_remaining,
+                            prev_state: String::new(),
+                            header_printed: false,
+                            line_no: 1,
+                        },
+                    );
+                    resume_offset_remaining = 0;
+                }
+            }
+
             for step in &steps {
                 let state = log_state
                     .as_mut()
                     .unwrap()
                     .entry(step.uuid.clone())
-                    .or_default();
+                    .or_insert_with(|| StepLogState {
+                        offset: 0,
+                        prev_state: String::new(),
+                        header_printed: false,
+                        line_no: 1,
+                    });
 
                 let step_state_name = step.state_name().to_string();
 
@@ -318,7 +350,14 @@ pub async fn watch(
                     if printable_end > 0 {
                         let label = concurrent.then(|| step_tag(&step.name));
                         for line in chunk[..printable_end].lines() {
-                            spinner.println(render_watch_log_line(theme, label.as_deref(), line));
+                            let num = line_numbers.then_some(state.line_no);
+                            spinner.println(render_watch_log_line(
+                                theme,
+                                label.as_deref(),
+                                num,
+                                line,
+                            ));
+                            state.line_no += 1;
                         }
                     }
                     state.offset += printable_end as u64;
@@ -414,8 +453,21 @@ pub async fn watch(
         if let Some(step) = &out.failing_step {
             human.push_str(&format!("\n\nFailing step: {}", step.name));
         }
-        human.push_str("\n\n--- last 120 log lines ---\n");
-        human.push_str(&last_lines(&log, 120));
+        // Smart failure extraction: show the first error line with context
+        // instead of a blind tail. Falls back to the last 120 lines when
+        // nothing in the log classifies as an error.
+        match extract_failure_context(&log, 10, 30) {
+            Some((line_no, excerpt)) => {
+                human.push_str(&format!(
+                    "\n\n--- first error (line {line_no}) ± context ---\n"
+                ));
+                human.push_str(&highlight_log_chunk(theme, &excerpt));
+            }
+            None => {
+                human.push_str("\n\n--- last 120 log lines ---\n");
+                human.push_str(&last_lines(&log, 120));
+            }
+        }
     }
     fmt.print(&out, &human)?;
 
@@ -429,6 +481,11 @@ pub async fn watch(
 }
 
 /// Stream step logs in real time using HTTP Range requests.
+///
+/// With `all`, auto-advances to the next step when the current one finishes,
+/// following the whole pipeline. `from_offset` resumes the first step from a
+/// byte offset (reconnect after a dropped `tail`).
+#[allow(clippy::too_many_arguments)]
 pub async fn tail(
     g: &GlobalArgs,
     step: Option<&str>,
@@ -437,6 +494,9 @@ pub async fn tail(
     interval: u64,
     follow: bool,
     notify: bool,
+    all: bool,
+    line_numbers: bool,
+    from_offset: u64,
 ) -> Result<()> {
     let repo = resolve_repo(g)?;
     let branch: String = if let Some(b) = branch {
@@ -514,98 +574,166 @@ pub async fn tail(
         crate::output::print_block(&format!("{header}\n"))?;
     }
 
-    let mut offset: u64 = 0;
+    let mut offset: u64 = from_offset;
     let mut prev_state = selected.state_name().to_string();
     let mut step_is_terminal = selected.is_terminal();
     let started = Instant::now();
+    let mut nums = LineNumState::new(1);
+    let mut current_step_uuid = step_uuid.clone();
+    let mut current_step_name = step_name.clone();
+    // Steps already tailed — auto-advance never revisits a step.
+    let mut tailed: std::collections::HashSet<String> =
+        std::collections::HashSet::from([step_uuid.clone()]);
 
-    loop {
-        let chunk = client
-            .step_log_range(
-                &repo.workspace,
-                &repo.slug,
-                &pipeline_uuid,
-                &step_uuid,
-                offset,
-            )
-            .await
-            .unwrap_or_default();
-
-        if !chunk.is_empty() {
-            // Only print up to the last complete line. If the chunk
-            // doesn't end with '\n', hold back the partial trailing line
-            // so the next poll re-fetches it complete.
-            let printable_end = if chunk.ends_with('\n') {
-                chunk.len()
-            } else {
-                chunk.rfind('\n').map(|i| i + 1).unwrap_or(0)
-            };
-
-            if printable_end > 0 && !g.json {
-                crate::output::print_block(&highlight_log_chunk(theme, &chunk[..printable_end]))?;
-            }
-            offset += printable_end as u64;
-        }
-
-        if step_is_terminal {
-            break;
-        }
-
-        time::sleep(Duration::from_secs(interval.max(1))).await;
-        let fresh_steps = client
-            .list_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
-            .await
-            .map(|s| s.values)
-            .unwrap_or_default();
-        if let Some(fresh) = fresh_steps.iter().find(|s| s.uuid == step_uuid) {
-            let new_state = fresh.state_name().to_string();
-            if new_state != prev_state {
-                if !g.json {
-                    let dash = if theme.unicode_enabled() {
-                        "──"
-                    } else {
-                        "--"
-                    };
-                    crate::output::print_block(&format!(
-                        "{}\n",
-                        render_step_transition(theme, None, dash, &prev_state, &new_state)
-                    ))?;
-                }
-                prev_state = new_state;
-            }
-            step_is_terminal = fresh.is_terminal();
-        }
-    }
-
-    // If --follow, keep polling for a bit after terminal to catch flushing logs.
-    if follow {
-        for _ in 0..3 {
-            time::sleep(Duration::from_secs(interval.max(1))).await;
+    'steps: loop {
+        // Stream the current step until it reaches a terminal state.
+        loop {
             let chunk = client
                 .step_log_range(
                     &repo.workspace,
                     &repo.slug,
                     &pipeline_uuid,
-                    &step_uuid,
+                    &current_step_uuid,
                     offset,
                 )
                 .await
                 .unwrap_or_default();
-            if chunk.is_empty() {
+
+            if !chunk.is_empty() {
+                // Only print up to the last complete line. If the chunk
+                // doesn't end with '\n', hold back the partial trailing line
+                // so the next poll re-fetches it complete.
+                let printable_end = if chunk.ends_with('\n') {
+                    chunk.len()
+                } else {
+                    chunk.rfind('\n').map(|i| i + 1).unwrap_or(0)
+                };
+
+                if printable_end > 0 && !g.json {
+                    let rendered = if line_numbers {
+                        render_log_chunk_numbered(theme, &chunk[..printable_end], &mut nums)
+                    } else {
+                        highlight_log_chunk(theme, &chunk[..printable_end])
+                    };
+                    crate::output::print_block(&rendered)?;
+                }
+                offset += printable_end as u64;
+            }
+
+            if step_is_terminal {
                 break;
             }
-            if !g.json {
-                crate::output::print_block(&highlight_log_chunk(theme, &chunk))?;
+
+            time::sleep(Duration::from_secs(interval.max(1))).await;
+            let fresh_steps = client
+                .list_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
+                .await
+                .map(|s| s.values)
+                .unwrap_or_default();
+            if let Some(fresh) = fresh_steps.iter().find(|s| s.uuid == current_step_uuid) {
+                let new_state = fresh.state_name().to_string();
+                if new_state != prev_state {
+                    if !g.json {
+                        let dash = if theme.unicode_enabled() {
+                            "──"
+                        } else {
+                            "--"
+                        };
+                        crate::output::print_block(&format!(
+                            "{}\n",
+                            render_step_transition(theme, None, dash, &prev_state, &new_state)
+                        ))?;
+                    }
+                    prev_state = new_state;
+                }
+                step_is_terminal = fresh.is_terminal();
             }
-            offset += chunk.len() as u64;
         }
+
+        // --all: auto-advance to the next step when the pipeline is still
+        // going. Prefer a step that's already running; fall back to the next
+        // pending step so we attach before it starts.
+        if all {
+            let pipeline_done = client
+                .get_pipeline(&repo.workspace, &repo.slug, &pipeline_uuid)
+                .await
+                .map(|p| p.is_terminal())
+                .unwrap_or(true);
+            if !pipeline_done {
+                let fresh_steps = client
+                    .list_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
+                    .await
+                    .map(|s| s.values)
+                    .unwrap_or_default();
+                let next = fresh_steps
+                    .iter()
+                    .find(|s| !tailed.contains(&s.uuid) && !s.is_terminal())
+                    .or_else(|| fresh_steps.iter().find(|s| !tailed.contains(&s.uuid)));
+                if let Some(next_step) = next {
+                    current_step_uuid = next_step.uuid.clone();
+                    current_step_name = next_step.name.clone();
+                    tailed.insert(current_step_uuid.clone());
+                    offset = 0;
+                    nums = LineNumState::new(1);
+                    prev_state = next_step.state_name().to_string();
+                    step_is_terminal = next_step.is_terminal();
+                    if !g.json {
+                        let short = current_step_uuid.trim_matches(|c| c == '{' || c == '}');
+                        let header = render_tail_header(
+                            theme,
+                            &current_step_name,
+                            build_number,
+                            short,
+                            next_step.state_name(),
+                        );
+                        crate::output::print_block(&format!("\n{header}\n"))?;
+                    }
+                    continue 'steps;
+                }
+            }
+        }
+
+        // Not advancing — if --follow, poll a bit after terminal to catch
+        // flushing logs, then exit.
+        if follow {
+            for _ in 0..3 {
+                time::sleep(Duration::from_secs(interval.max(1))).await;
+                let chunk = client
+                    .step_log_range(
+                        &repo.workspace,
+                        &repo.slug,
+                        &pipeline_uuid,
+                        &current_step_uuid,
+                        offset,
+                    )
+                    .await
+                    .unwrap_or_default();
+                if chunk.is_empty() {
+                    break;
+                }
+                if !g.json {
+                    let rendered = if line_numbers {
+                        render_log_chunk_numbered(theme, &chunk, &mut nums)
+                    } else {
+                        highlight_log_chunk(theme, &chunk)
+                    };
+                    crate::output::print_block(&rendered)?;
+                }
+                offset += chunk.len() as u64;
+            }
+        }
+        break;
     }
 
     // Exit summary
     if !g.json {
         let elapsed = started.elapsed();
-        let summary =
-            render_tail_exit_summary(theme, &step_name, &prev_state, elapsed.as_secs_f64());
+        let summary = render_tail_exit_summary(
+            theme,
+            &current_step_name,
+            &prev_state,
+            elapsed.as_secs_f64(),
+        );
         crate::output::print_block(&format!("\n{summary}\n"))?;
         if notify {
             // Terminal bell: grab attention when a long tail finishes in a
@@ -1228,15 +1356,94 @@ fn step_tag(name: &str) -> String {
     format!("[{}]", crate::commands::truncate(name, 14))
 }
 
+/// Smart failure extraction: locate the first line that classifies as an
+/// error and return its 1-based line number plus an excerpt of `before`
+/// lines above and `after` lines below. When the window doesn't reach the
+/// end of the log, a short tail is appended (with an omission marker) so the
+/// final state stays visible. Returns `None` when nothing looks like an
+/// error — callers should fall back to a plain tail of the log.
+fn extract_failure_context(log: &str, before: usize, after: usize) -> Option<(usize, String)> {
+    let lines: Vec<&str> = log.lines().collect();
+    let idx = lines
+        .iter()
+        .position(|l| classify_log_line(l) == LogLineKind::Error)?;
+    let start = idx.saturating_sub(before);
+    let end = (idx + 1 + after).min(lines.len());
+    let mut out = lines[start..end].join("\n");
+    if end < lines.len() {
+        let remaining = lines.len() - end;
+        if remaining <= after {
+            // Small gap — show it in full rather than an omission marker.
+            out.push('\n');
+            out.push_str(&lines[end..].join("\n"));
+        } else {
+            let tail_n = 20.min(remaining);
+            out.push_str(&format!(
+                "\n[... {} lines omitted ...]\n",
+                remaining - tail_n
+            ));
+            out.push_str(&lines[lines.len() - tail_n..].join("\n"));
+        }
+    }
+    Some((idx + 1, out))
+}
+
+/// Line-numbering state for streamed log output. Tracks the next line number
+/// and whether the cursor is at the start of a fresh line, so a chunk that
+/// continues a partial line doesn't get a spurious number.
+struct LineNumState {
+    next: u64,
+    at_line_start: bool,
+}
+
+impl LineNumState {
+    fn new(start_line: u64) -> Self {
+        Self {
+            next: start_line,
+            at_line_start: true,
+        }
+    }
+}
+
+/// Render a log chunk with a dim line-number gutter, continuing numbering
+/// across chunk boundaries. A trailing partial line gets a number when it
+/// starts a line; its continuation in the next chunk does not.
+fn render_log_chunk_numbered(theme: &Theme, chunk: &str, nums: &mut LineNumState) -> String {
+    let mut out = String::with_capacity(chunk.len() + chunk.lines().count() * 8);
+    for piece in chunk.split_inclusive('\n') {
+        let (body, nl) = match piece.strip_suffix('\n') {
+            Some(b) => (b, "\n"),
+            None => (piece, ""),
+        };
+        if nums.at_line_start {
+            out.push_str(&theme.dim(&format!("{:>6}  ", nums.next)));
+            nums.next += 1;
+        }
+        out.push_str(&highlight_log_line(theme, body));
+        out.push_str(nl);
+        nums.at_line_start = !nl.is_empty();
+    }
+    out
+}
+
 /// Format a log line for live streaming with the gutter character. When
 /// `label` is `Some`, it is printed between the gutter and the line body so
-/// concurrent parallel steps stay readable.
-fn render_watch_log_line(theme: &Theme, label: Option<&str>, line: &str) -> String {
+/// concurrent parallel steps stay readable. When `line_no` is `Some`, a dim
+/// line number is printed after the gutter.
+fn render_watch_log_line(
+    theme: &Theme,
+    label: Option<&str>,
+    line_no: Option<u64>,
+    line: &str,
+) -> String {
     let gutter = if theme.unicode_enabled() { "│" } else { "|" };
     let body = highlight_log_line(theme, line);
-    match label {
-        Some(tag) => format!("{} {} {}", theme.dim(gutter), theme.dim(tag), body),
-        None => format!("{} {}", theme.dim(gutter), body),
+    let num = line_no.map(|n| theme.dim(&format!("{n:>6}  ")).into_owned());
+    match (label, num) {
+        (Some(tag), Some(n)) => format!("{} {} {} {}", theme.dim(gutter), theme.dim(tag), n, body),
+        (Some(tag), None) => format!("{} {} {}", theme.dim(gutter), theme.dim(tag), body),
+        (None, Some(n)) => format!("{} {} {}", theme.dim(gutter), n, body),
+        (None, None) => format!("{} {}", theme.dim(gutter), body),
     }
 }
 
@@ -1563,7 +1770,7 @@ mod tests {
     #[test]
     fn watch_log_line_uses_vertical_bar_gutter() {
         let t = no_color_theme();
-        let line = render_watch_log_line(&t, None, "cargo build --release");
+        let line = render_watch_log_line(&t, None, None, "cargo build --release");
         assert!(
             line.starts_with("│ "),
             "log line must start with box gutter"
@@ -1574,7 +1781,7 @@ mod tests {
     #[test]
     fn watch_log_line_preserves_user_content() {
         let t = no_color_theme();
-        let line = render_watch_log_line(&t, None, "    Compiling bbr v0.2.0");
+        let line = render_watch_log_line(&t, None, None, "    Compiling bbr v0.2.0");
         assert!(line.contains("Compiling bbr v0.2.0"));
         assert!(line.starts_with("│     "));
     }
@@ -1582,14 +1789,14 @@ mod tests {
     #[test]
     fn watch_log_line_excludes_newline() {
         let t = no_color_theme();
-        let line = render_watch_log_line(&t, None, "hello");
+        let line = render_watch_log_line(&t, None, None, "hello");
         assert!(!line.contains('\n'));
     }
 
     #[test]
     fn watch_log_line_with_label_inserts_tag_after_gutter() {
         let t = no_color_theme();
-        let line = render_watch_log_line(&t, Some("[build]"), "running tests");
+        let line = render_watch_log_line(&t, Some("[build]"), None, "running tests");
         assert!(
             line.starts_with("│ [build] "),
             "label must follow the gutter"
@@ -1600,8 +1807,28 @@ mod tests {
     #[test]
     fn watch_log_line_without_label_has_no_tag() {
         let t = no_color_theme();
-        let line = render_watch_log_line(&t, None, "running tests");
+        let line = render_watch_log_line(&t, None, None, "running tests");
         assert!(!line.contains("[build]"));
+    }
+
+    #[test]
+    fn watch_log_line_with_line_number_inserts_number_after_gutter() {
+        let t = no_color_theme();
+        let line = render_watch_log_line(&t, None, Some(42), "running tests");
+        assert!(
+            line.starts_with("│     42  "),
+            "line number must follow the gutter, got: {line}"
+        );
+        assert!(line.contains("running tests"));
+    }
+
+    #[test]
+    fn watch_log_line_with_label_and_number_orders_label_then_number() {
+        let t = no_color_theme();
+        let line = render_watch_log_line(&t, Some("[build]"), Some(7), "x");
+        let label_pos = line.find("[build]").unwrap();
+        let num_pos = line.find("7").unwrap();
+        assert!(label_pos < num_pos, "label must precede line number");
     }
 
     // ---- log line classification tests ------------------------------------
@@ -1684,6 +1911,98 @@ mod tests {
         assert_eq!(highlight_log_chunk(&t, chunk), chunk);
     }
 
+    // ---- smart failure extraction tests (E) --------------------------------
+
+    #[test]
+    fn failure_context_finds_first_error_with_window() {
+        let log = (1..=50)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\nerror: boom\n"
+            + "after 1\nafter 2\n";
+        let (line_no, excerpt) = extract_failure_context(&log, 3, 2).unwrap();
+        assert_eq!(line_no, 51);
+        assert!(excerpt.contains("line 48"));
+        assert!(excerpt.contains("line 50"));
+        assert!(excerpt.contains("error: boom"));
+        assert!(excerpt.contains("after 1"));
+        assert!(excerpt.contains("after 2"));
+        // Window reaches the end → no omission marker.
+        assert!(!excerpt.contains("omitted"));
+    }
+
+    #[test]
+    fn failure_context_appends_tail_when_error_is_early() {
+        let mut log = String::from("error: early boom\n");
+        for i in 1..=100 {
+            log.push_str(&format!("filler {i}\n"));
+        }
+        let (line_no, excerpt) = extract_failure_context(&log, 5, 10).unwrap();
+        assert_eq!(line_no, 1);
+        assert!(excerpt.contains("error: early boom"));
+        assert!(excerpt.contains("lines omitted"));
+        assert!(excerpt.contains("filler 100"));
+    }
+
+    #[test]
+    fn failure_context_none_when_no_error_lines() {
+        let log = "Compiling bbr v0.2.1\nFinished release\ntest result: ok. 42 passed; 0 failed\n";
+        assert!(extract_failure_context(log, 5, 10).is_none());
+    }
+
+    #[test]
+    fn failure_context_clamps_window_at_log_start() {
+        let log = "error: first line fails\nsecond\nthird\n";
+        let (line_no, excerpt) = extract_failure_context(log, 10, 2).unwrap();
+        assert_eq!(line_no, 1);
+        assert!(excerpt.starts_with("error: first line fails"));
+    }
+
+    // ---- numbered chunk rendering tests (G) --------------------------------
+
+    #[test]
+    fn numbered_chunk_numbers_each_line() {
+        let t = no_color_theme();
+        let mut nums = LineNumState::new(1);
+        let out = render_log_chunk_numbered(&t, "alpha\nbeta\n", &mut nums);
+        assert!(out.contains("     1  alpha\n"));
+        assert!(out.contains("     2  beta\n"));
+        assert_eq!(nums.next, 3);
+        assert!(nums.at_line_start);
+    }
+
+    #[test]
+    fn numbered_chunk_continues_across_boundaries() {
+        let t = no_color_theme();
+        let mut nums = LineNumState::new(1);
+        render_log_chunk_numbered(&t, "one\ntwo\n", &mut nums);
+        let out = render_log_chunk_numbered(&t, "three\n", &mut nums);
+        assert!(out.contains("     3  three\n"));
+    }
+
+    #[test]
+    fn numbered_chunk_no_number_for_partial_line_continuation() {
+        let t = no_color_theme();
+        let mut nums = LineNumState::new(1);
+        // Chunk ends mid-line: the partial line gets a number...
+        let out1 = render_log_chunk_numbered(&t, "start of line", &mut nums);
+        assert!(out1.contains("     1  start of line"));
+        assert!(!nums.at_line_start);
+        // ...and its continuation in the next chunk does not.
+        let out2 = render_log_chunk_numbered(&t, " continued\n", &mut nums);
+        assert!(out2.starts_with(" continued\n"), "got: {out2:?}");
+        assert_eq!(nums.next, 2);
+    }
+
+    #[test]
+    fn numbered_chunk_preserves_bytes_when_no_colors() {
+        let t = no_color_theme();
+        let mut nums = LineNumState::new(1);
+        let out = render_log_chunk_numbered(&t, "plain\n", &mut nums);
+        assert_eq!(out, "     1  plain\n");
+    }
+
     #[test]
     fn step_tag_truncates_long_names() {
         let tag = step_tag("A Very Long Step Name That Exceeds The Limit");
@@ -1718,7 +2037,7 @@ mod tests {
         let t = no_color_theme();
         assert!(!render_tail_header(&t, "B", 1, "u", "s").contains('\n'));
         assert!(!render_watch_step_header(&t, "B", "s").contains('\n'));
-        assert!(!render_watch_log_line(&t, None, "l").contains('\n'));
+        assert!(!render_watch_log_line(&t, None, None, "l").contains('\n'));
         assert!(!render_tail_exit_summary(&t, "B", "s", 1.0).contains('\n'));
         assert!(!render_step_transition(&t, None, "│", "a", "b").contains('\n'));
     }
