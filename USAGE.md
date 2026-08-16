@@ -508,9 +508,10 @@ bbr ci watch                         # current branch
 bbr ci watch --branch main
 bbr ci watch --logs                  # stream step logs in real-time while watching
 bbr ci watch --interval-secs 10      # poll interval (default 5)
+bbr ci watch --notify                # ring the terminal bell when the pipeline finishes
 ```
 
-When `--logs` is active, step output is streamed with box-drawn headers as it arrives. Without `--logs`, only the last 120 lines of a failing step are shown on failure.
+When `--logs` is active, step output is streamed with box-drawn headers as it arrives. Error and warning lines are highlighted (red/yellow) when colors are enabled; piped output is unchanged. If parallel steps stream at once, each line is tagged with its step name (`│ [build] …`) so interleaved output stays readable. The spinner shows the pipeline state, current step, and elapsed time. Without `--logs`, only the last 120 lines of a failing step are shown on failure.
 
 #### `bbr ci tail`
 
@@ -524,9 +525,10 @@ bbr ci tail --pipeline <uuid>        # specific pipeline
 bbr ci tail --branch main            # specific branch
 bbr ci tail --interval 2             # poll every 2s (default 3)
 bbr ci tail --follow                 # keep polling after terminal state (flush)
+bbr ci tail --notify                 # ring the terminal bell when the step finishes
 ```
 
-Output: raw log text streamed to stdout with a header line (`==> StepName :: #42 :: uuid :: STATE`) and an exit summary showing elapsed time.
+Output: raw log text streamed to stdout with a header line (`==> StepName :: #42 :: uuid :: STATE`) and an exit summary showing elapsed time. Error and warning lines are highlighted (red/yellow) when colors are enabled; piped output is byte-identical.
 
 #### `bbr ci trigger`
 

@@ -361,14 +361,16 @@ async fn dispatch_ci(action: CiAction) -> Result<()> {
             branch,
             interval,
             logs,
+            notify,
             g,
-        } => commands::ci::watch(&g, branch.as_deref(), interval, logs).await,
+        } => commands::ci::watch(&g, branch.as_deref(), interval, logs, notify).await,
         CiAction::Tail {
             step,
             pipeline,
             branch,
             interval,
             follow,
+            notify,
             g,
         } => {
             commands::ci::tail(
@@ -378,6 +380,7 @@ async fn dispatch_ci(action: CiAction) -> Result<()> {
                 branch.as_deref(),
                 interval,
                 follow,
+                notify,
             )
             .await
         }

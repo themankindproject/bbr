@@ -707,6 +707,9 @@ pub enum CiAction {
         interval: u64,
         #[arg(long, help = "stream step logs in real-time while watching")]
         logs: bool,
+        /// Ring the terminal bell when the pipeline reaches a terminal state.
+        #[arg(long)]
+        notify: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -725,6 +728,9 @@ pub enum CiAction {
         /// state (logs may still be flushing).
         #[arg(long)]
         follow: bool,
+        /// Ring the terminal bell when the step reaches a terminal state.
+        #[arg(long)]
+        notify: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },

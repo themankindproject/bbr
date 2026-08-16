@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   auth error (exit 2) before git detection, so running e.g. `bbr repo info`
   outside a git repo reports "no credentials" instead of a confusing
   "not a git repository" error.
+- **`bbr ci watch --notify` / `bbr ci tail --notify`** — ring the terminal
+  bell when the pipeline/step reaches a terminal state, so a long build
+  finishing in a background pane grabs attention.
 
 ### Fixed
 
@@ -115,6 +118,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `-v` help text corrected: `-v` = debug, `-vv` = trace (the code already
   behaved this way; docs now match).
+- **CI log watching UX** — `ci watch --logs` and `ci tail` now highlight
+  error/warning lines (red/yellow) when colors are enabled; piped output is
+  byte-identical. When parallel steps stream at once, `ci watch --logs` tags
+  each line with its step name so interleaved output stays readable. The
+  `ci watch` spinner now shows state · current step · elapsed time (anchored
+  to the pipeline's `created_on`, correct even when attaching mid-run).
 - **`bbr update` shows a download progress bar** — the binary download now
   streams with an indicatif progress bar (bytes, ETA) instead of looking like
   a hang; hidden under `--quiet`/`BBR_QUIET`.
@@ -155,6 +164,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`stack land` config-preservation unit tests** — landing one stack keeps
   sibling stacks, clears `active` only when it pointed at the landed stack,
   and partial failure retains unmerged PRs.
+- **CI log-watching UX tests** — log-line classification (error/warn/normal,
+  zero-count summaries ignored), chunk highlighting preserves bytes and
+  trailing partial lines when colors are off, step-tag truncation is bounded,
+  and pipeline elapsed time anchors to `created_on` with a local fallback.
 
 ### Docs
 

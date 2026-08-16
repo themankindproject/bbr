@@ -208,6 +208,7 @@ pub async fn watch(
     branch: Option<&str>,
     interval: u64,
     include_logs: bool,
+    notify: bool,
 ) -> Result<()> {
     let repo = resolve_repo(g)?;
     let branch = match branch {
@@ -243,6 +244,8 @@ pub async fn watch(
     };
 
     let mut current = initial;
+    let watch_started = Instant::now();
+    let mut current_step_name: Option<String> = None;
     loop {
         let is_terminal = current.is_terminal();
 
@@ -252,6 +255,15 @@ pub async fn watch(
                 .await
                 .map(|s| s.values)
                 .unwrap_or_default();
+
+            // When parallel steps stream at once, tag each line with its step
+            // name so interleaved output stays readable. Sequential pipelines
+            // (one active step) keep the clean unlabeled format.
+            let concurrent = steps.iter().filter(|s| !s.is_terminal()).count() >= 2;
+            current_step_name = steps
+                .iter()
+                .find(|s| !s.is_terminal())
+                .map(|s| s.name.clone());
 
             for step in &steps {
                 let state = log_state
@@ -304,8 +316,9 @@ pub async fn watch(
                     };
 
                     if printable_end > 0 {
+                        let label = concurrent.then(|| step_tag(&step.name));
                         for line in chunk[..printable_end].lines() {
-                            spinner.println(render_watch_log_line(theme, line));
+                            spinner.println(render_watch_log_line(theme, label.as_deref(), line));
                         }
                     }
                     state.offset += printable_end as u64;
@@ -316,13 +329,31 @@ pub async fn watch(
         if is_terminal {
             break;
         }
-        spinner.set_message(format!("state: {}", current.state_name()));
+        // Rich spinner: state · current step · elapsed. Elapsed is derived
+        // from the pipeline's created_on so it's correct even when we attach
+        // to an already-running pipeline.
+        let elapsed = pipeline_elapsed_secs(current.created_on.as_deref(), watch_started);
+        let msg = match &current_step_name {
+            Some(name) if include_logs => format!(
+                "{} · {} · {}",
+                current.state_name(),
+                crate::commands::truncate(name, 30),
+                human_duration(elapsed)
+            ),
+            _ => format!("{} · {}", current.state_name(), human_duration(elapsed)),
+        };
+        spinner.set_message(msg);
         time::sleep(Duration::from_secs(interval.max(1))).await;
         current = client
             .get_pipeline(&repo.workspace, &repo.slug, &uuid)
             .await?;
     }
     spinner.finish();
+    if notify && !g.json {
+        // Terminal bell: grab attention when a long build finishes in a
+        // background pane. stderr keeps stdout clean for piping.
+        eprint!("\x07");
+    }
 
     let raw_steps = steps_for_pipeline(&client, &repo.workspace, &repo.slug, &uuid)
         .await
@@ -405,6 +436,7 @@ pub async fn tail(
     branch: Option<&str>,
     interval: u64,
     follow: bool,
+    notify: bool,
 ) -> Result<()> {
     let repo = resolve_repo(g)?;
     let branch: String = if let Some(b) = branch {
@@ -510,7 +542,7 @@ pub async fn tail(
             };
 
             if printable_end > 0 && !g.json {
-                crate::output::print_block(&chunk[..printable_end])?;
+                crate::output::print_block(&highlight_log_chunk(theme, &chunk[..printable_end]))?;
             }
             offset += printable_end as u64;
         }
@@ -563,7 +595,7 @@ pub async fn tail(
                 break;
             }
             if !g.json {
-                crate::output::print_block(&chunk)?;
+                crate::output::print_block(&highlight_log_chunk(theme, &chunk))?;
             }
             offset += chunk.len() as u64;
         }
@@ -575,6 +607,11 @@ pub async fn tail(
         let summary =
             render_tail_exit_summary(theme, &step_name, &prev_state, elapsed.as_secs_f64());
         crate::output::print_block(&format!("\n{summary}\n"))?;
+        if notify {
+            // Terminal bell: grab attention when a long tail finishes in a
+            // background pane. stderr keeps stdout clean for piping.
+            eprint!("\x07");
+        }
     }
 
     Ok(())
@@ -1090,10 +1127,117 @@ fn render_watch_step_header(theme: &Theme, step_name: &str, state: &str) -> Stri
     )
 }
 
-/// Format a log line for live streaming with the gutter character.
-fn render_watch_log_line(theme: &Theme, line: &str) -> String {
+/// Classification of a streamed log line, used to make failures pop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogLineKind {
+    Error,
+    Warn,
+    Normal,
+}
+
+/// Elapsed seconds for a pipeline, anchored to its `created_on` timestamp so
+/// the counter is correct even when `bbr ci watch` attaches mid-run. Falls
+/// back to the local watch duration when the timestamp is missing/unparseable.
+fn pipeline_elapsed_secs(created_on: Option<&str>, watch_started: Instant) -> u64 {
+    if let Some(ts) = created_on {
+        if let Ok(dt) = ::time::OffsetDateTime::parse(
+            ts,
+            &::time::format_description::well_known::Iso8601::DEFAULT,
+        ) {
+            let now = ::time::OffsetDateTime::now_utc();
+            let secs = (now - dt).whole_seconds();
+            if secs >= 0 {
+                return secs as u64;
+            }
+        }
+    }
+    watch_started.elapsed().as_secs()
+}
+
+/// Heuristically classify a log line. Favors recall for real failures while
+/// ignoring zero-count test summaries (e.g. "0 failed", "0 warnings").
+fn classify_log_line(line: &str) -> LogLineKind {
+    let lower = line.to_ascii_lowercase();
+
+    // Unambiguous failure signals.
+    const STRONG: &[&str] = &[
+        "fatal",
+        "panic",
+        "traceback",
+        "assertion failed",
+        "segmentation fault",
+        "segfault",
+        "core dumped",
+        "✗",
+    ];
+    if STRONG.iter().any(|m| lower.contains(m)) {
+        return LogLineKind::Error;
+    }
+
+    // error / failed / failure, ignoring zero-count summaries.
+    let has_err_word =
+        lower.contains("error") || lower.contains("failed") || lower.contains("failure");
+    let zero_err = lower.contains("0 failed")
+        || lower.contains("failed: 0")
+        || lower.contains("0 failures")
+        || lower.contains("0 error")
+        || lower.contains("errors: 0")
+        || lower.contains("error: 0");
+    if has_err_word && !zero_err {
+        return LogLineKind::Error;
+    }
+
+    const WARN: &[&str] = &["warning", "warn:", "deprecated", "deprecation"];
+    let has_warn_word = WARN.iter().any(|m| lower.contains(m));
+    let zero_warn = lower.contains("0 warning") || lower.contains("warnings: 0");
+    if has_warn_word && !zero_warn {
+        return LogLineKind::Warn;
+    }
+
+    LogLineKind::Normal
+}
+
+/// Apply error/warning coloring to a single log line. Colors are already gated
+/// on TTY / NO_COLOR by the theme, so piped output stays byte-identical.
+fn highlight_log_line(theme: &Theme, line: &str) -> String {
+    match classify_log_line(line) {
+        LogLineKind::Error => theme.error(line).into_owned(),
+        LogLineKind::Warn => theme.warn(line).into_owned(),
+        LogLineKind::Normal => line.to_string(),
+    }
+}
+
+/// Highlight error/warning lines across a whole log chunk, preserving line
+/// endings and any trailing partial line byte-for-byte. When colors are off
+/// the output is identical to the input.
+fn highlight_log_chunk(theme: &Theme, chunk: &str) -> String {
+    let mut out = String::with_capacity(chunk.len());
+    for piece in chunk.split_inclusive('\n') {
+        let (body, nl) = match piece.strip_suffix('\n') {
+            Some(b) => (b, "\n"),
+            None => (piece, ""),
+        };
+        out.push_str(&highlight_log_line(theme, body));
+        out.push_str(nl);
+    }
+    out
+}
+
+/// Short bracketed tag used to disambiguate interleaved parallel-step logs.
+fn step_tag(name: &str) -> String {
+    format!("[{}]", crate::commands::truncate(name, 14))
+}
+
+/// Format a log line for live streaming with the gutter character. When
+/// `label` is `Some`, it is printed between the gutter and the line body so
+/// concurrent parallel steps stay readable.
+fn render_watch_log_line(theme: &Theme, label: Option<&str>, line: &str) -> String {
     let gutter = if theme.unicode_enabled() { "│" } else { "|" };
-    format!("{} {}", theme.dim(gutter), line)
+    let body = highlight_log_line(theme, line);
+    match label {
+        Some(tag) => format!("{} {} {}", theme.dim(gutter), theme.dim(tag), body),
+        None => format!("{} {}", theme.dim(gutter), body),
+    }
 }
 
 /// Format the exit summary for `bbr ci tail`.
@@ -1419,7 +1563,7 @@ mod tests {
     #[test]
     fn watch_log_line_uses_vertical_bar_gutter() {
         let t = no_color_theme();
-        let line = render_watch_log_line(&t, "cargo build --release");
+        let line = render_watch_log_line(&t, None, "cargo build --release");
         assert!(
             line.starts_with("│ "),
             "log line must start with box gutter"
@@ -1430,7 +1574,7 @@ mod tests {
     #[test]
     fn watch_log_line_preserves_user_content() {
         let t = no_color_theme();
-        let line = render_watch_log_line(&t, "    Compiling bbr v0.2.0");
+        let line = render_watch_log_line(&t, None, "    Compiling bbr v0.2.0");
         assert!(line.contains("Compiling bbr v0.2.0"));
         assert!(line.starts_with("│     "));
     }
@@ -1438,8 +1582,135 @@ mod tests {
     #[test]
     fn watch_log_line_excludes_newline() {
         let t = no_color_theme();
-        let line = render_watch_log_line(&t, "hello");
+        let line = render_watch_log_line(&t, None, "hello");
         assert!(!line.contains('\n'));
+    }
+
+    #[test]
+    fn watch_log_line_with_label_inserts_tag_after_gutter() {
+        let t = no_color_theme();
+        let line = render_watch_log_line(&t, Some("[build]"), "running tests");
+        assert!(
+            line.starts_with("│ [build] "),
+            "label must follow the gutter"
+        );
+        assert!(line.contains("running tests"));
+    }
+
+    #[test]
+    fn watch_log_line_without_label_has_no_tag() {
+        let t = no_color_theme();
+        let line = render_watch_log_line(&t, None, "running tests");
+        assert!(!line.contains("[build]"));
+    }
+
+    // ---- log line classification tests ------------------------------------
+
+    #[test]
+    fn classify_error_lines() {
+        assert_eq!(
+            classify_log_line("error[E0308]: mismatched types"),
+            LogLineKind::Error
+        );
+        assert_eq!(classify_log_line("test foo ... FAILED"), LogLineKind::Error);
+        assert_eq!(
+            classify_log_line("thread 'main' panicked at src/main.rs:1"),
+            LogLineKind::Error
+        );
+        assert_eq!(
+            classify_log_line("fatal: not a git repository"),
+            LogLineKind::Error
+        );
+        assert_eq!(
+            classify_log_line("Traceback (most recent call last):"),
+            LogLineKind::Error
+        );
+        assert_eq!(
+            classify_log_line("Segmentation fault (core dumped)"),
+            LogLineKind::Error
+        );
+    }
+
+    #[test]
+    fn classify_warn_lines() {
+        assert_eq!(
+            classify_log_line("warning: unused variable `x`"),
+            LogLineKind::Warn
+        );
+        assert_eq!(
+            classify_log_line("WARN: deprecated API in use"),
+            LogLineKind::Warn
+        );
+    }
+
+    #[test]
+    fn classify_normal_lines() {
+        assert_eq!(
+            classify_log_line("Compiling bbr v0.2.1"),
+            LogLineKind::Normal
+        );
+        assert_eq!(classify_log_line("running 42 tests"), LogLineKind::Normal);
+        assert_eq!(
+            classify_log_line("Finished release [optimized] target(s)"),
+            LogLineKind::Normal
+        );
+    }
+
+    #[test]
+    fn classify_ignores_zero_count_summaries() {
+        // "0 failed" / "0 warnings" are success summaries, not failures.
+        assert_eq!(
+            classify_log_line("test result: ok. 42 passed; 0 failed"),
+            LogLineKind::Normal
+        );
+        assert_eq!(classify_log_line("0 warnings emitted"), LogLineKind::Normal);
+        assert_eq!(
+            classify_log_line("errors: 0, warnings: 0"),
+            LogLineKind::Normal
+        );
+    }
+
+    #[test]
+    fn highlight_chunk_preserves_bytes_when_no_colors() {
+        let t = no_color_theme();
+        let chunk = "ok line\nerror: boom\n";
+        assert_eq!(highlight_log_chunk(&t, chunk), chunk);
+    }
+
+    #[test]
+    fn highlight_chunk_preserves_trailing_partial_line() {
+        let t = no_color_theme();
+        let chunk = "complete\npartial";
+        assert_eq!(highlight_log_chunk(&t, chunk), chunk);
+    }
+
+    #[test]
+    fn step_tag_truncates_long_names() {
+        let tag = step_tag("A Very Long Step Name That Exceeds The Limit");
+        assert!(tag.starts_with('['));
+        assert!(tag.ends_with(']'));
+        // [ + 14 cols + ellipsis ("…" or "...") + ] → bounded either way.
+        assert!(tag.chars().count() <= 20, "tag must be bounded: {tag}");
+    }
+
+    #[test]
+    fn pipeline_elapsed_falls_back_to_watch_duration() {
+        let started = Instant::now();
+        // Unparseable timestamp → fall back to local elapsed (~0s).
+        assert_eq!(pipeline_elapsed_secs(Some("not-a-date"), started), 0);
+        assert_eq!(pipeline_elapsed_secs(None, started), 0);
+    }
+
+    #[test]
+    fn pipeline_elapsed_uses_created_on() {
+        // A timestamp 60s in the past should yield ~60s elapsed.
+        let past = ::time::OffsetDateTime::now_utc() - ::time::Duration::seconds(60);
+        let ts = past
+            .format(&::time::format_description::well_known::Iso8601::DEFAULT)
+            .unwrap();
+        let started = Instant::now();
+        let elapsed = pipeline_elapsed_secs(Some(&ts), started);
+        assert!((58..=62).contains(&elapsed), "expected ~60s, got {elapsed}");
     }
 
     #[test]
@@ -1447,7 +1718,7 @@ mod tests {
         let t = no_color_theme();
         assert!(!render_tail_header(&t, "B", 1, "u", "s").contains('\n'));
         assert!(!render_watch_step_header(&t, "B", "s").contains('\n'));
-        assert!(!render_watch_log_line(&t, "l").contains('\n'));
+        assert!(!render_watch_log_line(&t, None, "l").contains('\n'));
         assert!(!render_tail_exit_summary(&t, "B", "s", 1.0).contains('\n'));
         assert!(!render_step_transition(&t, None, "│", "a", "b").contains('\n'));
     }
