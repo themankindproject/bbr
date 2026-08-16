@@ -97,6 +97,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prefers the API's `workspace.slug` field, falling back to the old parse.
 - **`bbr issue list` indexed a parallel vec by position** — replaced fragile
   `out[i]` indexing with `zip`, so the two lists can't silently drift.
+- **`--word-diff` was accepted but ignored** — `pr view` and `pr diff` bound
+  the flag as `_` and only honored `--no-word-diff`. The explicit flag is now
+  wired through (`word_diff || !no_word_diff`); word-diff remains on by
+  default.
 
 ### Security
 
