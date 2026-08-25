@@ -602,30 +602,67 @@ fn pr_summary(pr: &PullRequest) -> BranchPrSummary {
 }
 
 fn reviewers(pr: &PullRequest) -> Vec<ReviewerSummary> {
-    let source = if !pr.reviewers.is_empty() {
-        pr.reviewers.iter().collect::<Vec<_>>()
-    } else {
-        pr.participants
-            .iter()
-            .filter(|p| p.role.eq_ignore_ascii_case("REVIEWER"))
-            .collect::<Vec<_>>()
-    };
-    source.into_iter().map(reviewer_summary).collect()
-}
+    // Roll up everyone whose approval state matters:
+    // - formal reviewers (requested reviewers), always
+    // - any participant who approved or requested changes (Bitbucket marks
+    //   web-UI approvers as role=PARTICIPANT when they aren't a listed
+    //   reviewer — dropping them made PRs show "unapproved" after an
+    //   approval, and let batch merge-approved skip approved PRs)
+    //
+    // The same person can appear in BOTH lists with different field
+    // coverage; when merging, the approval/requested state from either
+    // entry wins over a bare "pending" reviewer entry.
+    let mut merged: Vec<(Participant, bool, Option<String>)> = Vec::new(); // (identity, approved, state)
 
-fn reviewer_summary(p: &Participant) -> ReviewerSummary {
-    ReviewerSummary {
-        display_name: if p.display_name.is_empty() {
-            p.user
-                .as_ref()
-                .map(|u| u.display_name.clone())
-                .unwrap_or_default()
+    let mut upsert = |p: &Participant| {
+        if let Some(entry) = merged.iter_mut().find(|(s, _, _)| s.same_person(p)) {
+            entry.1 |= p.is_approved();
+            if entry.2.is_none() {
+                entry.2 = p.state.clone();
+            }
         } else {
-            p.display_name.clone()
-        },
-        approved: p.is_approved(),
-        state: p.state.clone(),
+            merged.push((p.clone(), p.is_approved(), p.state.clone()));
+        }
+    };
+
+    for r in pr.reviewers.iter() {
+        upsert(r);
     }
+    for p in pr.participants.iter() {
+        let matters =
+            p.role.eq_ignore_ascii_case("REVIEWER") || p.is_approved() || p.is_changes_requested();
+        if matters {
+            upsert(p);
+        }
+    }
+
+    merged
+        .into_iter()
+        .map(|(identity, approved, state)| ReviewerSummary {
+            display_name: {
+                let name = if identity.display_name.is_empty() {
+                    identity
+                        .user
+                        .as_ref()
+                        .map(|u| u.display_name.clone())
+                        .unwrap_or_default()
+                } else {
+                    identity.display_name
+                };
+                // Fields-filtered API responses can omit every name field;
+                // fall back to nickname, then a generic-but-honest label.
+                if name.is_empty() {
+                    identity
+                        .nickname
+                        .unwrap_or_else(|| "(reviewer)".to_string())
+                } else {
+                    name
+                }
+            },
+            approved,
+            state,
+        })
+        .collect()
 }
 
 fn pipeline_summary(p: &Pipeline, raw_steps: &[PipelineStep]) -> PipelineSummary {
@@ -847,9 +884,12 @@ fn render_pr_section(
         if let Some(a) = &pr.author {
             s.push_str(&format!("  {}{a}\n", theme.label("Author:")));
         }
-        if !pr.reviewers.is_empty() {
-            let reviewers = pr
-                .reviewers
+        // BranchPrSummary.reviewers is the roll-up from reviewers() (formal
+        // reviewers + approving/requesting participants), so this covers
+        // web-UI approvals too.
+        let reviewer_summaries = &pr.reviewers;
+        if !reviewer_summaries.is_empty() {
+            let reviewers = reviewer_summaries
                 .iter()
                 .map(|r| {
                     let status = if r.approved {
@@ -887,8 +927,8 @@ fn render_pr_section(
             pr.task_count
         ));
 
-        let approved = pr.reviewers.iter().filter(|r| r.approved).count();
-        let total = pr.reviewers.len();
+        let approved = reviewer_summaries.iter().filter(|r| r.approved).count();
+        let total = reviewer_summaries.len();
         let approvals_str = format!("{approved}/{total} approvals");
         let approvals_colored = if approved == total && total > 0 {
             theme.success(&approvals_str).into_owned()
@@ -1355,32 +1395,51 @@ mod tests {
     }
 
     #[test]
-    fn reviewer_summary_uses_display_name() {
-        let p = Participant {
-            display_name: "Bob".into(),
-            approved: true,
+    fn reviewer_rollup_uses_display_name() {
+        let pr = PullRequest {
+            id: 1,
+            title: "PR".into(),
+            state: "OPEN".into(),
+            source: crate::api::pr::BranchRef::default(),
+            destination: crate::api::pr::BranchRef::default(),
+            participants: vec![Participant {
+                display_name: "Bob".into(),
+                approved: true,
+                role: "PARTICIPANT".into(),
+                ..Default::default()
+            }],
             ..Default::default()
         };
-        let summary = reviewer_summary(&p);
-        assert_eq!(summary.display_name, "Bob");
-        assert!(summary.approved);
+        let summary = reviewers(&pr);
+        assert_eq!(summary.len(), 1);
+        assert_eq!(summary[0].display_name, "Bob");
+        assert!(summary[0].approved);
     }
 
     #[test]
-    fn reviewer_summary_falls_back_to_user_display_name() {
-        let p = Participant {
-            display_name: String::new(),
-            approved: false,
-            user: Some(crate::api::pr::User {
-                display_name: "Alice".into(),
-                uuid: None,
-                nickname: None,
-                links: None,
-            }),
+    fn reviewer_rollup_falls_back_to_user_display_name() {
+        let pr = PullRequest {
+            id: 1,
+            title: "PR".into(),
+            state: "OPEN".into(),
+            source: crate::api::pr::BranchRef::default(),
+            destination: crate::api::pr::BranchRef::default(),
+            reviewers: vec![Participant {
+                display_name: String::new(),
+                approved: false,
+                user: Some(crate::api::pr::User {
+                    display_name: "Alice".into(),
+                    uuid: None,
+                    nickname: None,
+                    links: None,
+                }),
+                ..Default::default()
+            }],
             ..Default::default()
         };
-        let summary = reviewer_summary(&p);
-        assert_eq!(summary.display_name, "Alice");
+        let summary = reviewers(&pr);
+        assert_eq!(summary.len(), 1);
+        assert_eq!(summary[0].display_name, "Alice");
     }
 
     #[test]
@@ -1405,8 +1464,96 @@ mod tests {
             ..Default::default()
         };
         let revs = reviewers(&pr);
+        // Roll-up: requested reviewer Bob + approving participant Charlie
+        // (distinct people, both kept).
+        assert_eq!(revs.len(), 2);
+        assert!(revs.iter().any(|r| r.display_name == "Bob"));
+        assert!(revs.iter().any(|r| r.display_name == "Charlie"));
+    }
+
+    #[test]
+    fn reviewers_include_approving_participants_with_participant_role() {
+        // Regression: Bitbucket records web-UI approvals from non-reviewers
+        // as role=PARTICIPANT. These must count as approvals.
+        let pr = PullRequest {
+            id: 1,
+            title: "PR".into(),
+            state: "OPEN".into(),
+            source: crate::api::pr::BranchRef::default(),
+            destination: crate::api::pr::BranchRef::default(),
+            reviewers: vec![],
+            participants: vec![Participant {
+                display_name: "Web Approver".into(),
+                approved: true,
+                role: "PARTICIPANT".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let revs = reviewers(&pr);
+        assert_eq!(revs.len(), 1);
+        assert_eq!(revs[0].display_name, "Web Approver");
+        assert!(revs[0].approved);
+    }
+
+    #[test]
+    fn reviewers_deduplicate_same_person_across_lists() {
+        let pr = PullRequest {
+            id: 1,
+            title: "PR".into(),
+            state: "OPEN".into(),
+            source: crate::api::pr::BranchRef::default(),
+            destination: crate::api::pr::BranchRef::default(),
+            reviewers: vec![Participant {
+                display_name: "Bob".into(),
+                uuid: Some("{bob-uuid}".into()),
+                approved: false,
+                ..Default::default()
+            }],
+            participants: vec![
+                Participant {
+                    display_name: "Bob".into(),
+                    uuid: Some("{bob-uuid}".into()),
+                    approved: true,
+                    role: "PARTICIPANT".into(),
+                    ..Default::default()
+                },
+                Participant {
+                    display_name: "Carol".into(),
+                    approved: false,
+                    role: "PARTICIPANT".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let revs = reviewers(&pr);
+        // Bob appears once (merged), pending Carol is excluded entirely.
         assert_eq!(revs.len(), 1);
         assert_eq!(revs[0].display_name, "Bob");
+        assert!(
+            revs[0].approved,
+            "approval from the participants entry wins"
+        );
+    }
+
+    #[test]
+    fn reviewers_exclude_non_action_participants() {
+        let pr = PullRequest {
+            id: 1,
+            title: "PR".into(),
+            state: "OPEN".into(),
+            source: crate::api::pr::BranchRef::default(),
+            destination: crate::api::pr::BranchRef::default(),
+            participants: vec![Participant {
+                display_name: "DriveBy Commenter".into(),
+                approved: false,
+                role: "PARTICIPANT".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(reviewers(&pr).is_empty());
     }
 
     #[test]

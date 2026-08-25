@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Approvals from the web UI now count** — Bitbucket records an approval
+  from someone who isn't a listed reviewer as a `PARTICIPANT` participant,
+  not as a reviewer. `bbr status`, `bbr pr view`, and
+  `batch merge-approved --min-approvals` only counted formal reviewers, so
+  PRs kept showing "unapproved" (or were skipped by batch merges) after
+  being approved. Reviewers and approving/requesting participants are now
+  rolled up per person (UUID → nickname → name matching), so approvals from
+  either surface are reflected immediately.
+
 ### Added
 
 - **`bbr doctor`** — environment self-check: git, repo identity, credentials,
