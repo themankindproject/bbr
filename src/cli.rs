@@ -88,7 +88,8 @@ pub struct GlobalArgs {
     about = "BitBucket Remote — a Bitbucket Cloud CLI for coding agents and humans",
     long_about = None,
     propagate_version = true,
-    disable_help_subcommand = true
+    disable_help_subcommand = true,
+    after_help = "Common workflows:\n  bbr                        overview: PR + CI for the current branch\n  bbr ci watch --logs        stream build logs live\n  bbr pr create --title \"..\" && bbr open pr\n  bbr doctor                 environment self-check"
 )]
 pub struct Cli {
     #[command(flatten)]
@@ -350,6 +351,9 @@ pub enum DeployKeysAction {
 }
 
 #[derive(Debug, Subcommand)]
+#[command(
+    after_help = "Examples:\n  bbr pr create --title \"Add login API\" --body \"Implements #12\"\n  bbr pr create --title \"..\" --draft --reviewer \"{uuid}\" --close-source-branch\n  git push && bbr pr create --title \"..\"   # branch is picked from HEAD"
+)]
 pub enum PrAction {
     /// List pull requests in the current repo.
     List {
@@ -701,6 +705,9 @@ pub enum StackAction {
 }
 
 #[derive(Debug, Subcommand)]
+#[command(
+    after_help = "Examples:\n  bbr ci watch --logs                 stream logs of the latest pipeline\n  bbr ci tail --all --line-numbers    follow every step with a line gutter\n  bbr ci logs --failed                show the failing step's log\n  bbr ci trigger --var ENV=staging    run with pipeline variables"
+)]
 pub enum CiAction {
     /// List recent pipelines (default: current branch).
     List {
@@ -1000,6 +1007,9 @@ pub enum DefaultReviewersAction {
 }
 
 #[derive(Debug, Subcommand)]
+#[command(
+    after_help = "Examples:\n  bbr batch merge-approved --dry-run             preview the merge plan\n  bbr batch merge-approved --min-approvals 2     require two approvals\n  bbr batch rerun-failed --branch main --yes     retry tonight's red builds\n  bbr batch cleanup-merged-branches --dry-run    see what would be deleted"
+)]
 pub enum BatchAction {
     /// Merge all approved pull requests.
     MergeApproved {

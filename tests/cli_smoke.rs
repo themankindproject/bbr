@@ -135,6 +135,38 @@ fn doctor_strict_exits_nonzero_on_failures() {
 }
 
 #[test]
+fn root_help_lists_common_workflows() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Common workflows:"))
+        .stdout(predicate::str::contains("bbr ci watch --logs"));
+}
+
+#[test]
+fn ci_help_lists_examples() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["ci", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Examples:"))
+        .stdout(predicate::str::contains("ci watch --logs"));
+}
+
+#[test]
+fn batch_help_mentions_min_approvals() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["batch", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--min-approvals"));
+}
+
+#[test]
 fn commit_status_help_lists_set() {
     Command::cargo_bin("bbr")
         .unwrap()
