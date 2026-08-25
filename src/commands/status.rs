@@ -517,7 +517,6 @@ async fn run_inner_with_cache(
 }
 
 /// Stable footer line for `bbr status --watch` (TTY only).
-#[cfg(test)]
 pub(crate) fn render_watch_footer(interval_secs: u64, rate_limit_remaining: Option<u64>) -> String {
     let quota = match rate_limit_remaining {
         Some(n) => format!("quota {n}"),
