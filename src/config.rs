@@ -413,10 +413,12 @@ workspace = "devteam"
 
     #[test]
     fn ui_section_survives_roundtrip() {
-        let mut cfg = ConfigFile::default();
-        cfg.ui = Some(UiSection {
-            theme: Some("light".into()),
-        });
+        let cfg = ConfigFile {
+            ui: Some(UiSection {
+                theme: Some("light".into()),
+            }),
+            ..ConfigFile::default()
+        };
         let text = toml::to_string_pretty(&cfg).unwrap();
         assert!(text.contains("[ui]"));
         let parsed: ConfigFile = toml::from_str(&text).unwrap();

@@ -76,8 +76,30 @@ pub fn run_set(g: &GlobalArgs, key: &str, value: &str) -> Result<()> {
             let out = serde_json::json!({ "key": key, "value": value, "path": path.display().to_string() });
             make_formatter(g).print(&out, &human)
         }
+        "ui.theme" => {
+            const VALID: &[&str] = &["dark", "light", "auto"];
+            if !VALID.contains(&value) {
+                return Err(BitbucketError::Other(format!(
+                    "invalid theme '{value}' (valid: {})",
+                    VALID.join(", ")
+                )));
+            }
+            let mut cfg = config::load_config()?;
+            cfg.ui.get_or_insert_with(config::UiSection::default).theme = Some(value.to_string());
+            // An empty-value reset removes the whole ui table.
+            if value.is_empty() {
+                cfg.ui = None;
+            }
+            let path = config::save_config(&cfg)?;
+            let human = format!(
+                "Set ui.theme = \"{value}\" in {}\nTakes effect on the next bbr run.",
+                path.display()
+            );
+            let out = serde_json::json!({ "key": key, "value": value, "path": path.display().to_string() });
+            make_formatter(g).print(&out, &human)
+        }
         _ => Err(BitbucketError::Other(format!(
-            "unknown config key: {key} (valid: workspace)"
+            "unknown config key: {key} (valid: workspace, ui.theme)"
         ))),
     }
 }

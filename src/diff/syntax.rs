@@ -33,8 +33,16 @@ pub fn warm() {
 
 fn theme() -> &'static Theme {
     let ts = THEME_SET.get_or_init(ThemeSet::load_defaults);
+    // Palette follows the resolved background preset: dark terminals get
+    // base16-ocean.dark, light terminals get InspiredGitHub (high-contrast
+    // on white, ships in syntect defaults).
+    let preferred = if crate::output::theme::Theme::current().is_light() {
+        "InspiredGitHub"
+    } else {
+        "base16-ocean.dark"
+    };
     ts.themes
-        .get("base16-ocean.dark")
+        .get(preferred)
         .or_else(|| ts.themes.values().next())
         .expect("syntect default themes must include at least one theme")
 }
