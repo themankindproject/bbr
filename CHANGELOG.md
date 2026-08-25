@@ -27,14 +27,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remaining API quota (TTY only), plus gentler per-tick redraw.
 - **Help examples** — root `--help` gains a "Common workflows" block; `pr`,
   `ci`, and `batch` help pages show copy-pasteable recipe examples.
-
-### Changed
-
-- `bbr status --watch` no longer full-screen-clears each tick (cursor-home +
-  erase-to-EOL), reducing visible flicker.
-
-### Added
-
 - **`--min-approvals <N>` on `batch merge-approved`** — require at least N
   approvals (reviewers first, falling back to participants) before a PR
   qualifies for auto-merge. Default remains 1; raise it to avoid merging
@@ -49,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `bbr status --watch` no longer full-screen-clears each tick (cursor-home +
+  erase-to-EOL), reducing visible flicker.
 - **Rate-limit-aware request pacing** — parallel pagination fan-out scales
   down automatically when remaining API quota is low (10 → 5 → 2 concurrent
   page fetches below 300 / 100 remaining requests).
