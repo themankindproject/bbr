@@ -19,6 +19,7 @@ pub mod doctor;
 pub mod export;
 pub mod issue;
 pub mod open;
+pub mod picker;
 pub mod pr;
 pub mod repo;
 pub mod schema;

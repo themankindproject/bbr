@@ -1,6 +1,6 @@
 //! `bbr pr` — list / view / create / comment.
 
-use std::io::IsTerminal;
+use std::io::{self, BufRead, IsTerminal};
 
 use serde::Serialize;
 
@@ -232,12 +232,26 @@ pub async fn view(
         Some(id) => client.get_pr(&repo.workspace, &repo.slug, id).await?,
         None => {
             let head = current_head()?;
-            client
-                .pr_for_branch_light(&repo.workspace, &repo.slug, &head.branch)
-                .await?
-                .ok_or_else(|| {
-                    BitbucketError::NotFound(format!("no open PR for branch '{}'", head.branch))
-                })?
+            let candidates = client
+                .prs_for_branch(&repo.workspace, &repo.slug, &head.branch)
+                .await?;
+            if candidates.is_empty() {
+                return Err(BitbucketError::NotFound(format!(
+                    "no open PR for branch '{}'",
+                    head.branch
+                )));
+            }
+            // When a branch has multiple open PRs and we're on a TTY, ask
+            // which one; non-interactive contexts keep the first silently.
+            let interactive = crate::commands::picker::can_interact(
+                io::stdin().is_terminal(),
+                io::stdout().is_terminal(),
+            );
+            crate::commands::picker::pick(&candidates, interactive, || {
+                let mut line = String::new();
+                std::io::stdin().lock().read_line(&mut line)?;
+                Ok(line)
+            })?
         }
     };
 
