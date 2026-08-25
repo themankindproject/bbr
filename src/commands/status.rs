@@ -14,6 +14,16 @@ use crate::error::{display_error, BitbucketError, Result};
 use crate::git::Head;
 use crate::output::table::Table;
 use crate::output::theme::Theme;
+use futures::StreamExt;
+
+/// Cache type shared by `status --watch` ticks: PR id → (diffstat, conflicts).
+///
+/// Diffstats and conflict sets are only re-fetched for PRs not seen in a
+/// previous tick. Without this, each 5s watch tick spends 2 extra API calls
+/// per open PR — roughly 1,400 requests/hour for a branch with two PRs,
+/// enough to exhaust Bitbucket's hourly quota on its own.
+type PrExtrasCache =
+    std::sync::Mutex<std::collections::HashMap<u64, (Option<serde_json::Value>, bool)>>;
 
 #[derive(Debug, Serialize)]
 pub struct BuildStatusSummary {
@@ -28,10 +38,10 @@ pub struct StatusOut {
     pub branch: String,
     pub commit: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pr: Option<PrSummary>,
+    pub pr: Option<BranchPrSummary>,
     /// All open PRs for the current branch (includes `pr` when present).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub open_prs: Vec<PrSummary>,
+    pub open_prs: Vec<BranchPrSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pipeline: Option<PipelineSummary>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -47,7 +57,7 @@ pub struct RepoSummary {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct PrSummary {
+pub struct BranchPrSummary {
     pub id: u64,
     pub state: String,
     pub title: String,
@@ -115,10 +125,10 @@ pub struct OverviewOut {
     pub branch: String,
     pub commit: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pr: Option<PrSummary>,
+    pub pr: Option<BranchPrSummary>,
     /// All open PRs for the current branch (includes `pr` when present).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub open_prs: Vec<PrSummary>,
+    pub open_prs: Vec<BranchPrSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pipeline: Option<PipelineSummary>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -135,7 +145,7 @@ pub struct OverviewOut {
 struct BranchStatus {
     repo: RepoSummary,
     head: Head,
-    pr_summaries: Vec<PrSummary>,
+    pr_summaries: Vec<BranchPrSummary>,
     pipeline_summary: Option<PipelineSummary>,
     commit_statuses: Vec<BuildStatusSummary>,
 }
@@ -145,9 +155,15 @@ struct BranchStatus {
 /// Returns both the status data and the API client for reuse.
 ///
 /// `spinner` is optional so callers (overview) can own a longer-lived spinner.
+///
+/// `extras_cache` optionally maps PR id → (diffstat, conflicts). Watch mode
+/// passes a process-local cache so each tick only pays for *new* PRs instead
+/// of 2 extra requests per open PR per tick — at the default 5s interval that
+/// would otherwise burn through Bitbucket's hourly quota on its own.
 async fn fetch_branch_status(
     g: &GlobalArgs,
     spinner: Option<&SpinnerGuard>,
+    extras_cache: Option<&PrExtrasCache>,
 ) -> Result<(BranchStatus, crate::api::BitbucketClient)> {
     let repo_id = resolve_repo(g)?;
     let head = current_head()?;
@@ -189,36 +205,87 @@ async fn fetch_branch_status(
             }
         },
         async {
-            let futs = prs.iter().map(|p| {
-                let client = &client;
-                let workspace = &repo_id.workspace;
-                let slug = &repo_id.slug;
-                let id = p.id;
-                async move {
-                    let (diffstat, conflicts) = tokio::join!(
-                        client.pr_diffstat(workspace, slug, id),
-                        client.pr_conflicts(workspace, slug, id, 10),
-                    );
-                    (id, diffstat, conflicts)
+            // Only re-fetch diffstat/conflicts for PRs not already in the
+            // extras cache; watch ticks reuse prior results. Fan-out is
+            // bounded at 5 concurrent (mirrors the dashboard cap) instead of
+            // an unbounded join_all.
+            let cached_ids: std::collections::HashSet<u64> = match extras_cache {
+                Some(cache) => {
+                    let guard = match cache.lock() {
+                        Ok(g) => g,
+                        Err(e) => e.into_inner(),
+                    };
+                    guard.keys().copied().collect()
                 }
-            });
-            futures::future::join_all(futs).await
+                None => Default::default(),
+            };
+            let uncached: Vec<&crate::api::pr::PullRequest> =
+                prs.iter().filter(|p| !cached_ids.contains(&p.id)).collect();
+            let fetched: Vec<(u64, Option<serde_json::Value>, bool)> =
+                futures::stream::iter(uncached.iter().map(|p| {
+                    let client = &client;
+                    let workspace = &repo_id.workspace;
+                    let slug = &repo_id.slug;
+                    let id = p.id;
+                    async move {
+                        let (diffstat, conflicts) = tokio::join!(
+                            client.pr_diffstat(workspace, slug, id),
+                            client.pr_conflicts(workspace, slug, id, 10),
+                        );
+                        (
+                            id,
+                            diffstat.ok(),
+                            matches!(&conflicts, Ok(c) if !c.is_empty()),
+                        )
+                    }
+                }))
+                .buffer_unordered(5)
+                .collect()
+                .await;
+
+            // Persist fresh results into the cache, then assemble per-PR rows.
+            if let Some(cache) = extras_cache {
+                let mut guard = match cache.lock() {
+                    Ok(g) => g,
+                    Err(e) => e.into_inner(),
+                };
+                for (id, stat, has_conflicts) in &fetched {
+                    guard.insert(*id, (stat.clone(), *has_conflicts));
+                }
+            }
+            let mut results: Vec<(u64, Option<serde_json::Value>, bool)> = Vec::new();
+            for p in &prs {
+                if let Some(cache) = extras_cache {
+                    let guard = match cache.lock() {
+                        Ok(g) => g,
+                        Err(e) => e.into_inner(),
+                    };
+                    if let Some((stat, has_conflicts)) = guard.get(&p.id) {
+                        results.push((p.id, stat.clone(), *has_conflicts));
+                        continue;
+                    }
+                }
+                if let Some(row) = fetched.iter().find(|(id, _, _)| *id == p.id) {
+                    results.push((row.0, row.1.clone(), row.2));
+                } else {
+                    // Cache-less mode with nothing fetched for this PR — skip.
+                }
+            }
+            results
         },
     );
 
-    let mut pr_summaries: Vec<PrSummary> = prs.iter().map(pr_summary).collect();
+    let mut pr_summaries: Vec<BranchPrSummary> = prs.iter().map(pr_summary).collect();
     for summary in &mut pr_summaries {
-        if let Some((_, diffstat, conflicts)) =
+        if let Some((_, diffstat, has_conflicts)) =
             pr_extras.iter().find(|(id, _, _)| *id == summary.id)
         {
-            if let Ok(stat) = diffstat {
+            if let Some(stat) = diffstat {
                 let (added, removed) = parse_diffstat(stat);
                 summary.lines_added = Some(added);
                 summary.lines_removed = Some(removed);
             }
-            if let Ok(conflicts) = conflicts {
-                summary.conflicts = Some(!conflicts.is_empty());
-            }
+            summary.conflicts = Some(*has_conflicts);
         }
     }
 
@@ -253,12 +320,15 @@ async fn fetch_branch_status(
 pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
     use std::io::{self, IsTerminal};
     let theme = Theme::current();
+    // PR diffstat/conflict results are cached across ticks so the watch loop
+    // doesn't burn 2 API calls per open PR every interval.
+    let extras_cache: PrExtrasCache = std::sync::Mutex::new(std::collections::HashMap::new());
     loop {
         // Re-read branch/commit from git each tick so new commits and
         // branch switches show up without restarting the watch loop.
         let _ = crate::commands::refresh_head();
         // Run status and capture output
-        let result = run_inner(g).await;
+        let result = run_inner_with_cache(g, Some(&extras_cache)).await;
         match result {
             Ok(out) => {
                 let human = render_human(&out);
@@ -328,7 +398,7 @@ pub async fn run_overview(g: &GlobalArgs) -> Result<()> {
             commit_statuses,
         },
         api_client,
-    ) = fetch_branch_status(g, Some(&spinner)).await?;
+    ) = fetch_branch_status(g, Some(&spinner), None).await?;
 
     spinner.set_message("Fetching recent PRs & CI...");
 
@@ -390,6 +460,14 @@ pub async fn run_overview(g: &GlobalArgs) -> Result<()> {
 }
 
 pub async fn run_inner(g: &GlobalArgs) -> Result<StatusOut> {
+    run_inner_with_cache(g, None).await
+}
+
+/// Core status fetch with an optional PR-extras cache (used by watch mode).
+async fn run_inner_with_cache(
+    g: &GlobalArgs,
+    extras_cache: Option<&PrExtrasCache>,
+) -> Result<StatusOut> {
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching status...");
 
@@ -402,7 +480,7 @@ pub async fn run_inner(g: &GlobalArgs) -> Result<StatusOut> {
             commit_statuses,
         },
         _client,
-    ) = fetch_branch_status(g, Some(&spinner)).await?;
+    ) = fetch_branch_status(g, Some(&spinner), extras_cache).await?;
 
     spinner.finish();
 
@@ -477,8 +555,8 @@ fn relative_time(iso_str: &str) -> String {
     }
 }
 
-fn pr_summary(pr: &PullRequest) -> PrSummary {
-    PrSummary {
+fn pr_summary(pr: &PullRequest) -> BranchPrSummary {
+    BranchPrSummary {
         id: pr.id,
         state: pr.state.clone(),
         title: pr.title.clone(),
@@ -550,7 +628,10 @@ fn step_summary(s: &PipelineStep) -> StepSummary {
     }
 }
 
-fn suggested_commands(pr: &Option<PrSummary>, pipeline: &Option<PipelineSummary>) -> Vec<String> {
+fn suggested_commands(
+    pr: &Option<BranchPrSummary>,
+    pipeline: &Option<PipelineSummary>,
+) -> Vec<String> {
     let mut commands = Vec::new();
 
     match pr {
@@ -678,7 +759,7 @@ fn render_short(out: &StatusOut) -> String {
 fn render_pr_section(
     s: &mut String,
     theme: &Theme,
-    open_prs: &[PrSummary],
+    open_prs: &[BranchPrSummary],
     pipeline: &Option<PipelineSummary>,
 ) {
     if open_prs.is_empty() {
@@ -991,7 +1072,7 @@ mod tests {
             },
             branch: "feat".into(),
             commit: "abc123".into(),
-            pr: Some(PrSummary {
+            pr: Some(BranchPrSummary {
                 id: 42,
                 state: "OPEN".into(),
                 title: "Add stuff".into(),
@@ -1008,7 +1089,7 @@ mod tests {
                 description: None,
                 conflicts: None,
             }),
-            open_prs: vec![PrSummary {
+            open_prs: vec![BranchPrSummary {
                 id: 42,
                 state: "OPEN".into(),
                 title: "Add stuff".into(),
@@ -1092,7 +1173,7 @@ mod tests {
 
     #[test]
     fn suggested_commands_with_pr_uses_open_pr() {
-        let pr = Some(PrSummary {
+        let pr = Some(BranchPrSummary {
             id: 1,
             state: "OPEN".into(),
             title: "fix".into(),
@@ -1119,7 +1200,7 @@ mod tests {
 
     #[test]
     fn suggested_commands_with_pr_unapproved() {
-        let pr = Some(PrSummary {
+        let pr = Some(BranchPrSummary {
             id: 42,
             state: "OPEN".into(),
             title: "fix".into(),
@@ -1147,7 +1228,7 @@ mod tests {
 
     #[test]
     fn suggested_commands_with_pr_changes_requested() {
-        let pr = Some(PrSummary {
+        let pr = Some(BranchPrSummary {
             id: 42,
             state: "OPEN".into(),
             title: "fix".into(),
@@ -1174,7 +1255,7 @@ mod tests {
 
     #[test]
     fn suggested_commands_with_pr_approved_clean() {
-        let pr = Some(PrSummary {
+        let pr = Some(BranchPrSummary {
             id: 42,
             state: "OPEN".into(),
             title: "fix".into(),
@@ -1449,7 +1530,7 @@ mod tests {
             },
             branch: "main".into(),
             commit: "abc123def456".into(),
-            pr: Some(PrSummary {
+            pr: Some(BranchPrSummary {
                 id: 1,
                 state: "OPEN".into(),
                 title: "fix".into(),
@@ -1466,7 +1547,7 @@ mod tests {
                 description: None,
                 conflicts: None,
             }),
-            open_prs: vec![PrSummary {
+            open_prs: vec![BranchPrSummary {
                 id: 1,
                 state: "OPEN".into(),
                 title: "fix".into(),

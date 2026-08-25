@@ -53,8 +53,8 @@ dirs = "5"
 xdg = "2"
 rpassword = "=7.3.1"
 
-# Credential safety (zeroize on drop)
-secrecy = "0.10"
+# Credential safety (zeroize on drop); serde support for loading from TOML
+secrecy = { version = "0.10", features = ["serde"] }
 
 # Date/time parsing (ISO 8601, relative time)
 time = { version = "0.3", features = ["parsing", "formatting", "local-offset"] }

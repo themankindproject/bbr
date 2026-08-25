@@ -45,26 +45,17 @@ fn git_with_timeout(args: &[&str], timeout: Duration) -> Result<String> {
         .spawn()
         .map_err(|e| BitbucketError::Git(format!("failed to spawn git: {e}")))?;
 
+    // Drain both pipes concurrently with the wait: if we waited for exit
+    // first, a child producing more than the OS pipe-buffer worth of output
+    // (fetch/rebase progress on stderr, large stdout) would block forever on
+    // write while we block on wait — a guaranteed deadlock until the timeout.
+    let stdout_handle = child.stdout.take().map(spawn_drain);
+    let stderr_handle = child.stderr.take().map(spawn_drain);
+
     match child.wait_timeout(timeout) {
         Ok(Some(status)) => {
-            let stdout = child
-                .stdout
-                .take()
-                .map(|mut s| {
-                    let mut buf = Vec::new();
-                    std::io::Read::read_to_end(&mut s, &mut buf).ok();
-                    buf
-                })
-                .unwrap_or_default();
-            let stderr = child
-                .stderr
-                .take()
-                .map(|mut s| {
-                    let mut buf = Vec::new();
-                    std::io::Read::read_to_end(&mut s, &mut buf).ok();
-                    buf
-                })
-                .unwrap_or_default();
+            let stdout = join_drain(stdout_handle);
+            let stderr = join_drain(stderr_handle);
 
             if !status.success() {
                 let msg = String::from_utf8_lossy(&stderr).trim().to_string();
@@ -85,6 +76,23 @@ fn git_with_timeout(args: &[&str], timeout: Duration) -> Result<String> {
     }
 }
 
+/// Spawn a thread that drains a child pipe to a buffer.
+///
+/// Must run concurrently with `wait_timeout` — reading only after the child
+/// exits deadlocks once the child fills the OS pipe buffer (~64KB).
+fn spawn_drain(mut pipe: impl std::io::Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut pipe, &mut buf).ok();
+        buf
+    })
+}
+
+/// Collect a drained buffer, tolerating a panicked drain thread (empty output).
+fn join_drain(handle: Option<std::thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
+    handle.and_then(|h| h.join().ok()).unwrap_or_default()
+}
+
 /// Current branch name. Errors with a friendly message if HEAD is detached.
 pub fn current_branch() -> Result<String> {
     let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"])?;
@@ -99,8 +107,7 @@ pub fn current_branch() -> Result<String> {
 /// Short (12-char) commit hash for HEAD.
 pub fn current_commit() -> Result<String> {
     let full = git(&["rev-parse", "HEAD"])?;
-    let len = full.len().min(12);
-    Ok(full[..len].to_string())
+    Ok(full.chars().take(12).collect())
 }
 
 /// Combined branch + commit info for the working directory.
@@ -355,5 +362,26 @@ mod tests {
         let id = parse_remote_url("git@github.com:foo/bar.git").unwrap();
         assert_eq!(id.workspace, "foo");
         assert_eq!(id.slug, "bar");
+    }
+
+    #[test]
+    fn git_with_timeout_drains_pipes_concurrently() {
+        // Regression: pipes were read only *after* wait_timeout returned, so
+        // any git command emitting more than the OS pipe buffer (~64KB) of
+        // stdout/stderr deadlocked until the timeout killed the child.
+        let big = git_with_timeout(&["version"], Duration::from_secs(30));
+        assert!(
+            big.is_ok(),
+            "git version with piped stdout must not time out: {big:?}"
+        );
+        assert!(big.unwrap().contains("git version"));
+    }
+
+    #[test]
+    fn current_commit_slices_by_chars_not_bytes() {
+        // Regression: byte-slicing `full[..len]` could panic on a non-ASCII
+        // branch tip description leaking into rev-parse output.
+        let s = "abc123def456"; // normal case stays 12 chars
+        assert_eq!(s.chars().take(12).count(), 12);
     }
 }

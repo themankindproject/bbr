@@ -50,9 +50,25 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
     fmt.print(&out, &human)
 }
 
-pub async fn set(g: &GlobalArgs, key: &str, value: &str, secured: bool) -> Result<()> {
+pub async fn set(
+    g: &GlobalArgs,
+    key: &str,
+    value: Option<&str>,
+    from_stdin: bool,
+    secured: bool,
+) -> Result<()> {
     let repo = resolve_repo(g)?;
     let api = client(g)?;
+
+    // Resolve the value: --stdin (secret-safe) or the inline --value.
+    let resolved = if from_stdin {
+        crate::commands::read_secret_stdin()?
+    } else {
+        value.map(str::to_string).ok_or_else(|| {
+            BitbucketError::Other("no value provided (use --value <v> or --stdin)".into())
+        })?
+    };
+    let value: &str = &resolved;
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Checking existing variables...");

@@ -220,15 +220,15 @@ impl BitbucketClient {
     }
 
     /// Determine whether an error/status is retryable (429 or 5xx).
+    ///
+    /// 5xx detection is structural via [`BitbucketError::Server`], which
+    /// carries the status code — deliberately not a string match on the
+    /// formatted message, which would silently break if error wording
+    /// ever changed.
     fn is_retryable_error(err: &BitbucketError) -> bool {
         match err {
             BitbucketError::RateLimit(_) => true,
-            BitbucketError::Other(msg) => {
-                msg.starts_with("HTTP 500")
-                    || msg.starts_with("HTTP 502")
-                    || msg.starts_with("HTTP 503")
-                    || msg.starts_with("HTTP 504")
-            }
+            BitbucketError::Server { status, .. } => status.is_server_error(),
             _ => false,
         }
     }
@@ -467,6 +467,14 @@ impl BitbucketClient {
         // order: `buffer_unordered` yields results in *completion* order,
         // which would scramble the row ordering. Tag each future with its
         // page index and sort before flattening.
+        //
+        // Concurrency is throttled when the last observed rate-limit
+        // remainder is low, so a large `limit` doesn't burst past the quota.
+        let fanout = match self.rate_limit_remaining() {
+            Some(remaining) if remaining < 100 => 2,
+            Some(remaining) if remaining < 300 => 5,
+            _ => 10,
+        };
         let mut futures = Vec::new();
         for p in 2..=num_pages {
             let p_path = if path.contains('?') {
@@ -483,7 +491,7 @@ impl BitbucketClient {
         }
 
         let mut results: Vec<(usize, Paginated<T>)> = futures::stream::iter(futures)
-            .buffer_unordered(10)
+            .buffer_unordered(fanout)
             .try_collect()
             .await?;
         results.sort_by_key(|(p, _)| *p);
@@ -501,7 +509,27 @@ impl BitbucketClient {
     /// with 416 (Range Not Satisfiable), meaning we've already fetched all
     /// available content. ETag caching is bypassed — each range request may
     /// return different content at the same path.
+    ///
+    /// The response status is distinguished internally: a `206 Partial
+    /// Content` body is exactly the bytes after `start_byte`; a plain `200`
+    /// means the server (or an intermediary) ignored the Range header and
+    /// sent the *whole* representation, which callers must not treat as a
+    /// suffix. Use [`Self::send_raw_range_checked`] when that distinction
+    /// matters.
     pub async fn send_raw_range(&self, path: &str, start_byte: u64) -> Result<String> {
+        self.send_raw_range_checked(path, start_byte)
+            .await
+            .map(|(body, _)| body)
+    }
+
+    /// Like [`Self::send_raw_range`] but also reports whether the server
+    /// honored the range (`true` = HTTP 206 partial content) or ignored it
+    /// and returned the full body (`false` = HTTP 200).
+    pub async fn send_raw_range_checked(
+        &self,
+        path: &str,
+        start_byte: u64,
+    ) -> Result<(String, bool)> {
         let path = path.to_string();
         let range_hdr = format!("bytes={start_byte}-");
         self.with_retries(&path, || {
@@ -523,11 +551,17 @@ impl BitbucketClient {
                 self.update_rate_limit(&headers);
                 let retry_after = Self::retry_after_secs(&headers);
                 if status == StatusCode::RANGE_NOT_SATISFIABLE {
-                    return Ok(RetryOutcome::Done(Ok(String::new())));
+                    return Ok(RetryOutcome::Done(Ok((String::new(), true))));
                 }
                 let body = resp.text().await.map_err(BitbucketError::Http)?;
+                if status == StatusCode::PARTIAL_CONTENT {
+                    return Ok(RetryOutcome::Done(Ok((body, true))));
+                }
                 if status.is_success() {
-                    return Ok(RetryOutcome::Done(Ok(body)));
+                    // Full-body 200: report `honored = false` so callers know
+                    // this is the entire representation, not the requested
+                    // byte window.
+                    return Ok(RetryOutcome::Done(Ok((body, false))));
                 }
                 let err = map_error(status, &body, &path);
                 if Self::is_retryable_error(&err) {
@@ -699,35 +733,22 @@ pub fn map_error(status: StatusCode, body: &str, path: &str) -> BitbucketError {
                         }
                     }
                     if let Some(grant) = granted {
-                        let granted_mark =
-                            if crate::output::theme::Theme::current().unicode_enabled() {
-                                "✓"
-                            } else {
-                                "OK"
-                            };
                         for s in grant.iter().filter_map(|v| v.as_str()) {
                             if !all.iter().any(|(n, _)| *n == s) {
-                                all.push((s, granted_mark));
-                            }
-                        }
-                        for s in grant.iter().filter_map(|v| v.as_str()) {
-                            if let Some(entry) = all.iter_mut().find(|(n, _)| *n == s) {
-                                entry.1 = granted_mark;
+                                all.push((s, "granted"));
                             }
                         }
                     }
+                    // Plain ASCII, no theme/unicode glyphs: this text flows
+                    // into error messages that also surface in `--json`
+                    // output and must stay stable across environments.
                     if !all.is_empty() {
                         if !full.is_empty() {
                             full.push('\n');
                         }
-                        let max_w = all.iter().map(|(n, _)| n.len()).max().unwrap_or(0).max(5);
-                        let line_ch = if crate::output::theme::Theme::current().unicode_enabled() {
-                            "─"
-                        } else {
-                            "-"
-                        };
+                        let max_w = all.iter().map(|(n, _)| n.len()).max().unwrap_or(0).max(6);
                         full.push_str(&format!("\n  {:<width$}  Status", "Scope", width = max_w));
-                        full.push_str(&format!("\n  {}", line_ch.repeat(max_w + 8)));
+                        full.push_str(&format!("\n  {}", "-".repeat(max_w + 8)));
                         for (name, status) in &all {
                             full.push_str(&format!(
                                 "\n  {:<width$}  {}",
@@ -816,6 +837,10 @@ pub fn map_error(status: StatusCode, body: &str, path: &str) -> BitbucketError {
         StatusCode::BAD_REQUEST => {
             BitbucketError::BadRequest(format!("HTTP {status}: {full} [{path}]"))
         }
+        s if s.is_server_error() => BitbucketError::Server {
+            status: s,
+            source: Box::new(BitbucketError::Other(format!("HTTP {s}: {full} [{path}]"))),
+        },
         _ => BitbucketError::Other(format!("HTTP {status}: {full} [{path}]")),
     }
 }
@@ -846,15 +871,19 @@ pub(crate) fn url_encode(s: &str) -> String {
     out
 }
 
-/// Simple jitter based on system time nanos to avoid thundering herd.
-/// Uses SystemTime nanosecond precision for better entropy than a counter.
+/// Simple jitter based on system time nanos mixed with a per-process counter
+/// to avoid thundering herd. Wall-clock nanos alone would be identical for
+/// concurrent retries within the same process; the atomic counter decorrelates
+/// them.
 fn rand_jitter() -> u64 {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.subsec_nanos() as u64)
         .unwrap_or(0);
+    let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     // Spread across 0-4 seconds
-    (nanos.wrapping_mul(6364136223846793005) >> 33) % 5
+    ((nanos ^ count.wrapping_mul(0x9E3779B97F4A7C15)).wrapping_mul(6364136223846793005) >> 33) % 5
 }
 
 /// Base64 encoder using the `base64` crate (RFC 4648 standard alphabet).
@@ -923,9 +952,23 @@ mod tests {
 
     #[test]
     fn map_error_other_status() {
-        let body = "internal error";
-        let err = map_error(StatusCode::INTERNAL_SERVER_ERROR, body, "/test");
+        let body = "teapot";
+        // 418 is neither 4xx-special-cased nor 5xx, so it lands in Other.
+        let err = map_error(StatusCode::IM_A_TEAPOT, body, "/test");
         assert!(matches!(err, BitbucketError::Other(_)));
+    }
+
+    #[test]
+    fn map_error_5xx_becomes_structured_server_variant() {
+        for status in [500, 502, 503, 504] {
+            let err = map_error(StatusCode::from_u16(status).unwrap(), "boom", "/pipelines");
+            match &err {
+                BitbucketError::Server { status: s, .. } => {
+                    assert_eq!(s.as_u16(), status);
+                }
+                other => panic!("expected Server variant for {status}, got {other:?}"),
+            }
+        }
     }
 
     #[test]
@@ -936,14 +979,13 @@ mod tests {
         assert!(msg.contains("repo:write"));
         assert!(msg.contains("MISSING"));
         assert!(msg.contains("repo:read"));
-        // The granted mark follows the active theme's unicode setting.
-        let mark = if crate::output::theme::Theme::current().unicode_enabled() {
-            "✓"
-        } else {
-            "OK"
-        };
-        assert!(msg.contains(mark));
+        // Scope table is plain ASCII (stable across themes / --json output).
+        assert!(
+            msg.contains("granted"),
+            "granted mark is the word, not a glyph"
+        );
         assert!(msg.contains("Status"));
+        assert!(!msg.contains('\u{2713}'), "no theme glyphs in error text");
     }
 
     #[test]

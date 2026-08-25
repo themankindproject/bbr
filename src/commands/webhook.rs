@@ -95,9 +95,21 @@ pub async fn create(
     description: Option<&str>,
     active: bool,
     secret: Option<&str>,
+    secret_stdin: bool,
 ) -> Result<()> {
     let repo = resolve_repo(g)?;
     let client = client(g)?;
+    // Resolve the secret from stdin when requested so it never appears in
+    // `ps` output or shell history.
+    let secret_from_stdin = if secret_stdin {
+        Some(crate::commands::read_secret_stdin()?)
+    } else {
+        None
+    };
+    let secret: Option<&str> = secret_stdin
+        .then_some(secret_from_stdin.as_deref())
+        .flatten()
+        .or(secret);
     let events: Vec<String> = events_csv
         .split(',')
         .map(|e| e.trim().to_string())

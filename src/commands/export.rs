@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn format_slack_with_pr() {
         let mut out = minimal_status();
-        out.pr = Some(PrSummary {
+        out.pr = Some(BranchPrSummary {
             id: 42,
             state: "OPEN".into(),
             title: "Fix bug".into(),

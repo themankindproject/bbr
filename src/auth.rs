@@ -91,13 +91,11 @@ fn from_config() -> Result<Option<Credentials>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use crate::test_support::env_lock;
 
     #[test]
     fn env_token_resolves_to_api_token() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = env_lock();
         std::env::set_var(ENV_USERNAME, "u@example.com");
         std::env::set_var(ENV_TOKEN, "ATATT-example");
         let c = from_env().unwrap();
@@ -108,7 +106,7 @@ mod tests {
 
     #[test]
     fn env_returns_none_without_username() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = env_lock();
         std::env::remove_var(ENV_USERNAME);
         std::env::set_var(ENV_TOKEN, "tok");
         assert!(from_env().is_none());
@@ -117,7 +115,7 @@ mod tests {
 
     #[test]
     fn env_returns_none_with_empty_token() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = env_lock();
         std::env::set_var(ENV_USERNAME, "u");
         std::env::set_var(ENV_TOKEN, "");
         assert!(from_env().is_none());

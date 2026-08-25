@@ -2,6 +2,7 @@
 
 use std::io::{self, BufRead, Write};
 
+use secrecy::SecretString;
 use serde::Serialize;
 
 use crate::auth;
@@ -79,7 +80,7 @@ pub fn setup(username: Option<String>, token: Option<String>) -> Result<()> {
 
     let profile = CredentialProfile {
         username,
-        token: Some(secret),
+        token: Some(SecretString::from(secret)),
         workspace: existing_workspace,
     };
 

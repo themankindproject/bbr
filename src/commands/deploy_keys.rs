@@ -4,7 +4,7 @@ use crate::commands::{
     client, confirm, make_formatter, make_spinner, resolve_repo, table_or_empty, truncate,
     SpinnerGuard,
 };
-use crate::error::Result;
+use crate::error::{BitbucketError, Result};
 use crate::output::table::Table;
 use serde::Serialize;
 
@@ -55,13 +55,22 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
     fmt.print(&out, &human)
 }
 
-pub async fn add(g: &GlobalArgs, key: &str, label: &str) -> Result<()> {
+pub async fn add(g: &GlobalArgs, key: Option<&str>, from_stdin: bool, label: &str) -> Result<()> {
     let repo = resolve_repo(g)?;
     let client = client(g)?;
+    // Read the key material from stdin when requested so it never appears
+    // in `ps` output or shell history.
+    let resolved_key = if from_stdin {
+        crate::commands::read_secret_stdin()?
+    } else {
+        key.map(str::to_string).ok_or_else(|| {
+            BitbucketError::Other("no key provided (use --key <k> or --stdin)".into())
+        })?
+    };
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Adding deploy key...");
     let dk = client
-        .add_deploy_key(&repo.workspace, &repo.slug, key, label)
+        .add_deploy_key(&repo.workspace, &repo.slug, &resolved_key, label)
         .await?;
     spinner.finish();
 

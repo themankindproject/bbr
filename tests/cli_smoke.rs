@@ -69,6 +69,26 @@ fn pr_merge_help_lists_yes_flag() {
 }
 
 #[test]
+fn pr_list_rejects_unknown_sort_field() {
+    // Invalid values must fail as usage errors (exit 64) at the CLI layer,
+    // before any network or git access.
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["pr", "list", "--sort", "not_a_field"])
+        .assert()
+        .code(64);
+}
+
+#[test]
+fn pr_list_rejects_unknown_order() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["pr", "list", "--order", "sideways"])
+        .assert()
+        .code(64);
+}
+
+#[test]
 fn commit_status_help_lists_set() {
     Command::cargo_bin("bbr")
         .unwrap()
