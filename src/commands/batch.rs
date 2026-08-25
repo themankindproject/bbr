@@ -107,11 +107,18 @@ pub async fn merge_approved(
         if pr.draft {
             continue;
         }
-        // Count approvals from reviewers (preferred) or all participants
-        let approval_count = if !pr.reviewers.is_empty() {
-            pr.reviewers.iter().filter(|r| r.is_approved()).count()
-        } else {
-            pr.participants.iter().filter(|p| p.is_approved()).count()
+        // Count distinct approvals: reviewers plus any approving participant,
+        // deduplicated per person. Bitbucket records web-UI approvals from
+        // non-reviewers as role=PARTICIPANT, so counting reviewers only
+        // would miss them and skip approved PRs.
+        let approval_count = {
+            let mut count = pr.reviewers.iter().filter(|r| r.is_approved()).count();
+            count += pr
+                .participants
+                .iter()
+                .filter(|p| p.is_approved() && !pr.reviewers.iter().any(|r| r.same_person(p)))
+                .count();
+            count
         };
 
         let is_approved = approval_count >= min_approvals as usize;

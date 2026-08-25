@@ -180,6 +180,19 @@ impl Participant {
             .as_deref()
             .is_some_and(|s| s.eq_ignore_ascii_case("changes_requested"))
     }
+
+    /// Identity match across `reviewers` and `participants` entries, which
+    /// Bitbucket can return with different field coverage for the same user:
+    /// prefer UUID, fall back to nickname, then display name.
+    pub fn same_person(&self, other: &Participant) -> bool {
+        if let (Some(a), Some(b)) = (&self.uuid, &other.uuid) {
+            return a.eq_ignore_ascii_case(b);
+        }
+        if let (Some(a), Some(b)) = (&self.nickname, &other.nickname) {
+            return a == b;
+        }
+        !self.display_name.is_empty() && self.display_name == other.display_name
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
