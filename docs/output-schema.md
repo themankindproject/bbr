@@ -218,7 +218,11 @@ Emits a single JSON object when the pipeline reaches a terminal state:
 }
 ```
 
-On failure, `success` is `false` and the process exits with code `5`.
+On failure, `success` is `false` and the process exits with code `5`. The
+`failing_step` and `failure_log` fields appear when a step failed and
+`--logs` was not used. `failure_log` contains the last portion of the failing
+step's log (up to 64KB, fetched via an HTTP range request; the complete log
+is used when the server does not support ranges).
 
 ## `bbr ci logs --json`
 

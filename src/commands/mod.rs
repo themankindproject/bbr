@@ -200,6 +200,22 @@ pub async fn resolve_body(
     ))
 }
 
+/// Read a secret value from stdin (blocking; safe for use before/without the
+/// async runtime touching stdin). Trailing whitespace/newline is trimmed.
+///
+/// Used by secret-taking commands (`variable set --stdin`, `webhook create
+/// --secret-stdin`, `deploy-keys add --stdin`) so tokens don't appear in
+/// `ps` output or shell history.
+pub fn read_secret_stdin() -> Result<String> {
+    use std::io::Read;
+    let mut buf = String::new();
+    std::io::stdin()
+        .lock()
+        .read_to_string(&mut buf)
+        .map_err(BitbucketError::Io)?;
+    Ok(buf.trim().to_string())
+}
+
 /// Standard Formatter construction for command handlers.
 ///
 /// Prefer this over `Formatter::from_json_flag` so `--no-pager` is honored.

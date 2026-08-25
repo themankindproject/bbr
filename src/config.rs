@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{BitbucketError, Result};
@@ -48,19 +49,21 @@ pub fn config_path() -> Option<PathBuf> {
 }
 
 /// On-disk shape of `credentials.toml`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct CredentialsFile {
     #[serde(default)]
     pub default: CredentialProfile,
 }
 
 /// A single credential profile (only `default` is used in v0.1).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct CredentialProfile {
     pub username: String,
-    /// Atlassian API token (from id.atlassian.com).
+    /// Atlassian API token (from id.atlassian.com). Held as a `SecretString`
+    /// so the token is zeroized when the profile is dropped instead of
+    /// lingering in freed heap memory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token: Option<String>,
+    pub token: Option<SecretString>,
     /// Optional workspace override; otherwise inferred from git remote.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
@@ -69,9 +72,32 @@ pub struct CredentialProfile {
 impl CredentialProfile {
     pub fn secret(&self) -> Option<&str> {
         self.token
-            .as_deref()
-            .map(|s| s.trim())
+            .as_ref()
+            .map(|s| s.expose_secret().trim())
             .filter(|s| !s.is_empty())
+    }
+}
+
+/// Serializable shadow of [`CredentialProfile`] used only when writing
+/// `credentials.toml` to disk. `secrecy::SecretString` deliberately has no
+/// `Serialize` impl (exfiltration guard); this type is the one explicit,
+/// audited boundary where the secret must hit the 0600-mode file.
+#[derive(Serialize)]
+struct SerializableCredentialProfile<'a> {
+    username: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workspace: Option<&'a str>,
+}
+
+impl CredentialProfile {
+    fn to_serializable(&self) -> SerializableCredentialProfile<'_> {
+        SerializableCredentialProfile {
+            username: &self.username,
+            token: self.secret(),
+            workspace: self.workspace.as_deref(),
+        }
     }
 }
 
@@ -119,6 +145,20 @@ fn read_credentials_file(path: &Path) -> Result<CredentialsFile> {
     Ok(parsed)
 }
 
+/// Serializable shadow of [`CredentialsFile`] for the disk-write boundary.
+#[derive(Serialize)]
+struct SerializableCredentialsFile<'a> {
+    default: SerializableCredentialProfile<'a>,
+}
+
+impl CredentialsFile {
+    fn to_serializable(&self) -> SerializableCredentialsFile<'_> {
+        SerializableCredentialsFile {
+            default: self.default.to_serializable(),
+        }
+    }
+}
+
 /// Write the credentials file with mode 0600 on unix. Creates the parent dir.
 pub fn save_credentials(creds: &CredentialsFile) -> Result<PathBuf> {
     let path = credentials_path()
@@ -133,7 +173,9 @@ pub fn save_credentials(creds: &CredentialsFile) -> Result<PathBuf> {
         }
     }
 
-    let serialized = toml::to_string_pretty(creds)
+    // Serialize via the explicit shadow type — the only place the token is
+    // exposed, and it lands in a 0600 file.
+    let serialized = toml::to_string_pretty(&creds.to_serializable())
         .map_err(|e| BitbucketError::Config(format!("serializing credentials: {e}")))?;
 
     write_private(&path, &serialized)
@@ -226,24 +268,22 @@ pub fn save_config(cfg: &ConfigFile) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::env_lock;
     use std::io::Write;
-    use std::sync::Mutex;
     use tempfile::tempdir;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[cfg(unix)]
     #[test]
     fn save_credentials_uses_private_permissions() {
         use std::os::unix::fs::PermissionsExt;
 
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let tmp = tempdir().unwrap();
         std::env::set_var("XDG_CONFIG_HOME", tmp.path());
         let creds = CredentialsFile {
             default: CredentialProfile {
                 username: "u".into(),
-                token: Some("t".into()),
+                token: Some(SecretString::from("t")),
                 workspace: None,
             },
         };
@@ -255,7 +295,7 @@ mod tests {
 
     #[test]
     fn parses_token_profile() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let tmp = tempdir().unwrap();
         let bb_dir = tmp.path().join(APP_NAME);
         fs::create_dir_all(&bb_dir).unwrap();
@@ -273,7 +313,7 @@ mod tests {
 
     #[test]
     fn config_file_roundtrip() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let tmp = tempdir().unwrap();
         std::env::set_var("XDG_CONFIG_HOME", tmp.path());
 
@@ -310,7 +350,7 @@ mod tests {
 
     #[test]
     fn load_config_returns_default_when_missing() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = env_lock();
         let tmp = tempdir().unwrap();
         std::env::set_var("XDG_CONFIG_HOME", tmp.path());
 

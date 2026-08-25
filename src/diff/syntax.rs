@@ -15,6 +15,22 @@ fn syntax_set() -> &'static SyntaxSet {
     SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines)
 }
 
+/// Pre-load the syntax set + themes on a background thread.
+///
+/// `SyntaxSet::load_defaults_newlines` costs 100-300ms; calling this early
+/// (CLI startup) hides that latency behind the first network round-trip so
+/// `pr view --diff` doesn't pay it when rendering begins. Safe to call more
+/// than once — later calls are cheap no-ops once initialized.
+pub fn warm() {
+    std::thread::Builder::new()
+        .name("syntax-warm".into())
+        .spawn(|| {
+            let _ = syntax_set();
+            let _ = THEME_SET.get_or_init(ThemeSet::load_defaults);
+        })
+        .ok();
+}
+
 fn theme() -> &'static Theme {
     let ts = THEME_SET.get_or_init(ThemeSet::load_defaults);
     ts.themes

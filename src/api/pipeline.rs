@@ -303,8 +303,9 @@ impl BitbucketClient {
         Ok(StepLog { text })
     }
 
-    /// Fetch a byte-range of a step log. Returns new content appended since `start_byte`.
-    /// Returns an empty string when the server responds with 416 (no new content).
+    /// Fetch a byte-range of a step log. Returns new content appended since
+    /// `start_byte`. Returns an empty string when the server responds with 416
+    /// (no new content).
     pub async fn step_log_range(
         &self,
         workspace: &str,
@@ -315,6 +316,23 @@ impl BitbucketClient {
     ) -> Result<String> {
         let path = format!("/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/{step}/log");
         self.send_raw_range(&path, start_byte).await
+    }
+
+    /// Like [`Self::step_log_range`] but also reports whether the server
+    /// honored the range request. When `honored` is `false` the body is the
+    /// *entire* log (the server ignored `Range`), so streaming callers must
+    /// reset their offset to the body length instead of appending — appending
+    /// would replay content already printed.
+    pub async fn step_log_range_checked(
+        &self,
+        workspace: &str,
+        slug: &str,
+        uuid: &str,
+        step: &str,
+        start_byte: u64,
+    ) -> Result<(String, bool)> {
+        let path = format!("/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/{step}/log");
+        self.send_raw_range_checked(&path, start_byte).await
     }
 
     /// `POST /repositories/{ws}/{slug}/pipelines/` — trigger a new pipeline with optional variables.

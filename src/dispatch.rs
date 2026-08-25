@@ -17,6 +17,10 @@ use crate::error::Result;
 pub(crate) async fn dispatch(cli: Cli) -> Result<()> {
     let g = &cli.global;
 
+    // Warm the syntax-highlighting engine in the background while network
+    // and git work proceed; a no-op for commands that never render diffs.
+    crate::diff::syntax::warm();
+
     // Fail fast on missing credentials BEFORE git detection so the error
     // says "auth first", not "not a git repo". Commands that legitimately
     // work without credentials are excluded.
@@ -450,9 +454,10 @@ async fn dispatch_ci(action: CiAction) -> Result<()> {
             CiVarsAction::Set {
                 key,
                 value,
+                stdin,
                 secured,
                 g,
-            } => commands::ci_vars::set(&g, &key, &value, secured).await,
+            } => commands::ci_vars::set(&g, &key, value.as_deref(), stdin, secured).await,
             CiVarsAction::Delete { key, g } => commands::ci_vars::delete(&g, &key).await,
         },
         CiAction::Schedules { action } => match action {
@@ -559,6 +564,7 @@ async fn dispatch_batch(g: &GlobalArgs, action: BatchAction) -> Result<()> {
             close_source_branch,
             yes,
             max,
+            min_approvals,
         } => {
             commands::batch::merge_approved(
                 g,
@@ -568,6 +574,7 @@ async fn dispatch_batch(g: &GlobalArgs, action: BatchAction) -> Result<()> {
                 close_source_branch,
                 yes,
                 max,
+                min_approvals,
             )
             .await
         }
@@ -613,6 +620,7 @@ async fn dispatch_webhook(action: WebhookAction) -> Result<()> {
             description,
             active,
             secret,
+            secret_stdin,
             g,
         } => {
             commands::webhook::create(
@@ -622,6 +630,7 @@ async fn dispatch_webhook(action: WebhookAction) -> Result<()> {
                 description.as_deref(),
                 active,
                 secret.as_deref(),
+                secret_stdin,
             )
             .await
         }
@@ -747,9 +756,10 @@ async fn dispatch_variable(action: VariableAction) -> Result<()> {
         VariableAction::Set {
             key,
             value,
+            stdin,
             secured,
             g,
-        } => commands::ci_vars::set(&g, &key, &value, secured).await,
+        } => commands::ci_vars::set(&g, &key, value.as_deref(), stdin, secured).await,
         VariableAction::Delete { key, g } => commands::ci_vars::delete(&g, &key).await,
     }
 }
@@ -757,9 +767,12 @@ async fn dispatch_variable(action: VariableAction) -> Result<()> {
 async fn dispatch_deploy_keys(action: DeployKeysAction) -> Result<()> {
     match action {
         DeployKeysAction::List { g } => commands::deploy_keys::list(&g).await,
-        DeployKeysAction::Add { key, label, g } => {
-            commands::deploy_keys::add(&g, &key, &label).await
-        }
+        DeployKeysAction::Add {
+            key,
+            stdin,
+            label,
+            g,
+        } => commands::deploy_keys::add(&g, key.as_deref(), stdin, &label).await,
         DeployKeysAction::View { key_id, g } => commands::deploy_keys::view(&g, key_id).await,
         DeployKeysAction::Delete { key_id, yes, g } => {
             commands::deploy_keys::delete(&g, key_id, yes).await

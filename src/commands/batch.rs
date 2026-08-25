@@ -74,6 +74,7 @@ pub async fn merge_approved(
     close_source_branch: bool,
     yes: bool,
     max: Option<usize>,
+    min_approvals: u32,
 ) -> Result<()> {
     let client = client(g)?;
     let repo = resolve_repo(g)?;
@@ -113,7 +114,7 @@ pub async fn merge_approved(
             pr.participants.iter().filter(|p| p.is_approved()).count()
         };
 
-        let is_approved = approval_count > 0;
+        let is_approved = approval_count >= min_approvals as usize;
 
         if is_approved {
             approved_actions.push(MergeAction {

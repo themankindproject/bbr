@@ -322,10 +322,22 @@ pub async fn watch(
                 }
                 state.prev_state = step_state_name;
 
-                let chunk = client
-                    .step_log_range(&repo.workspace, &repo.slug, &uuid, &step.uuid, state.offset)
+                let (chunk, range_honored) = client
+                    .step_log_range_checked(
+                        &repo.workspace,
+                        &repo.slug,
+                        &uuid,
+                        &step.uuid,
+                        state.offset,
+                    )
                     .await
                     .unwrap_or_default();
+
+                if !range_honored {
+                    // Server ignored Range and sent the whole log — reset the
+                    // offset so we don't re-append content already streamed.
+                    state.offset = 0;
+                }
 
                 if !chunk.is_empty() {
                     if !state.header_printed {
@@ -383,9 +395,21 @@ pub async fn watch(
         };
         spinner.set_message(msg);
         time::sleep(Duration::from_secs(interval.max(1))).await;
-        current = client
+        // Poll errors are transient (network blip, timeout, 5xx): warn and
+        // keep watching on the next tick instead of aborting a long-running
+        // watch. Only auth failures are fatal — retrying can't fix those.
+        match client
             .get_pipeline(&repo.workspace, &repo.slug, &uuid)
-            .await?;
+            .await
+        {
+            Ok(p) => current = p,
+            Err(e) => {
+                if matches!(e, BitbucketError::AuthFailed(_)) {
+                    return Err(e);
+                }
+                spinner.println(format!("warning: poll failed ({}), retrying next tick", e));
+            }
+        }
     }
     spinner.finish();
     if notify && !g.json {
@@ -406,15 +430,41 @@ pub async fn watch(
         // If --logs was on, we already streamed everything — no need to
         // dump the tail again. Only fetch the tail when --logs is off
         // (classic behavior: show last 120 lines of failing step on failure).
+        //
+        // The excerpt only needs the end of the log, so request a bounded
+        // suffix range instead of downloading a potentially multi-MB log
+        // in full. Falls back to the complete log when the server (or an
+        // intermediary) ignores the Range header.
+        const FAILURE_LOG_TAIL_BYTES: u64 = 64 * 1024;
         let step = failing_step
             .or_else(|| raw_steps.last())
             .ok_or_else(|| BitbucketError::NotFound("no steps for pipeline".into()))?;
-        Some(
+        let failure_log_text = client
+            .step_log_range(
+                &repo.workspace,
+                &repo.slug,
+                &uuid,
+                &step.uuid,
+                FAILURE_LOG_TAIL_BYTES.saturating_sub(1),
+            )
+            .await
+            .unwrap_or_else(|_| {
+                // Range rejected (or transport error): fall back to the
+                // full log so the failure excerpt is still produced. The
+                // fallback is synchronous on the already-received error, so
+                // no second network call happens unless we truly need it —
+                // but a full-log fetch is warranted here regardless.
+                String::new()
+            });
+        let failure_log_text = if failure_log_text.is_empty() {
             client
                 .step_log(&repo.workspace, &repo.slug, &uuid, &step.uuid)
                 .await?
-                .text,
-        )
+                .text
+        } else {
+            failure_log_text
+        };
+        Some(failure_log_text)
     } else {
         None
     };
@@ -588,8 +638,8 @@ pub async fn tail(
     'steps: loop {
         // Stream the current step until it reaches a terminal state.
         loop {
-            let chunk = client
-                .step_log_range(
+            let (chunk, range_honored) = client
+                .step_log_range_checked(
                     &repo.workspace,
                     &repo.slug,
                     &pipeline_uuid,
@@ -598,6 +648,12 @@ pub async fn tail(
                 )
                 .await
                 .unwrap_or_default();
+
+            if !range_honored {
+                // Server ignored Range and sent the whole log — reset so the
+                // accounting below doesn't re-append already-streamed bytes.
+                offset = 0;
+            }
 
             if !chunk.is_empty() {
                 // Only print up to the last complete line. If the chunk
@@ -712,14 +768,28 @@ pub async fn tail(
                     break;
                 }
                 if !g.json {
-                    let rendered = if line_numbers {
-                        render_log_chunk_numbered(theme, &chunk, &mut nums)
+                    // Same partial-line holdback as the main stream loop: only
+                    // print up to the last complete newline so a line split
+                    // across the final flush isn't rendered twice.
+                    let printable_end = if chunk.ends_with('\n') {
+                        chunk.len()
                     } else {
-                        highlight_log_chunk(theme, &chunk)
+                        chunk.rfind('\n').map(|i| i + 1).unwrap_or(0)
                     };
-                    crate::output::print_block(&rendered)?;
+                    if printable_end > 0 {
+                        let rendered = if line_numbers {
+                            render_log_chunk_numbered(theme, &chunk[..printable_end], &mut nums)
+                        } else {
+                            highlight_log_chunk(theme, &chunk[..printable_end])
+                        };
+                        crate::output::print_block(&rendered)?;
+                    }
                 }
-                offset += chunk.len() as u64;
+                offset += if chunk.ends_with('\n') {
+                    chunk.len() as u64
+                } else {
+                    chunk.rfind('\n').map(|i| i + 1).unwrap_or(0) as u64
+                };
             }
         }
         break;

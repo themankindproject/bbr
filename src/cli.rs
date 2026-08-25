@@ -280,7 +280,12 @@ pub enum VariableAction {
         /// Variable key name.
         key: String,
         /// Variable value.
-        value: String,
+        #[arg(long, conflicts_with = "stdin")]
+        value: Option<String>,
+        /// Read the value from stdin instead of the command line (keeps it
+        /// out of `ps` output and shell history).
+        #[arg(long)]
+        stdin: bool,
         /// Mark variable as secured/encrypted (value hidden after creation).
         #[arg(long)]
         secured: bool,
@@ -306,8 +311,11 @@ pub enum DeployKeysAction {
     /// Add a new deploy key to the repository.
     Add {
         /// SSH public key (e.g. ssh-rsa AAAA...).
+        #[arg(long, conflicts_with = "stdin")]
+        key: Option<String>,
+        /// Read the SSH public key from stdin instead of the command line.
         #[arg(long)]
-        key: String,
+        stdin: bool,
         /// Human-readable label for the key.
         #[arg(long)]
         label: String,
@@ -353,11 +361,17 @@ pub enum PrAction {
         reviewer: Option<String>,
         #[arg(
             long,
+            value_parser = ["created_on", "updated_on", "title"],
             help = "sort field (created_on|updated_on|title)",
             default_value = "updated_on"
         )]
         sort: String,
-        #[arg(long, help = "sort direction (asc|desc)", default_value = "desc")]
+        #[arg(
+            long,
+            value_parser = ["asc", "desc"],
+            help = "sort direction (asc|desc)",
+            default_value = "desc"
+        )]
         order: String,
         #[command(flatten)]
         g: GlobalArgs,
@@ -999,6 +1013,10 @@ pub enum BatchAction {
         /// Maximum number of items to process (safety cap).
         #[arg(long)]
         max: Option<usize>,
+        /// Minimum approvals required before a PR qualifies for auto-merge
+        /// (default 1). Counts reviewers first, falling back to participants.
+        #[arg(long, default_value_t = 1)]
+        min_approvals: u32,
     },
     /// Rerun all failed pipelines.
     RerunFailed {
@@ -1206,8 +1224,12 @@ pub enum WebhookAction {
         #[arg(long, default_value_t = true)]
         active: bool,
         /// Shared secret for payload signing.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "secret_stdin")]
         secret: Option<String>,
+        /// Read the webhook secret from stdin instead of the command line
+        /// (keeps it out of `ps` output and shell history).
+        #[arg(long)]
+        secret_stdin: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -1358,7 +1380,12 @@ pub enum CiVarsAction {
     /// Set a pipeline variable (creates or updates).
     Set {
         key: String,
-        value: String,
+        #[arg(long, conflicts_with = "stdin")]
+        value: Option<String>,
+        /// Read the value from stdin instead of the command line (keeps it
+        /// out of `ps` output and shell history).
+        #[arg(long)]
+        stdin: bool,
         /// Mark variable as secured/encrypted.
         #[arg(long)]
         secured: bool,

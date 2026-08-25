@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`--min-approvals <N>` on `batch merge-approved`** — require at least N
+  approvals (reviewers first, falling back to participants) before a PR
+  qualifies for auto-merge. Default remains 1; raise it to avoid merging
+  on a single approval.
+- **Secret-safe stdin input** — `variable set --stdin`, `ci vars set
+  --stdin`, `webhook create --secret-stdin`, and `deploy-keys add --stdin`
+  read the secret/key material from stdin so it never appears in `ps`
+  output or shell history. Mutually exclusive with the corresponding
+  inline flags (`--value`, `--secret`, `--key`), which are now optional.
+- **`pr list --sort/--order` validated at the CLI layer** — invalid values
+  now fail fast as usage errors (exit 64) before any network access.
+
+### Changed
+
+- **Rate-limit-aware request pacing** — parallel pagination fan-out scales
+  down automatically when remaining API quota is low (10 → 5 → 2 concurrent
+  page fetches below 300 / 100 remaining requests).
+- **`status --watch` request diet** — PR diffstat and conflict results are
+  cached across watch ticks, cutting per-tick usage from 2 extra requests
+  per open PR to zero for unchanged PRs (previously ~1,400 requests/hour
+  for a branch with two open PRs at the default 5s interval).
+- **Failing-step log tail is bounded** — on pipeline failure, `ci watch`
+  fetches only the last ~64KB of the failing step's log via an HTTP range
+  request instead of downloading the entire multi-MB log.
+- **Syntax-highlight engine warms in the background** — the syntect syntax
+  set loads during startup instead of stalling the first diff render.
+- Retry back-off jitter mixes a process-local counter with clock nanos, so
+  concurrent retries no longer produce identical delays.
+
+### Fixed
+
+- **Git subprocess deadlock** — `git` child processes are now drained
+  concurrently with the wait; previously, output larger than the OS pipe
+  buffer (~64KB) blocked until the command timed out and was killed,
+  surfacing as spurious "git command timed out" errors on large
+  fetch/rebase/clone operations.
+- **`ci watch` survives transient poll errors** — a single network blip or
+  5xx during polling now logs a warning and retries next tick instead of
+  aborting hours-long watches; auth failures remain fatal.
+- **Range responses that servers ignore no longer replay log content** —
+  streaming commands distinguish HTTP 206 from a full-body 200 and reset
+  their byte offset in the latter case, preventing duplicate output when an
+  intermediary strips Range support. The same holdback now applies to the
+  final flush of `ci tail --follow`, fixing split-line double renders.
+- **Retryability is structural** — 5xx errors carry their status code in a
+  dedicated error variant (`server` kind in `--json` output) rather than
+  relying on string-matching error message text.
+- **Error scope tables are plain ASCII** — permission-denied messages no
+  longer embed theme-dependent Unicode glyphs, keeping `--json` stderr
+  stable across environments.
+- **Stored API tokens are zeroized on drop** — `credentials.toml` parsing
+  holds the token in a `SecretString`; the value is wiped from memory when
+  the profile is released instead of lingering in freed heap memory. Disk
+  format is unchanged.
+- **Test isolation** — environment-mutating tests share one process-wide
+  lock, removing cross-module flakiness from parallel test runs.
+
 ## [0.2.2] - 2026-08-16
 
 ### Added

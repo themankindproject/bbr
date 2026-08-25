@@ -72,6 +72,16 @@ pub enum BitbucketError {
 
     #[error("bad request: {0}")]
     BadRequest(String),
+
+    /// A 5xx server error, carrying the HTTP status so retry logic can
+    /// branch on the code structurally instead of string-matching message
+    /// text (which breaks silently if error formatting ever changes).
+    #[error("HTTP {status}: server error")]
+    Server {
+        status: reqwest::StatusCode,
+        #[source]
+        source: Box<BitbucketError>,
+    },
 }
 
 impl BitbucketError {
@@ -82,6 +92,7 @@ impl BitbucketError {
             BitbucketError::NotFound(_) => ExitCode::NotFound,
             BitbucketError::RateLimit(_) => ExitCode::RateLimit,
             BitbucketError::PipelineFailed { .. } => ExitCode::PipelineFailed,
+            BitbucketError::Server { source, .. } => source.exit_code(),
             _ => ExitCode::Generic,
         }
     }
@@ -100,6 +111,7 @@ impl BitbucketError {
             BitbucketError::PipelineFailed { .. } => "pipeline_failed",
             BitbucketError::Other(_) => "generic",
             BitbucketError::BadRequest(_) => "bad_request",
+            BitbucketError::Server { .. } => "server",
         }
     }
 }
@@ -168,6 +180,9 @@ fn hints(e: &BitbucketError) -> Vec<String> {
         }
         BitbucketError::BadRequest(_) => {
             out.push("check the arguments you passed — the API rejected the request.".into());
+        }
+        BitbucketError::Server { .. } => {
+            out.push("the Bitbucket API had a server-side error; retrying usually helps.".into());
         }
         _ => {}
     }
@@ -287,6 +302,14 @@ mod tests {
         );
         assert_eq!(BitbucketError::Other("x".into()).kind(), "generic");
         assert_eq!(BitbucketError::BadRequest("x".into()).kind(), "bad_request");
+        assert_eq!(
+            BitbucketError::Server {
+                status: reqwest::StatusCode::BAD_GATEWAY,
+                source: Box::new(BitbucketError::Other("boom".into())),
+            }
+            .kind(),
+            "server"
+        );
     }
 
     #[test]

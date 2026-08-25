@@ -15,5 +15,7 @@ pub mod error;
 pub mod git;
 pub mod output;
 pub mod stack;
+#[cfg(test)]
+pub mod test_support;
 
 pub use error::{BitbucketError, ExitCode, Result};
