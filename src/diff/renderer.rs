@@ -673,8 +673,31 @@ impl TintedLine {
     }
 }
 
-const ADD_BG: u8 = 22;
-const DEL_BG: u8 = 52;
+/// Background tint codes for diff lines, per theme preset.
+///
+/// Dark terminals use deep green/red tints (xterm-256 22 / 52); light
+/// terminals need pale washes (194 pale-green / 224 pale-pink) or colored
+/// text becomes unreadable against a white background.
+const ADD_BG_DARK: u8 = 22;
+const DEL_BG_DARK: u8 = 52;
+const ADD_BG_LIGHT: u8 = 194;
+const DEL_BG_LIGHT: u8 = 224;
+
+fn add_bg() -> u8 {
+    if crate::output::theme::Theme::current().is_light() {
+        ADD_BG_LIGHT
+    } else {
+        ADD_BG_DARK
+    }
+}
+
+fn del_bg() -> u8 {
+    if crate::output::theme::Theme::current().is_light() {
+        DEL_BG_LIGHT
+    } else {
+        DEL_BG_DARK
+    }
+}
 
 /// Truncate content to fit the remaining terminal columns after the prefix.
 fn unified_content_width(lineno_width: usize, term_width: usize) -> usize {
@@ -873,7 +896,7 @@ fn render_paired_line(
     match line.kind {
         DiffLineKind::Addition => {
             if theme.colors_enabled() {
-                let mut tinted = TintedLine::new(ADD_BG);
+                let mut tinted = TintedLine::new(add_bg());
                 tinted.push_space();
                 tinted.push_dim(&old);
                 tinted.push_space();
@@ -902,7 +925,7 @@ fn render_paired_line(
         }
         DiffLineKind::Deletion => {
             if theme.colors_enabled() {
-                let mut tinted = TintedLine::new(DEL_BG);
+                let mut tinted = TintedLine::new(del_bg());
                 tinted.push_space();
                 tinted.push_raw(&old);
                 tinted.push_space();
@@ -1003,7 +1026,7 @@ fn render_line(
         }
         DiffLineKind::Addition => {
             if theme.colors_enabled() {
-                let mut tinted = TintedLine::new(ADD_BG);
+                let mut tinted = TintedLine::new(add_bg());
                 tinted.push_space();
                 tinted.push_dim(&old);
                 tinted.push_space();
@@ -1032,7 +1055,7 @@ fn render_line(
         }
         DiffLineKind::Deletion => {
             if theme.colors_enabled() {
-                let mut tinted = TintedLine::new(DEL_BG);
+                let mut tinted = TintedLine::new(del_bg());
                 tinted.push_space();
                 tinted.push_raw(&old);
                 tinted.push_space();

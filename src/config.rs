@@ -224,8 +224,26 @@ pub struct ConfigFile {
     pub active_context: Option<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub contexts: HashMap<String, ContextEntry>,
+    /// UI preferences (theme, …). Optional so pre-existing configs parse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui: Option<UiSection>,
 }
 
+/// `[ui]` table in `config.toml`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UiSection {
+    /// Theme preset: `"dark"`, `"light"`, or `"auto"` (default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+}
+
+impl ConfigFile {
+    /// Resolved `ui.theme` value, if set. Unvalidated — callers decide
+    /// how to treat unknown values (treated as `auto`).
+    pub fn ui_theme(&self) -> Option<&str> {
+        self.ui.as_ref().and_then(|u| u.theme.as_deref())
+    }
+}
 /// A named workspace/slug profile.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextEntry {
@@ -320,6 +338,7 @@ mod tests {
         let mut cfg = ConfigFile {
             active_context: Some("work".into()),
             contexts: HashMap::new(),
+            ui: None,
         };
         cfg.contexts.insert(
             "work".into(),
@@ -378,5 +397,31 @@ workspace = "devteam"
         assert_eq!(cfg.contexts.len(), 2);
         assert_eq!(cfg.contexts["dev"].slug, Some("api".into()));
         assert_eq!(cfg.contexts["staging"].slug, None);
+    }
+
+    #[test]
+    fn config_file_parses_ui_theme() {
+        let cfg: ConfigFile = toml::from_str("[ui]\ntheme = \"light\"\n").unwrap();
+        assert_eq!(cfg.ui_theme(), Some("light"));
+    }
+
+    #[test]
+    fn ui_theme_defaults_to_none() {
+        let cfg = ConfigFile::default();
+        assert_eq!(cfg.ui_theme(), None);
+    }
+
+    #[test]
+    fn ui_section_survives_roundtrip() {
+        let cfg = ConfigFile {
+            ui: Some(UiSection {
+                theme: Some("light".into()),
+            }),
+            ..ConfigFile::default()
+        };
+        let text = toml::to_string_pretty(&cfg).unwrap();
+        assert!(text.contains("[ui]"));
+        let parsed: ConfigFile = toml::from_str(&text).unwrap();
+        assert_eq!(parsed.ui_theme(), Some("light"));
     }
 }

@@ -251,6 +251,40 @@ is used when the server does not support ranges).
 `credential_kind` is `"atlassian_api_token"` or `null` when not authenticated.
 `source` is `"environment"`, `"config-file"`, or `"none"`.
 `rate_limit_remaining` is omitted until at least one API response has returned the header.
+
+## `bbr doctor --json`
+
+Emits a JSON array of check results. The command always exits 0 unless
+`--strict` is passed and at least one check has status `fail`.
+
+```json
+[
+  { "name": "git", "status": "ok", "detail": "git version 2.53.0" },
+  { "name": "repo identity", "status": "ok", "detail": "ws/slug" },
+  { "name": "credentials", "status": "fail", "detail": "none found — run `bbr auth setup` ..." },
+  { "name": "creds permissions", "status": "warn", "detail": "no credentials file" },
+  { "name": "pager tools", "status": "warn", "detail": "bat missing — ..." },
+  { "name": "api reachable", "status": "fail", "detail": "HTTP 401: ..." },
+  { "name": "rate limit", "status": "warn", "detail": "no rate-limit header seen yet" },
+  { "name": "version", "status": "ok", "detail": "0.2.2 (latest)" }
+]
+```
+
+`status` is one of `"ok" | "warn" | "fail"`. Check names are stable; new
+checks may be added over time, so consume by name, not position.
+
+## Themes
+
+Diff and syntax-highlight colors follow a background preset:
+
+```sh
+bbr config set ui.theme dark    # deep tints + base16-ocean.dark (default look)
+bbr config set ui.theme light   # pale tints + InspiredGitHub palette
+bbr config set ui.theme auto    # detect via COLORFGBG, fall back to dark
+```
+
+The setting lives in `config.toml` under `[ui]` and applies to the next run.
+
 ## `bbr repo info --json`
 
 ```json

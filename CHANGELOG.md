@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`bbr doctor`** — environment self-check: git, repo identity, credentials,
+  credential file permissions, pager tooling, API reachability, rate-limit
+  headroom, and version currency, each reported as ok/warn/fail. Never
+  aborts on individual failures; `--json` emits the structured check array;
+  `--strict` exits non-zero when anything fails (for CI/scripts).
+- **Light terminal theme support** — `bbr config set ui.theme dark|light|auto`
+  (default `auto`). Light presets switch syntax highlighting to the
+  InspiredGitHub palette and diff line tints to pale green/red so diffs stay
+  readable on white backgrounds. Auto-detection uses `COLORFGBG` where
+  available.
+- **Interactive PR disambiguation** — when a branch has multiple open PRs,
+  `bbr pr view` (no id) shows a numbered picker on TTYs. Non-interactive
+  contexts (pipes/agents) keep the previous first-PR behavior;
+  `BBR_NO_INTERACTIVE=1` forces it.
+- **`status --watch` footer** — stable dim footer with refresh cadence and
+  remaining API quota (TTY only), plus gentler per-tick redraw.
+- **Help examples** — root `--help` gains a "Common workflows" block; `pr`,
+  `ci`, and `batch` help pages show copy-pasteable recipe examples.
+
+### Changed
+
+- `bbr status --watch` no longer full-screen-clears each tick (cursor-home +
+  erase-to-EOL), reducing visible flicker.
+
+### Added
+
 - **`--min-approvals <N>` on `batch merge-approved`** — require at least N
   approvals (reviewers first, falling back to participants) before a PR
   qualifies for auto-merge. Default remains 1; raise it to avoid merging

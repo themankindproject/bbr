@@ -22,6 +22,44 @@ static THEME_INITIALIZED: AtomicBool = AtomicBool::new(false);
 pub struct Theme {
     colors: bool,
     unicode: bool,
+    /// Resolved background preset: drives syntect palette + diff tints.
+    light_bg: bool,
+}
+
+/// Terminal background preset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Preset {
+    Dark,
+    Light,
+}
+
+impl Preset {
+    /// Resolve the preset from an explicit config value (`"dark"`, `"light"`,
+    /// anything else = auto) with env detection fallback. Unknown/None values
+    /// defer to [`Preset::from_env`], which itself defaults to [`Preset::Dark`].
+    pub fn resolve(cfg_value: Option<&str>) -> Self {
+        match cfg_value {
+            Some("dark") => Preset::Dark,
+            Some("light") => Preset::Light,
+            _ => Self::from_env().unwrap_or(Preset::Dark),
+        }
+    }
+
+    /// Best-effort background detection from `COLORFGBG="<fg>;<bg>"`.
+    ///
+    /// Convention (rxvt/screen lineage): background codes 6 and 7 (cyan /
+    /// white ranges) and above usually indicate a light terminal background.
+    /// Detection is unreliable outside those emulators — users should prefer
+    /// an explicit `ui.theme` setting; this only powers the `auto` default.
+    fn from_env() -> Option<Self> {
+        let fgbg = std::env::var("COLORFGBG").ok()?;
+        let bg = fgbg.rsplit(';').next()?.trim().parse::<u8>().ok()?;
+        Some(if (6..=15).contains(&bg) {
+            Preset::Light
+        } else {
+            Preset::Dark
+        })
+    }
 }
 
 impl Theme {
@@ -37,8 +75,18 @@ impl Theme {
                 2 => true,
                 _ => true,
             };
+            // Config load is fallible and theme init must not fail: a config
+            // error just means the default preset.
+            let preset = crate::config::load_config()
+                .ok()
+                .and_then(|cfg| cfg.ui_theme().map(str::to_string));
+            let light_bg = Preset::resolve(preset.as_deref()) == Preset::Light;
             THEME_INITIALIZED.store(true, Ordering::Release);
-            Theme { colors, unicode }
+            Theme {
+                colors,
+                unicode,
+                light_bg,
+            }
         })
     }
 
@@ -116,10 +164,20 @@ impl Theme {
         self.unicode
     }
 
+    /// True when the resolved theme preset targets a light terminal background.
+    /// Drives syntect palette selection and diff tint colors.
+    pub fn is_light(&self) -> bool {
+        self.light_bg
+    }
+
     /// Create a test theme with explicit settings. Only available in tests.
     #[cfg(test)]
     pub(crate) fn test_instance(colors: bool, unicode: bool) -> Theme {
-        Theme { colors, unicode }
+        Theme {
+            colors,
+            unicode,
+            light_bg: false,
+        }
     }
 
     // --- semantic helpers -------------------------------------------------
@@ -348,12 +406,14 @@ pub fn terminal_height() -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::status::render_watch_footer;
 
     #[test]
     fn no_color_disables() {
         let t = Theme {
             colors: false,
             unicode: true,
+            light_bg: false,
         };
         assert!(!t.colors_enabled());
     }
@@ -363,6 +423,7 @@ mod tests {
         let t = Theme {
             colors: false,
             unicode: true,
+            light_bg: false,
         };
         assert_eq!(t.status_glyph("SUCCESSFUL"), "[ok]");
         assert_eq!(t.status_glyph("SUCCESS"), "[ok]");
@@ -375,6 +436,7 @@ mod tests {
         let t = Theme {
             colors: false,
             unicode: true,
+            light_bg: false,
         };
         assert_eq!(t.status_glyph("FAILED"), "[X]");
         assert_eq!(t.status_glyph("ERROR"), "[X]");
@@ -385,6 +447,7 @@ mod tests {
         let t = Theme {
             colors: false,
             unicode: true,
+            light_bg: false,
         };
         assert_eq!(t.status_glyph("STOPPED"), "[!]");
         assert_eq!(t.status_glyph("CANCELLED"), "[!]");
@@ -396,6 +459,7 @@ mod tests {
         let t = Theme {
             colors: false,
             unicode: true,
+            light_bg: false,
         };
         assert_eq!(t.status_glyph("INPROGRESS"), "[~]");
         assert_eq!(t.status_glyph("IN_PROGRESS"), "[~]");
@@ -407,6 +471,7 @@ mod tests {
         let t = Theme {
             colors: false,
             unicode: true,
+            light_bg: false,
         };
         assert_eq!(t.status_glyph("PENDING"), "[.]");
         assert_eq!(t.status_glyph("QUEUED"), "[.]");
@@ -417,6 +482,7 @@ mod tests {
         let t = Theme {
             colors: false,
             unicode: true,
+            light_bg: false,
         };
         assert_eq!(t.status_glyph("UNKNOWN"), "[?]");
     }
@@ -426,6 +492,7 @@ mod tests {
         let t = Theme {
             colors: false,
             unicode: true,
+            light_bg: false,
         };
         let sep = t.separator();
         assert!(!sep.is_empty());
@@ -438,6 +505,7 @@ mod tests {
         let t = Theme {
             colors: false,
             unicode: true,
+            light_bg: false,
         };
         assert_eq!(t.bullet(), "*");
     }
@@ -447,6 +515,7 @@ mod tests {
         let t = Theme {
             colors: false,
             unicode: true,
+            light_bg: false,
         };
         assert_eq!(t.label("Branch:"), "Branch: ");
     }
@@ -461,5 +530,52 @@ mod tests {
             "FAILED",
             &["success", "SUCCESSFUL"]
         ));
+    }
+
+    #[test]
+    fn preset_explicit_values_win() {
+        assert_eq!(Preset::resolve(Some("light")), Preset::Light);
+        assert_eq!(Preset::resolve(Some("dark")), Preset::Dark);
+    }
+
+    #[test]
+    fn preset_unknown_value_falls_back_to_env_or_dark() {
+        // Unknown strings behave like auto. With COLORFGBG unset the
+        // resolution must land on Dark (the safe default).
+        let _guard = crate::test_support::env_lock();
+        std::env::remove_var("COLORFGBG");
+        assert_eq!(Preset::resolve(Some("bogus")), Preset::Dark);
+        assert_eq!(Preset::resolve(None), Preset::Dark);
+        std::env::remove_var("COLORFGBG");
+    }
+
+    #[test]
+    fn preset_auto_reads_colorfgbg() {
+        let _guard = crate::test_support::env_lock();
+        std::env::set_var("COLORFGBG", "0;15"); // white bg → light
+        assert_eq!(Preset::resolve(None), Preset::Light);
+        std::env::set_var("COLORFGBG", "15;0"); // black bg → dark
+        assert_eq!(Preset::resolve(None), Preset::Dark);
+        std::env::remove_var("COLORFGBG");
+    }
+
+    #[test]
+    fn preset_colorfgbg_garbage_is_dark() {
+        let _guard = crate::test_support::env_lock();
+        std::env::set_var("COLORFGBG", "not;parseable");
+        assert_eq!(Preset::resolve(None), Preset::Dark);
+        std::env::remove_var("COLORFGBG");
+    }
+
+    #[test]
+    fn watch_footer_renders_quota_or_placeholder() {
+        assert_eq!(
+            render_watch_footer(5, Some(843)),
+            "refreshing every 5s · quota 843 · Ctrl+C to stop"
+        );
+        assert_eq!(
+            render_watch_footer(10, None),
+            "refreshing every 10s · quota — · Ctrl+C to stop"
+        );
     }
 }

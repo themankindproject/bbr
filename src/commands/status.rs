@@ -47,6 +47,10 @@ pub struct StatusOut {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub commit_statuses: Vec<BuildStatusSummary>,
     pub suggested_commands: Vec<String>,
+    /// Remaining API quota at fetch time (watch footer); None until a
+    /// rate-limit header has been observed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limit_remaining: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -323,6 +327,7 @@ pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
     // PR diffstat/conflict results are cached across ticks so the watch loop
     // doesn't burn 2 API calls per open PR every interval.
     let extras_cache: PrExtrasCache = std::sync::Mutex::new(std::collections::HashMap::new());
+    let is_tty = io::stdout().is_terminal();
     loop {
         // Re-read branch/commit from git each tick so new commits and
         // branch switches show up without restarting the watch loop.
@@ -333,9 +338,10 @@ pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
             Ok(out) => {
                 let human = render_human(&out);
                 // Clear screen only when writing to a real TTY (not when piped,
-                // even if CLICOLOR_FORCE enables colors).
-                if io::stdout().is_terminal() {
-                    eprint!("\x1B[H\x1B[J");
+                // even if CLICOLOR_FORCE enables colors). Erase-to-EOL per line
+                // rather than a full-screen clear to reduce flicker.
+                if is_tty {
+                    eprint!("\x1B[H");
                 } else {
                     eprintln!("{}", theme.separator());
                 }
@@ -352,6 +358,16 @@ pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
                 );
                 let fmt = make_formatter(g);
                 fmt.print(&out, &human)?;
+                if is_tty {
+                    // Stable footer under the content: refresh cadence + quota.
+                    eprintln!(
+                        "\n{}",
+                        theme.dim(&render_watch_footer(
+                            interval_secs,
+                            out.rate_limit_remaining
+                        ))
+                    );
+                }
             }
             Err(e) => {
                 if io::stdout().is_terminal() {
@@ -496,7 +512,17 @@ async fn run_inner_with_cache(
         pipeline: pipeline_summary,
         commit_statuses,
         suggested_commands,
+        rate_limit_remaining: None, // filled in by callers with a client
     })
+}
+
+/// Stable footer line for `bbr status --watch` (TTY only).
+pub(crate) fn render_watch_footer(interval_secs: u64, rate_limit_remaining: Option<u64>) -> String {
+    let quota = match rate_limit_remaining {
+        Some(n) => format!("quota {n}"),
+        None => "quota —".to_string(),
+    };
+    format!("refreshing every {interval_secs}s · {quota} · Ctrl+C to stop")
 }
 
 fn parse_diffstat(val: &serde_json::Value) -> (u64, u64) {
@@ -1123,6 +1149,7 @@ mod tests {
             }),
             commit_statuses: vec![],
             suggested_commands: vec!["bbr open pr".into(), "bbr open ci".into()],
+            rate_limit_remaining: None,
         };
         let out = render_human(&out);
         assert!(out.contains("ws/repo"), "header with bold repo name");
@@ -1149,6 +1176,7 @@ mod tests {
             pipeline: None,
             commit_statuses: vec![],
             suggested_commands: vec![],
+            rate_limit_remaining: None,
         };
         let out = render_human(&out);
         assert!(out.contains("no open PR"));
@@ -1576,6 +1604,7 @@ mod tests {
             }),
             commit_statuses: vec![],
             suggested_commands: vec![],
+            rate_limit_remaining: None,
         };
         let short = render_short(&out);
         assert!(short.contains("#1"));
@@ -1597,6 +1626,7 @@ mod tests {
             pipeline: None,
             commit_statuses: vec![],
             suggested_commands: vec![],
+            rate_limit_remaining: None,
         };
         let short = render_short(&out);
         assert!(short.contains("no PR"));
@@ -1622,6 +1652,7 @@ mod tests {
                 url: "https://url".into(),
             }],
             suggested_commands: vec!["bbr ci status".into()],
+            rate_limit_remaining: None,
         };
         let json = serde_json::to_value(&out).unwrap();
         assert_eq!(json["repo"]["full_name"], "w/r");

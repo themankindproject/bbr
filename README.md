@@ -120,6 +120,20 @@ bbr update
 
 Every data command supports `--json`. See [USAGE.md](USAGE.md) for flags, subcommands, and scripting patterns.
 
+### Troubleshooting & Appearance
+
+```bash
+bbr doctor                        # self-check: git, creds, API, quota, version
+bbr doctor --strict               # non-zero exit when anything fails (CI-friendly)
+bbr config set ui.theme light     # pale diff tints + light syntax palette
+bbr config set ui.theme auto      # detect background via COLORFGBG (default)
+BBR_NO_INTERACTIVE=1 bbr pr view  # never prompt, even on a TTY
+```
+
+`bbr pr view` (no id) asks which PR you mean only when the branch has several
+open PRs and both stdin/stdout are terminals — scripts and agents are never
+prompted.
+
 ---
 
 ## Commands Reference

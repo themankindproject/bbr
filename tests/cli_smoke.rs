@@ -89,6 +89,84 @@ fn pr_list_rejects_unknown_order() {
 }
 
 #[test]
+fn doctor_help_mentions_checks() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["doctor", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("self-checks"))
+        .stdout(predicate::str::contains("--strict"));
+}
+
+#[test]
+fn doctor_json_outputs_check_array() {
+    // Doctor must never fail hard without --strict, even with no creds.
+    std::env::remove_var("BITBUCKET_USERNAME");
+    std::env::remove_var("BITBUCKET_TOKEN");
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .env(
+            "XDG_CONFIG_HOME",
+            "/tmp/bbr-doctor-empty-config-that-does-not-exist",
+        )
+        .args(["doctor", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"name\""))
+        .stdout(predicate::str::contains("\"fail\""));
+}
+
+#[test]
+fn doctor_strict_exits_nonzero_on_failures() {
+    std::env::remove_var("BITBUCKET_USERNAME");
+    std::env::remove_var("BITBUCKET_TOKEN");
+    // No credentials + unreachable API => failures exist => strict exits 1.
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .env(
+            "XDG_CONFIG_HOME",
+            "/tmp/bbr-doctor-empty-config-that-does-not-exist",
+        )
+        .env("PWD", "/tmp")
+        .args(["doctor", "--strict"])
+        .assert()
+        .code(1);
+}
+
+#[test]
+fn root_help_lists_common_workflows() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Common workflows:"))
+        .stdout(predicate::str::contains("bbr ci watch --logs"));
+}
+
+#[test]
+fn ci_help_lists_examples() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["ci", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Examples:"))
+        .stdout(predicate::str::contains("ci watch --logs"));
+}
+
+#[test]
+fn batch_help_mentions_min_approvals() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["batch", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--min-approvals"));
+}
+
+#[test]
 fn commit_status_help_lists_set() {
     Command::cargo_bin("bbr")
         .unwrap()
