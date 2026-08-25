@@ -129,6 +129,7 @@ pub(crate) async fn dispatch(cli: Cli) -> Result<()> {
         }) => commands::search::run(&g, &query, repo.as_deref(), limit).await,
         Some(Command::Schema { model, g }) => commands::schema::run(&g, model.as_deref()),
         Some(Command::Update { check, g }) => commands::update::run(&g, check).await,
+        Some(Command::Doctor { strict, g }) => commands::doctor::run(&g, strict).await,
         Some(Command::Workspace { action }) => dispatch_workspace(action).await,
         Some(Command::Variable { action }) => dispatch_variable(action).await,
         Some(Command::DeployKeys { action }) => dispatch_deploy_keys(action).await,
@@ -828,6 +829,7 @@ fn command_needs_auth(cmd: &Option<Command>) -> bool {
         | Some(Command::Config { .. })
         | Some(Command::Context { .. })
         | Some(Command::Schema { .. })
-        | Some(Command::Update { .. }) => false,
+        | Some(Command::Update { .. })
+        | Some(Command::Doctor { .. }) => false,
     }
 }

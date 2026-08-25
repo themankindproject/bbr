@@ -235,6 +235,14 @@ pub enum Command {
         #[command(flatten)]
         g: GlobalArgs,
     },
+    /// Run environment self-checks (git, credentials, API, tooling).
+    Doctor {
+        /// Exit non-zero when any check fails (for CI/scripts).
+        #[arg(long)]
+        strict: bool,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
     /// Workspace operations.
     Workspace {
         #[command(subcommand)]

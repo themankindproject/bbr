@@ -89,6 +89,52 @@ fn pr_list_rejects_unknown_order() {
 }
 
 #[test]
+fn doctor_help_mentions_checks() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["doctor", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("self-checks"))
+        .stdout(predicate::str::contains("--strict"));
+}
+
+#[test]
+fn doctor_json_outputs_check_array() {
+    // Doctor must never fail hard without --strict, even with no creds.
+    std::env::remove_var("BITBUCKET_USERNAME");
+    std::env::remove_var("BITBUCKET_TOKEN");
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .env(
+            "XDG_CONFIG_HOME",
+            "/tmp/bbr-doctor-empty-config-that-does-not-exist",
+        )
+        .args(["doctor", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"name\""))
+        .stdout(predicate::str::contains("\"fail\""));
+}
+
+#[test]
+fn doctor_strict_exits_nonzero_on_failures() {
+    std::env::remove_var("BITBUCKET_USERNAME");
+    std::env::remove_var("BITBUCKET_TOKEN");
+    // No credentials + unreachable API => failures exist => strict exits 1.
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .env(
+            "XDG_CONFIG_HOME",
+            "/tmp/bbr-doctor-empty-config-that-does-not-exist",
+        )
+        .env("PWD", "/tmp")
+        .args(["doctor", "--strict"])
+        .assert()
+        .code(1);
+}
+
+#[test]
 fn commit_status_help_lists_set() {
     Command::cargo_bin("bbr")
         .unwrap()

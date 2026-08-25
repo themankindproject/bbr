@@ -15,6 +15,7 @@ pub mod context;
 pub mod dashboard;
 pub mod deploy;
 pub mod deploy_keys;
+pub mod doctor;
 pub mod export;
 pub mod issue;
 pub mod open;

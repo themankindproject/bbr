@@ -265,6 +265,21 @@ pub async fn notify_if_outdated() {
     );
 }
 
+/// Compare the running version against the latest GitHub release tag.
+/// Returns `Ok(Some(latest))` when an update is available, `Ok(None)` when
+/// current, and `Err` when the check itself failed. Used by `bbr update`
+/// and the `bbr doctor` version check.
+pub(crate) async fn outdated_version() -> Result<Option<String>> {
+    let release = fetch_latest_release().await?;
+    let latest = release.tag_name.trim().to_string();
+    let current = env!("CARGO_PKG_VERSION");
+    if is_newer(&latest, current) {
+        Ok(Some(latest))
+    } else {
+        Ok(None)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // `bbr update` command
 // ---------------------------------------------------------------------------
