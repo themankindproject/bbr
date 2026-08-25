@@ -207,6 +207,7 @@ mod tests {
             pipeline: None,
             commit_statuses: vec![],
             suggested_commands: vec![],
+            rate_limit_remaining: None,
         }
     }
 

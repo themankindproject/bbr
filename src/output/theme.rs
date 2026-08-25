@@ -406,6 +406,7 @@ pub fn terminal_height() -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::status::render_watch_footer;
 
     #[test]
     fn no_color_disables() {
@@ -564,5 +565,17 @@ mod tests {
         std::env::set_var("COLORFGBG", "not;parseable");
         assert_eq!(Preset::resolve(None), Preset::Dark);
         std::env::remove_var("COLORFGBG");
+    }
+
+    #[test]
+    fn watch_footer_renders_quota_or_placeholder() {
+        assert_eq!(
+            render_watch_footer(5, Some(843)),
+            "refreshing every 5s · quota 843 · Ctrl+C to stop"
+        );
+        assert_eq!(
+            render_watch_footer(10, None),
+            "refreshing every 10s · quota — · Ctrl+C to stop"
+        );
     }
 }
