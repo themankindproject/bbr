@@ -1648,6 +1648,11 @@ pub async fn run() -> ExitCode {
 
     match result {
         Ok(()) => AppExitCode::Success.as_process(),
+        // Downstream consumers closing the pipe early (`bbr status | head`,
+        // a pager quit with `q`) is normal; exit quietly like standard tools.
+        Err(crate::error::BitbucketError::Io(e)) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+            AppExitCode::Success.as_process()
+        }
         Err(e) if json => report_json(&e),
         Err(e) => report(&e),
     }

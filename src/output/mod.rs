@@ -195,10 +195,21 @@ where
             Ok(())
         };
         let _ = child.wait();
-        write_result
+        ignore_broken_pipe(write_result)
     } else {
         let mut out = io::stdout().lock();
         write_fn(&mut out)
+    }
+}
+
+/// A pager quitting early (`q` in less) closes its stdin mid-write; the
+/// resulting EPIPE is expected user behavior, not an error.
+fn ignore_broken_pipe(result: Result<()>) -> Result<()> {
+    match result {
+        Err(crate::error::BitbucketError::Io(e)) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+            Ok(())
+        }
+        other => other,
     }
 }
 

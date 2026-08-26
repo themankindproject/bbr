@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Quitting the pager no longer prints an error** — pressing `q` in
+  `less`/`bat` while `bbr pr diff` (or any paged output) was still streaming
+  closed the pipe mid-write and surfaced `IO error: Broken pipe (os error
+  32)`. EPIPE from an early-exiting pager or downstream consumer
+  (`bbr status | head`) is now treated as a clean exit 0 with no message.
+
 ## [0.2.3] - 2026-08-26
 
 ### Added
