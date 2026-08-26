@@ -606,6 +606,16 @@ pub enum PrAction {
         /// Show status letter + path (like `git diff --name-status`).
         #[arg(long, conflicts_with_all = ["raw", "side_by_side", "name_only"])]
         name_status: bool,
+        /// Wrap long lines at terminal width instead of truncating them.
+        #[arg(long, conflicts_with = "raw")]
+        wrap: bool,
+        /// Show only these files: 1-based index from the file list (e.g. `3`
+        /// or `1-5,9`) and/or pathspec globs. Repeatable / comma-separated.
+        ///
+        /// Examples: `bbr pr diff --file 3`, `bbr pr diff --file 1-4`,
+        /// `bbr pr diff --file "src/api/*.rs"`
+        #[arg(long, value_name = "SEL", value_delimiter = ',')]
+        file: Vec<String>,
         /// Limit the diff to these pathspecs (pass after `--`).
         ///
         /// Examples: `bbr pr diff 12 -- src/`, `bbr pr diff -- "*.rs"`

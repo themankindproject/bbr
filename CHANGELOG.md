@@ -49,8 +49,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inline flags (`--value`, `--secret`, `--key`), which are now optional.
 - **`pr list --sort/--order` validated at the CLI layer** — invalid values
   now fail fast as usage errors (exit 64) before any network access.
+- **`pr diff --file <SEL>`** — restrict the pretty diff to specific files:
+  1-based indices from the file list (`--file 3`), ranges (`--file 1-5`),
+  and/or pathspec globs (`--file "src/api/*.rs"`), comma-separated and
+  repeatable. Indices match the numbering shown in the file index; a
+  selection that matches nothing fails fast with a clear error.
+- **`pr diff --wrap`** — wrap long lines at the terminal width instead of
+  truncating them with `…`. Continuation rows carry a dimmed gutter with a
+  wrap marker so nothing is discarded; works in both colored and plain
+  output.
 
 ### Changed
+
+- **Binary files are labeled, not counted** — the file index and per-file
+  header show `(binary)` instead of a misleading `+0, -0`, and the body
+  renders an explicit "(binary file changed)" note. Detection no longer
+  relies on the `Binary files … differ` marker, which Bitbucket's diff
+  endpoint omits: a changed file with no hunks and no line counts is now
+  recognized as binary (pure renames excluded).
+- **Side-by-side diff auto-collapses one-sided files** — a file that only
+  adds or only deletes lines renders in unified layout instead of wasting
+  half the terminal on an empty column.
 
 - `bbr status --watch` no longer full-screen-clears each tick (cursor-home +
   erase-to-EOL), reducing visible flicker.

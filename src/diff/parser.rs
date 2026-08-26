@@ -675,6 +675,27 @@ impl DiffFileBuilder {
         if self.old_path == "/dev/null" && self.additions > 0 && self.deletions == 0 {
             self.status = FileStatus::Added;
         }
+        // A new file with no line content at all (e.g. a new binary file) is
+        // still an addition.
+        if self.old_path == "/dev/null"
+            && self.status == FileStatus::Modified
+            && self.deletions == 0
+        {
+            self.status = FileStatus::Added;
+        }
+
+        // Bitbucket's diff omits the "Binary files ... differ" marker: a
+        // changed file that carries no hunks and no line counts is binary
+        // (the API only lists files that actually changed). Pure renames also
+        // have no hunks, so they are excluded.
+        if !self.binary
+            && self.hunks.is_empty()
+            && self.additions == 0
+            && self.deletions == 0
+            && self.status != FileStatus::Renamed
+        {
+            self.binary = true;
+        }
 
         DiffFile {
             status: self.status,

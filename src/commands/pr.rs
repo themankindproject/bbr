@@ -310,6 +310,7 @@ pub async fn view(
         },
         word_diff,
         syntax_highlight,
+        wrap_long_lines: false,
     };
     let header = render_view(&out);
 
@@ -980,6 +981,8 @@ pub async fn diff(
     syntax_highlight: bool,
     name_only: bool,
     name_status: bool,
+    wrap: bool,
+    file_selectors: &[String],
     paths: &[String],
 ) -> Result<()> {
     let repo = resolve_repo(g)?;
@@ -990,6 +993,27 @@ pub async fn diff(
     spinner.set_message("Fetching diff...");
     let body = client.pr_diff(&repo.workspace, &repo.slug, id).await?;
     spinner.finish();
+
+    // `--file` selectors resolve against the FULL file list first (so index
+    // numbers match the file index shown by `pr view --diff`), then `--`
+    // pathspecs filter the raw text as before.
+    let selectors = crate::diff::parse_file_selectors(file_selectors);
+    let body = if !selectors.is_empty() {
+        let all = crate::diff::parser::parse(&body);
+        if all.is_empty() {
+            body
+        } else {
+            let picked = crate::diff::select_files(&all, &selectors);
+            if picked.is_empty() {
+                return Err(BitbucketError::NotFound(
+                    "no file matches --file selection".into(),
+                ));
+            }
+            crate::diff::render_raw_from_files(&picked)
+        }
+    } else {
+        body
+    };
 
     let body = if paths.is_empty() {
         body
@@ -1029,6 +1053,11 @@ pub async fn diff(
     } else {
         let theme = Theme::current();
         let files = crate::diff::filter_files(crate::diff::parser::parse(&body), paths);
+        if files.is_empty() && !selectors.is_empty() && !body.is_empty() {
+            return Err(BitbucketError::NotFound(
+                "no file matches --file selection".into(),
+            ));
+        }
         let options = crate::diff::DiffRenderOptions {
             context_lines: context,
             mode: if side_by_side {
@@ -1038,6 +1067,7 @@ pub async fn diff(
             },
             word_diff,
             syntax_highlight,
+            wrap_long_lines: wrap,
         };
 
         if g.no_pager || !std::io::stdout().is_terminal() {

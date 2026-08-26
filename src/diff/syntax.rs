@@ -139,6 +139,35 @@ pub fn truncate_spans(spans: &[(Style, &str)], max_width: usize) -> Vec<(Style, 
     out
 }
 
+/// Split spans into wrapped rows of at most `max_width` display columns.
+///
+/// Unlike [`truncate_spans`] nothing is discarded: overflow becomes
+/// additional rows. Used by `--wrap` mode so long lines stay fully visible.
+pub fn wrap_spans(spans: &[(Style, &str)], max_width: usize) -> Vec<Vec<(Style, String)>> {
+    let mut rows: Vec<Vec<(Style, String)>> = vec![Vec::new()];
+    if max_width == 0 {
+        return rows;
+    }
+    let mut w = 0usize;
+    for (style, text) in spans {
+        for ch in text.chars() {
+            let cw = ch.width().unwrap_or(0);
+            if w + cw > max_width {
+                rows.push(Vec::new());
+                w = 0;
+            }
+            let row = rows.last_mut().expect("rows never empty");
+            match row.last_mut() {
+                // Extend the previous span when styles match (fewer escapes).
+                Some((s, t)) if *s == *style => t.push(ch),
+                _ => row.push((*style, ch.to_string())),
+            }
+            w += cw;
+        }
+    }
+    rows
+}
+
 /// Emit 24-bit ANSI for spans (no background); ends with reset.
 pub fn spans_to_ansi(spans: &[(Style, String)]) -> String {
     let mut out = String::new();

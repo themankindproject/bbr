@@ -26,6 +26,8 @@ pub struct DiffRenderOptions {
     pub word_diff: bool,
     /// Syntect syntax highlighting when colors are enabled (default: true).
     pub syntax_highlight: bool,
+    /// Wrap long lines at terminal width instead of truncating (default: false).
+    pub wrap_long_lines: bool,
 }
 
 impl Default for DiffRenderOptions {
@@ -35,6 +37,7 @@ impl Default for DiffRenderOptions {
             mode: RenderMode::Unified,
             word_diff: true,
             syntax_highlight: true,
+            wrap_long_lines: false,
         }
     }
 }
@@ -178,21 +181,58 @@ fn render_file_index(files: &[DiffFile], theme: &Theme, out: &mut String) {
         let idx_str = format!("{}.", i + 1);
         let adds = format!("+{}", file.additions);
         let dels = format!("-{}", file.deletions);
+        // Binary files carry no meaningful line counts — label them instead.
+        let stat_text = if file.binary {
+            "(binary)".to_string()
+        } else {
+            format!("{adds}, {dels}")
+        };
 
         if theme.colors_enabled() {
             let dimmed_idx = format!("\x1b[2m{}\x1b[0m", idx_str);
             let bold_path = format!("\x1b[1m{}\x1b[0m", path);
-            let green_adds = format!("\x1b[32m{}\x1b[0m", adds);
-            let red_dels = format!("\x1b[31m{}\x1b[0m", dels);
+            let colored_stat = if file.binary {
+                ansi_dim(stat_text.as_str(), theme)
+            } else {
+                format!(
+                    "{}, {}",
+                    ansi_green(adds.as_str(), theme),
+                    ansi_red(dels.as_str(), theme)
+                )
+            };
             out.push_str(&format!(
-                "    {} {}  {}, {}\n",
-                dimmed_idx, bold_path, green_adds, red_dels
+                "    {} {}  {}\n",
+                dimmed_idx, bold_path, colored_stat
             ));
         } else {
-            out.push_str(&format!("    {} {}  {}, {}\n", idx_str, path, adds, dels));
+            out.push_str(&format!("    {} {}  {}\n", idx_str, path, stat_text));
         }
     }
     out.push('\n');
+}
+
+fn ansi_green(s: &str, theme: &Theme) -> String {
+    if theme.colors_enabled() {
+        format!("\x1b[32m{s}\x1b[0m")
+    } else {
+        s.to_string()
+    }
+}
+
+fn ansi_red(s: &str, theme: &Theme) -> String {
+    if theme.colors_enabled() {
+        format!("\x1b[31m{s}\x1b[0m")
+    } else {
+        s.to_string()
+    }
+}
+
+fn ansi_dim(s: &str, theme: &Theme) -> String {
+    if theme.colors_enabled() {
+        format!("\x1b[2m{s}\x1b[0m")
+    } else {
+        s.to_string()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -239,10 +279,34 @@ fn render_file(
         path,
         options.syntax_highlight && theme.colors_enabled(),
     );
+    // Side-by-side is for *comparing* columns; a file that only adds or only
+    // deletes lines has an entirely empty opposite column, which wastes half
+    // the terminal. Fall back to unified layout in that case.
+    let mode = if options.mode == RenderMode::SideBySide {
+        let any_deletion = file
+            .hunks
+            .iter()
+            .any(|h| h.lines.iter().any(|l| l.kind == DiffLineKind::Deletion));
+        let any_addition = file
+            .hunks
+            .iter()
+            .any(|h| h.lines.iter().any(|l| l.kind == DiffLineKind::Addition));
+        if any_addition ^ any_deletion {
+            RenderMode::Unified
+        } else {
+            RenderMode::SideBySide
+        }
+    } else {
+        options.mode
+    };
+    let options = DiffRenderOptions {
+        mode,
+        ..options.clone()
+    };
     for hunk in &file.hunks {
         render_hunk(
             hunk,
-            options,
+            &options,
             theme,
             lineno_width,
             term_width,
@@ -339,6 +403,13 @@ fn render_file_header(file: &DiffFile, theme: &Theme, term_width: usize, out: &m
     const BAR_WIDTH: usize = 8;
     let stats_bar = build_stats_bar(file.additions, file.deletions, BAR_WIDTH, theme);
 
+    // Binary files carry no meaningful line counts — label them instead.
+    let stats_text = if file.binary {
+        "(binary)".to_string()
+    } else {
+        format!("+{}, -{}", file.additions, file.deletions)
+    };
+
     let adds_str = format!("+{}", file.additions);
     let dels_str = format!("-{}", file.deletions);
 
@@ -351,7 +422,7 @@ fn render_file_header(file: &DiffFile, theme: &Theme, term_width: usize, out: &m
 
     // Plain (no ANSI) layout for accurate fill width.
     let plain = format!(
-        "{}{} {} {} {} {} [{}] {}, {} ",
+        "{}{} {} {} {} {} [{}] {} ",
         dash2,
         dash,
         icon,
@@ -359,8 +430,7 @@ fn render_file_header(file: &DiffFile, theme: &Theme, term_width: usize, out: &m
         dash2,
         status_text,
         "X".repeat(BAR_WIDTH),
-        adds_str,
-        dels_str
+        stats_text
     );
     let visible_len = plain.width();
     let fill_count = term_width.saturating_sub(visible_len);
@@ -369,11 +439,16 @@ fn render_file_header(file: &DiffFile, theme: &Theme, term_width: usize, out: &m
     if theme.colors_enabled() {
         let bold_icon = format!("\x1b[1m{}\x1b[0m", icon);
         let bold_path = format!("\x1b[1m{}\x1b[0m", display_path);
-        let green_adds = format!("\x1b[32m{}\x1b[0m", adds_str);
-        let red_dels = format!("\x1b[31m{}\x1b[0m", dels_str);
+        let colored_stats = if file.binary {
+            format!("\x1b[2m{}\x1b[0m", stats_text)
+        } else {
+            let green_adds = format!("\x1b[32m{}\x1b[0m", adds_str);
+            let red_dels = format!("\x1b[31m{}\x1b[0m", dels_str);
+            format!("{}, {}", green_adds, red_dels)
+        };
         let content = format!(
-            "{}{} {} {} {} {} [{}] {}, {} ",
-            dash2, dash, bold_icon, bold_path, dash2, status_text, stats_bar, green_adds, red_dels
+            "{}{} {} {} {} {} [{}] {} ",
+            dash2, dash, bold_icon, bold_path, dash2, status_text, stats_bar, colored_stats
         );
         let dimmed_fill = format!("\x1b[2m{}\x1b[0m", fill);
         out.push_str(&content);
@@ -381,8 +456,8 @@ fn render_file_header(file: &DiffFile, theme: &Theme, term_width: usize, out: &m
         out.push('\n');
     } else {
         let content = format!(
-            "{}{} {} {} {} {} [{}] {}, {} ",
-            dash2, dash, icon, display_path, dash2, status_text, stats_bar, adds_str, dels_str
+            "{}{} {} {} {} {} [{}] {} ",
+            dash2, dash, icon, display_path, dash2, status_text, stats_bar, stats_text
         );
         out.push_str(&content);
         out.push_str(&fill);
@@ -755,6 +830,226 @@ fn push_syntax_spans(tinted: &mut TintedLine, spans: &[(syntect::highlighting::S
     }
 }
 
+/// Push one row of syntax spans, returning its display width.
+fn push_row_spans_width(
+    tinted: &mut TintedLine,
+    row: &[(syntect::highlighting::Style, String)],
+) -> usize {
+    let mut w = 0usize;
+    for (style, text) in row {
+        if text.is_empty() {
+            continue;
+        }
+        let c = style.foreground;
+        tinted.push_fg_rgb(c.r, c.g, c.b, text);
+        w += text.width();
+    }
+    w
+}
+
+/// Chunk plain text into rows of at most `max_width` display columns.
+/// Nothing is discarded; overflow becomes additional rows.
+fn wrap_plain_rows(s: &str, max_width: usize) -> Vec<String> {
+    let mut rows: Vec<String> = Vec::new();
+    if max_width == 0 {
+        return rows;
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let mut start = 0usize;
+    while start < chars.len() {
+        let mut w = 0usize;
+        let mut end = start;
+        while end < chars.len() {
+            let cw = chars[end].width().unwrap_or(0);
+            if w + cw > max_width {
+                break;
+            }
+            w += cw;
+            end += 1;
+        }
+        if end == start {
+            // Force progress on a zero-width or over-wide character.
+            end = start + 1;
+        }
+        rows.push(chars[start..end].iter().collect());
+        start = end;
+    }
+    if rows.is_empty() {
+        rows.push(String::new());
+    }
+    rows
+}
+
+/// Wrap marker shown in the sign column of continuation rows.
+fn wrap_marker(theme: &Theme) -> &'static str {
+    if theme.unicode_enabled() {
+        "\u{2936}"
+    } else {
+        "\\"
+    }
+}
+
+/// Render one addition/deletion line with wrapping in color mode, emitting one
+/// physical tinted line per wrapped row. Row 0 carries the full gutter prefix;
+/// continuation rows carry a dimmed gutter with a wrap marker in the sign
+/// column so long lines stay fully visible without overflowing the terminal.
+fn render_wrapped_change_colored(
+    line: &DiffLine,
+    theme: &Theme,
+    lineno_width: usize,
+    term_width: usize,
+    highlighter: &mut crate::diff::syntax::FileHighlighter,
+    out: &mut String,
+    is_addition: bool,
+) {
+    let old = format_lineno(line.old_lineno, lineno_width);
+    let new = format_lineno(line.new_lineno, lineno_width);
+    let sep = if theme.unicode_enabled() {
+        "\u{2502}"
+    } else {
+        "|"
+    };
+    let empty_marker = if theme.unicode_enabled() {
+        "\u{23ce}"
+    } else {
+        "<CR>"
+    };
+    let max_content = unified_content_width(lineno_width, term_width);
+    let bg = if is_addition { add_bg() } else { del_bg() };
+    let fg = if is_addition { "32" } else { "31" };
+    let sign = if is_addition { "+" } else { "-" };
+    let prefix_w = unified_prefix_width(lineno_width);
+
+    let expanded = expand_tabs(&line.content);
+    let spans_raw = highlighter.highlight(expanded.as_ref());
+
+    // Empty content line: a single row carrying the empty marker.
+    if line.content.is_empty() {
+        let mut tinted = TintedLine::new(bg);
+        push_gutter(&mut tinted, &old, &new, sign, sep, is_addition);
+        tinted.push_dim(empty_marker);
+        let pad = term_width.saturating_sub(prefix_w + empty_marker.width());
+        out.push_str(&tinted.finish(pad));
+        return;
+    }
+
+    // Build wrapped rows (syntax spans when available, else plain chunks).
+    let marker = wrap_marker(theme);
+    if !spans_raw.is_empty() {
+        let rows = crate::diff::syntax::wrap_spans(&spans_raw, max_content);
+        for (idx, row) in rows.iter().enumerate() {
+            let mut tinted = TintedLine::new(bg);
+            if idx == 0 {
+                push_gutter(&mut tinted, &old, &new, sign, sep, is_addition);
+            } else {
+                push_gutter_cont(&mut tinted, &old, &new, marker, sep);
+            }
+            let row_w = push_row_spans_width(&mut tinted, row);
+            let pad = term_width.saturating_sub(prefix_w + row_w);
+            out.push_str(&tinted.finish(pad));
+        }
+    } else {
+        let rows = wrap_plain_rows(&expanded, max_content);
+        for (idx, row) in rows.iter().enumerate() {
+            let mut tinted = TintedLine::new(bg);
+            if idx == 0 {
+                push_gutter(&mut tinted, &old, &new, sign, sep, is_addition);
+            } else {
+                push_gutter_cont(&mut tinted, &old, &new, marker, sep);
+            }
+            tinted.push_fg(fg, row);
+            let pad = term_width.saturating_sub(prefix_w + row.width());
+            out.push_str(&tinted.finish(pad));
+        }
+    }
+}
+
+/// Full gutter prefix for row 0 of a change line: ` {old} {new} {sign} {sep} `.
+fn push_gutter(
+    tinted: &mut TintedLine,
+    old: &str,
+    new: &str,
+    sign: &str,
+    sep: &str,
+    is_addition: bool,
+) {
+    let fg = if is_addition { "32" } else { "31" };
+    tinted.push_space();
+    if is_addition {
+        tinted.push_dim(old);
+        tinted.push_space();
+        tinted.push_raw(new);
+    } else {
+        tinted.push_raw(old);
+        tinted.push_space();
+        tinted.push_dim(new);
+    }
+    tinted.push_space();
+    tinted.push_fg(fg, sign);
+    tinted.push_space();
+    tinted.push_dim(sep);
+    tinted.push_space();
+}
+
+/// Dimmed gutter for continuation rows: ` {old} {new} {marker} {sep} `.
+fn push_gutter_cont(tinted: &mut TintedLine, old: &str, new: &str, marker: &str, sep: &str) {
+    tinted.push_space();
+    tinted.push_dim(old);
+    tinted.push_space();
+    tinted.push_dim(new);
+    tinted.push_space();
+    tinted.push_dim(marker);
+    tinted.push_space();
+    tinted.push_dim(sep);
+    tinted.push_space();
+}
+
+/// Render one addition/deletion line in plain (no-color) mode, wrapping when
+/// enabled. Shared by the paired and standalone unified renderers.
+fn render_change_plain(
+    line: &DiffLine,
+    theme: &Theme,
+    lineno_width: usize,
+    term_width: usize,
+    options: &DiffRenderOptions,
+    highlighter: &mut crate::diff::syntax::FileHighlighter,
+    out: &mut String,
+    is_addition: bool,
+) {
+    let old = format_lineno(line.old_lineno, lineno_width);
+    let new = format_lineno(line.new_lineno, lineno_width);
+    let sep = if theme.unicode_enabled() {
+        "\u{2502}"
+    } else {
+        "|"
+    };
+    let empty_marker = if theme.unicode_enabled() {
+        "\u{23ce}"
+    } else {
+        "<CR>"
+    };
+    let max_content = unified_content_width(lineno_width, term_width);
+    let sign = if is_addition { "+" } else { "-" };
+
+    let expanded = expand_tabs(&line.content);
+    highlighter.advance(expanded.as_ref());
+
+    if options.wrap_long_lines && !line.content.is_empty() {
+        let blank_old = " ".repeat(old.width());
+        let blank_new = " ".repeat(new.width());
+        for (idx, row) in wrap_plain_rows(&expanded, max_content).iter().enumerate() {
+            if idx == 0 {
+                out.push_str(&format!(" {} {} {} {} {}\n", old, new, sign, sep, row));
+            } else {
+                out.push_str(&format!(" {} {}   {} {}\n", blank_old, blank_new, sep, row));
+            }
+        }
+    } else {
+        let content = display_content(&line.content, empty_marker, max_content);
+        out.push_str(&format!(" {} {} {} {} {}\n", old, new, sign, sep, content));
+    }
+}
+
 fn render_addition_content(
     line: &DiffLine,
     pair: Option<&DiffLine>,
@@ -766,6 +1061,8 @@ fn render_addition_content(
 ) -> usize {
     let expanded = expand_tabs(&line.content);
     let spans_raw = highlighter.highlight(expanded.as_ref());
+    // Truncate mode: content is clipped to max_width. Wrap mode never reaches
+    // this function (handled by render_wrapped_change_colored).
     let content = if expanded.is_empty() {
         empty_marker.to_string()
     } else {
@@ -895,7 +1192,30 @@ fn render_paired_line(
 
     match line.kind {
         DiffLineKind::Addition => {
-            if theme.colors_enabled() {
+            if options.wrap_long_lines {
+                if theme.colors_enabled() {
+                    render_wrapped_change_colored(
+                        line,
+                        theme,
+                        lineno_width,
+                        term_width,
+                        highlighter,
+                        out,
+                        true,
+                    );
+                } else {
+                    render_change_plain(
+                        line,
+                        theme,
+                        lineno_width,
+                        term_width,
+                        options,
+                        highlighter,
+                        out,
+                        true,
+                    );
+                }
+            } else if theme.colors_enabled() {
                 let mut tinted = TintedLine::new(add_bg());
                 tinted.push_space();
                 tinted.push_dim(&old);
@@ -918,13 +1238,43 @@ fn render_paired_line(
                 let pad = term_width.saturating_sub(unified_prefix_width(lineno_width) + content_w);
                 out.push_str(&tinted.finish(pad));
             } else {
-                let content = display_content(&line.content, empty_marker, max_content);
-                highlighter.advance(expand_tabs(&line.content).as_ref());
-                out.push_str(&format!(" {} {} + {} {}\n", old, new, sep, content));
+                render_change_plain(
+                    line,
+                    theme,
+                    lineno_width,
+                    term_width,
+                    options,
+                    highlighter,
+                    out,
+                    true,
+                );
             }
         }
         DiffLineKind::Deletion => {
-            if theme.colors_enabled() {
+            if options.wrap_long_lines {
+                if theme.colors_enabled() {
+                    render_wrapped_change_colored(
+                        line,
+                        theme,
+                        lineno_width,
+                        term_width,
+                        highlighter,
+                        out,
+                        false,
+                    );
+                } else {
+                    render_change_plain(
+                        line,
+                        theme,
+                        lineno_width,
+                        term_width,
+                        options,
+                        highlighter,
+                        out,
+                        false,
+                    );
+                }
+            } else if theme.colors_enabled() {
                 let mut tinted = TintedLine::new(del_bg());
                 tinted.push_space();
                 tinted.push_raw(&old);
@@ -947,9 +1297,16 @@ fn render_paired_line(
                 let pad = term_width.saturating_sub(unified_prefix_width(lineno_width) + content_w);
                 out.push_str(&tinted.finish(pad));
             } else {
-                let content = display_content(&line.content, empty_marker, max_content);
-                highlighter.advance(expand_tabs(&line.content).as_ref());
-                out.push_str(&format!(" {} {} - {} {}\n", old, new, sep, content));
+                render_change_plain(
+                    line,
+                    theme,
+                    lineno_width,
+                    term_width,
+                    options,
+                    highlighter,
+                    out,
+                    false,
+                );
             }
         }
         DiffLineKind::Context => {
@@ -1003,6 +1360,8 @@ fn render_line(
             let spans_raw = highlighter.highlight(expanded.as_ref());
             let content = if expanded.is_empty() {
                 String::new()
+            } else if options.wrap_long_lines {
+                expanded.to_string()
             } else {
                 truncate_code_raw(expanded.as_ref(), max_content)
             };
@@ -1010,22 +1369,85 @@ fn render_line(
                 let dimmed_old = format!("\x1b[2m{}\x1b[0m", old);
                 let dimmed_new = format!("\x1b[2m{}\x1b[0m", new);
                 let dimmed_sep = format!("\x1b[2m{}\x1b[0m", sep);
-                let body = if !spans_raw.is_empty() {
+                if !spans_raw.is_empty() && options.wrap_long_lines {
+                    // One physical line per wrapped row, each with its own
+                    // dimmed gutter prefix so the layout stays aligned.
+                    let rows = crate::diff::syntax::wrap_spans(&spans_raw, max_content);
+                    for row in &rows {
+                        let body = crate::diff::syntax::spans_to_ansi(row);
+                        out.push_str(&format!(
+                            " {} {}   {} {}\n",
+                            dimmed_old, dimmed_new, dimmed_sep, body
+                        ));
+                    }
+                } else if !spans_raw.is_empty() {
                     let truncated = crate::diff::syntax::truncate_spans(&spans_raw, max_content);
-                    crate::diff::syntax::spans_to_ansi(&truncated)
+                    let body = crate::diff::syntax::spans_to_ansi(&truncated);
+                    out.push_str(&format!(
+                        " {} {}   {} {}\n",
+                        dimmed_old, dimmed_new, dimmed_sep, body
+                    ));
+                } else if options.wrap_long_lines && !content.is_empty() {
+                    let blank_old = " ".repeat(old.width());
+                    let blank_new = " ".repeat(new.width());
+                    for (idx, row) in wrap_plain_rows(&content, max_content).iter().enumerate() {
+                        if idx == 0 {
+                            out.push_str(&format!(
+                                " {} {}   {} {}\n",
+                                dimmed_old, dimmed_new, dimmed_sep, row
+                            ));
+                        } else {
+                            out.push_str(&format!(
+                                " {} {}   {} {}\n",
+                                blank_old, blank_new, sep, row
+                            ));
+                        }
+                    }
                 } else {
-                    content
-                };
-                out.push_str(&format!(
-                    " {} {}   {} {}\n",
-                    dimmed_old, dimmed_new, dimmed_sep, body
-                ));
+                    out.push_str(&format!(
+                        " {} {}   {} {}\n",
+                        dimmed_old, dimmed_new, dimmed_sep, content
+                    ));
+                }
+            } else if options.wrap_long_lines && !content.is_empty() {
+                let blank_old = " ".repeat(old.width());
+                let blank_new = " ".repeat(new.width());
+                for (idx, row) in wrap_plain_rows(&content, max_content).iter().enumerate() {
+                    if idx == 0 {
+                        out.push_str(&format!(" {} {}   {} {}\n", old, new, sep, row));
+                    } else {
+                        out.push_str(&format!(" {} {}   {} {}\n", blank_old, blank_new, sep, row));
+                    }
+                }
             } else {
                 out.push_str(&format!(" {} {}   {} {}\n", old, new, sep, content));
             }
         }
         DiffLineKind::Addition => {
-            if theme.colors_enabled() {
+            if options.wrap_long_lines {
+                if theme.colors_enabled() {
+                    render_wrapped_change_colored(
+                        line,
+                        theme,
+                        lineno_width,
+                        term_width,
+                        highlighter,
+                        out,
+                        true,
+                    );
+                } else {
+                    render_change_plain(
+                        line,
+                        theme,
+                        lineno_width,
+                        term_width,
+                        options,
+                        highlighter,
+                        out,
+                        true,
+                    );
+                }
+            } else if theme.colors_enabled() {
                 let mut tinted = TintedLine::new(add_bg());
                 tinted.push_space();
                 tinted.push_dim(&old);
@@ -1048,13 +1470,43 @@ fn render_line(
                 let pad = term_width.saturating_sub(unified_prefix_width(lineno_width) + content_w);
                 out.push_str(&tinted.finish(pad));
             } else {
-                let content = display_content(&line.content, empty_marker, max_content);
-                highlighter.advance(expand_tabs(&line.content).as_ref());
-                out.push_str(&format!(" {} {} + {} {}\n", old, new, sep, content));
+                render_change_plain(
+                    line,
+                    theme,
+                    lineno_width,
+                    term_width,
+                    options,
+                    highlighter,
+                    out,
+                    true,
+                );
             }
         }
         DiffLineKind::Deletion => {
-            if theme.colors_enabled() {
+            if options.wrap_long_lines {
+                if theme.colors_enabled() {
+                    render_wrapped_change_colored(
+                        line,
+                        theme,
+                        lineno_width,
+                        term_width,
+                        highlighter,
+                        out,
+                        false,
+                    );
+                } else {
+                    render_change_plain(
+                        line,
+                        theme,
+                        lineno_width,
+                        term_width,
+                        options,
+                        highlighter,
+                        out,
+                        false,
+                    );
+                }
+            } else if theme.colors_enabled() {
                 let mut tinted = TintedLine::new(del_bg());
                 tinted.push_space();
                 tinted.push_raw(&old);
@@ -1077,9 +1529,16 @@ fn render_line(
                 let pad = term_width.saturating_sub(unified_prefix_width(lineno_width) + content_w);
                 out.push_str(&tinted.finish(pad));
             } else {
-                let content = display_content(&line.content, empty_marker, max_content);
-                highlighter.advance(expand_tabs(&line.content).as_ref());
-                out.push_str(&format!(" {} {} - {} {}\n", old, new, sep, content));
+                render_change_plain(
+                    line,
+                    theme,
+                    lineno_width,
+                    term_width,
+                    options,
+                    highlighter,
+                    out,
+                    false,
+                );
             }
         }
     }
@@ -2276,5 +2735,141 @@ diff --git a/short.rs b/short.rs
             "header visible width {} exceeds term width, plain={plain:?}",
             plain.width()
         );
+    }
+
+    /// Strip ANSI escape sequences for width/content assertions.
+    fn strip_ansi(s: &str) -> String {
+        let mut out = String::new();
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\u{1b}' {
+                if chars.peek() == Some(&'[') {
+                    chars.next();
+                    for ch in chars.by_ref() {
+                        if ch.is_ascii_alphabetic() {
+                            break;
+                        }
+                    }
+                }
+                continue;
+            }
+            out.push(c);
+        }
+        out
+    }
+
+    #[test]
+    fn test_wrap_plain_emits_one_physical_line_per_row() {
+        // One 300-char addition must wrap into several physical lines in
+        // plain mode; nothing may be truncated. (Filename avoids 'x' so the
+        // header banner doesn't pollute the content count.)
+        let long = "x".repeat(300);
+        let diff = format!(
+            "diff --git a/long.md b/long.md\n--- a/long.md\n+++ b/long.md\n@@ -0,0 +1 @@\n+{long}\n"
+        );
+        let files = parse(&diff);
+        let options = DiffRenderOptions {
+            wrap_long_lines: true,
+            ..Default::default()
+        };
+        let result = render(&files, &options, &test_theme());
+        let content_lines: Vec<&str> = result.lines().filter(|l| l.contains('x')).collect();
+        assert!(
+            content_lines.len() >= 3,
+            "300-char line should wrap into >=3 physical lines, got {}",
+            content_lines.len()
+        );
+        let total_x: usize = content_lines.iter().map(|l| l.matches('x').count()).sum();
+        assert_eq!(total_x, 300, "wrap must not discard content");
+        assert!(
+            !result.contains('\u{2026}'),
+            "wrap mode must not truncate with ellipsis"
+        );
+    }
+
+    #[test]
+    fn test_wrap_colored_keeps_every_row_within_term_width() {
+        // Regression: wrapped rows used to be concatenated into a single
+        // physical line in color mode. Each row must now be its own line and
+        // fit within the terminal width.
+        let long = "y".repeat(300);
+        let diff = format!(
+            "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -0,0 +1 @@\n+{long}\n"
+        );
+        let files = parse(&diff);
+        let options = DiffRenderOptions {
+            wrap_long_lines: true,
+            ..Default::default()
+        };
+        let result = render(&files, &options, &test_theme_colored());
+        let term_w = term_width_for_render();
+        let mut rows_with_y = 0usize;
+        let mut total_y = 0usize;
+        for line in result.lines() {
+            let plain = strip_ansi(line);
+            assert!(
+                plain.width() <= term_w,
+                "wrapped row exceeds terminal width: {} > {term_w}: {plain:?}",
+                plain.width()
+            );
+            if plain.contains('y') {
+                rows_with_y += 1;
+                total_y += plain.matches('y').count();
+            }
+        }
+        assert!(
+            rows_with_y >= 3,
+            "300-char line should wrap into >=3 physical rows, got {rows_with_y}"
+        );
+        assert_eq!(total_y, 300, "wrap must not discard content");
+    }
+
+    #[test]
+    fn test_truncate_mode_still_clips_with_ellipsis() {
+        let long = "z".repeat(300);
+        let diff = format!(
+            "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -0,0 +1 @@\n+{long}\n"
+        );
+        let files = parse(&diff);
+        let result = render(&files, &DiffRenderOptions::default(), &test_theme());
+        let content_lines: Vec<&str> = result.lines().filter(|l| l.contains('z')).collect();
+        assert_eq!(content_lines.len(), 1, "truncate mode keeps one line");
+        assert!(
+            result.contains('\u{2026}'),
+            "truncate mode should clip with ellipsis"
+        );
+    }
+
+    #[test]
+    fn test_bitbucket_binary_file_detected_without_marker() {
+        // Bitbucket omits "Binary files ... differ": a changed file with no
+        // hunks and no counts must still be flagged binary.
+        let diff = "\
+diff --git a/img.png b/img.png
+--- a/img.png
++++ b/img.png
+";
+        let files = parse(diff);
+        assert!(
+            files[0].binary,
+            "hunk-less changed file should be detected as binary"
+        );
+        let result = render(&files, &DiffRenderOptions::default(), &test_theme());
+        assert!(
+            result.contains("binary file changed"),
+            "binary file should render the explicit message, got:\n{result}"
+        );
+    }
+
+    #[test]
+    fn test_pure_rename_is_not_binary() {
+        let diff = "\
+diff --git a/old.rs b/new.rs
+similarity index 100%
+rename from old.rs
+rename to new.rs
+";
+        let files = parse(diff);
+        assert!(!files[0].binary, "pure rename must not be flagged binary");
     }
 }

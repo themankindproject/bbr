@@ -313,6 +313,8 @@ async fn dispatch_pr(g: &GlobalArgs, action: PrAction) -> Result<()> {
             no_syntax,
             name_only,
             name_status,
+            wrap,
+            file,
             paths,
             g,
         } => {
@@ -328,6 +330,8 @@ async fn dispatch_pr(g: &GlobalArgs, action: PrAction) -> Result<()> {
                 !no_syntax,
                 name_only,
                 name_status,
+                wrap,
+                &file,
                 &paths,
             )
             .await
