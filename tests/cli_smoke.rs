@@ -508,3 +508,49 @@ fn completion_piped_to_closed_stdout_does_not_panic() {
         "completion must not panic on broken pipe (got {status:?})"
     );
 }
+
+// ---------------------------------------------------------------------------
+// stderr EPIPE resilience (regression: SIGABRT / core dump)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[cfg(unix)]
+fn watch_stderr_piped_to_closed_consumer_does_not_abort() {
+    // `bbr status --watch 2>&1 | head -1` used to panic on the first stderr
+    // write after the consumer closed the pipe; with `panic = "abort"` that
+    // became SIGABRT + core dump (exit 134). main() now resets SIGPIPE to
+    // SIG_DFL, so the kernel terminates the process cleanly instead.
+    use std::io::Read;
+    use std::process::{Command as StdCommand, Stdio};
+
+    let mut child = StdCommand::new(assert_cmd::cargo::cargo_bin("bbr"))
+        .args([
+            "status",
+            "--watch",
+            "--interval",
+            "1",
+            "--api-base",
+            "http://127.0.0.1:9", // unreachable: each tick errors -> writes stderr
+        ])
+        .env("BITBUCKET_USERNAME", "fake@example.com")
+        .env("BITBUCKET_TOKEN", "fake-token")
+        .env("HOME", "/tmp") // avoid picking up real credentials/config
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    // Read one byte of stderr then drop the pipe — the next write gets EPIPE.
+    if let Some(mut pipe) = child.stderr.take() {
+        let mut buf = [0u8; 1];
+        let _ = pipe.read(&mut buf);
+        drop(pipe);
+    }
+
+    let status = child.wait().unwrap();
+    // A clean SIGPIPE death reports no exit code (signal 13). What we must
+    // never see again is a panic (101) or an abort/core dump (134).
+    assert!(
+        status.code() != Some(101) && status.code() != Some(134),
+        "stderr EPIPE must not panic/abort (got {status:?})"
+    );
+}

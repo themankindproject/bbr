@@ -184,24 +184,53 @@ pub fn save_credentials(creds: &CredentialsFile) -> Result<PathBuf> {
     Ok(path)
 }
 
-/// Write `contents` to `path` with mode 0600 on Unix (atomically created so
-/// the file is never readable by others even for a moment).
+/// Write `contents` to `path` with mode 0600 on Unix, atomically.
+///
+/// The content lands in a temp file in the same directory (created 0600 so
+/// it is never readable by others, even transiently) and is then renamed
+/// over the target. A crash or SIGKILL mid-write therefore leaves either
+/// the old file or the new file intact — never a truncated credential file.
 fn write_private(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut tmp_path = path.to_path_buf();
+    let mut tmp_name = path
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    tmp_name.push(format!(".tmp.{}", std::process::id()));
+    tmp_path.set_file_name(tmp_name);
+
     #[cfg(unix)]
     {
-        use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
-        fs::OpenOptions::new()
+        let mut file = fs::OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
             .mode(0o600)
-            .open(path)?
-            .write_all(contents.as_bytes())?;
-        Ok(())
+            .open(&tmp_path)?;
+        file.write_all(contents.as_bytes())?;
+        file.sync_all()?;
     }
     #[cfg(not(unix))]
-    fs::write(path, contents)
+    {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&tmp_path)?;
+        file.write_all(contents.as_bytes())?;
+        file.sync_all()?;
+    }
+
+    // Rename is atomic on POSIX and on Windows when source/dest are on the
+    // same volume (guaranteed: same directory).
+    if let Err(e) = fs::rename(&tmp_path, path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// Delete the credentials file, if present. Returns `true` if a file was removed.

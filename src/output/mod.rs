@@ -173,12 +173,10 @@ where
         c.args(["-F", "-R", "-X"]);
         c
     } else {
-        let mut parts = pager_env.split_whitespace();
-        if let Some(bin) = parts.next() {
+        let parts = split_pager_args(&pager_env);
+        if let Some((bin, args)) = parts.split_first() {
             let mut c = Command::new(bin);
-            for arg in parts {
-                c.arg(arg);
-            }
+            c.args(args);
             c
         } else {
             let mut out = io::stdout().lock();
@@ -213,6 +211,46 @@ fn ignore_broken_pipe(result: Result<()>) -> Result<()> {
     }
 }
 
+/// Split a `$PAGER` value into argv tokens, honoring single/double quotes.
+///
+/// `PAGER="less -R"` must yield `["less", "-R"]`, and
+/// `PAGER="'my pager' -X"` must yield `["my pager", "-X"]` — a plain
+/// `split_whitespace` would pass the quote characters through literally and
+/// break pagers whose path contains spaces or whose flags are quoted.
+fn split_pager_args(s: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut in_token = false;
+    let mut quote: Option<char> = None;
+
+    for ch in s.chars() {
+        match quote {
+            Some(q) if ch == q => quote = None,
+            Some(_) => cur.push(ch),
+            None => match ch {
+                '\'' | '"' => {
+                    quote = Some(ch);
+                    in_token = true;
+                }
+                c if c.is_whitespace() => {
+                    if in_token {
+                        out.push(std::mem::take(&mut cur));
+                        in_token = false;
+                    }
+                }
+                c => {
+                    cur.push(c);
+                    in_token = true;
+                }
+            },
+        }
+    }
+    if in_token {
+        out.push(cur);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,5 +259,31 @@ mod tests {
     fn test_print_paginated_falls_back_when_not_terminal() {
         let res = print_paginated("hello test");
         assert!(res.is_ok());
+    }
+
+    #[test]
+    fn split_pager_args_plain() {
+        assert_eq!(split_pager_args("less -R"), vec!["less", "-R"]);
+    }
+
+    #[test]
+    fn split_pager_args_quoted_path_with_space() {
+        assert_eq!(split_pager_args("'my pager' -X"), vec!["my pager", "-X"]);
+    }
+
+    #[test]
+    fn split_pager_args_double_quoted_flag() {
+        assert_eq!(split_pager_args("less \"-R -X\""), vec!["less", "-R -X"]);
+    }
+
+    #[test]
+    fn split_pager_args_empty() {
+        assert!(split_pager_args("").is_empty());
+        assert!(split_pager_args("   ").is_empty());
+    }
+
+    #[test]
+    fn split_pager_args_single_token() {
+        assert_eq!(split_pager_args("bat"), vec!["bat"]);
     }
 }

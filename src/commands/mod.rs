@@ -310,6 +310,10 @@ pub fn human_duration(secs: u64) -> String {
 }
 
 /// Truncate a string to `n` display columns, appending an ellipsis if truncated.
+///
+/// The result never exceeds `n` columns: the ellipsis width is reserved out
+/// of the budget. (Previously the ellipsis was appended on top, so the
+/// output could overshoot `n` by up to 3 columns and widen table columns.)
 pub fn truncate(s: &str, n: usize) -> String {
     use unicode_width::UnicodeWidthStr;
 
@@ -320,21 +324,40 @@ pub fn truncate(s: &str, n: usize) -> String {
         return s.to_string();
     }
 
+    let ellipsis = if crate::output::theme::Theme::current().unicode_enabled() {
+        "\u{2026}"
+    } else {
+        "..."
+    };
+    let ellipsis_w = UnicodeWidthStr::width(ellipsis);
+
+    // Too narrow to fit the ellipsis marker — hard-cut without one.
+    if n < ellipsis_w {
+        let mut out = String::new();
+        let mut width = 0;
+        for ch in s.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+            if width + cw > n {
+                break;
+            }
+            out.push(ch);
+            width += cw;
+        }
+        return out;
+    }
+
+    let budget = n - ellipsis_w;
     let mut out = String::new();
     let mut width = 0;
     for ch in s.chars() {
         let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-        if width + cw > n {
+        if width + cw > budget {
             break;
         }
         out.push(ch);
         width += cw;
     }
-    if crate::output::theme::Theme::current().unicode_enabled() {
-        out.push('…');
-    } else {
-        out.push_str("...");
-    }
+    out.push_str(ellipsis);
     out
 }
 
@@ -396,9 +419,11 @@ mod tests {
 
     #[test]
     fn truncate_appends_ellipsis_when_longer() {
+        // The ellipsis is reserved out of the budget: result is exactly 5
+        // columns, never 5 + ellipsis.
         let result = truncate("hello world", 5);
-        assert_eq!(result, "hello…");
-        assert_eq!(result.chars().count(), 6);
+        assert_eq!(result, "hell\u{2026}");
+        assert_eq!(unicode_width::UnicodeWidthStr::width(result.as_str()), 5);
     }
 
     #[test]
@@ -407,18 +432,31 @@ mod tests {
     }
 
     #[test]
+    fn truncate_result_never_exceeds_budget() {
+        // The core contract: output width <= n for any input.
+        for n in 1..=12 {
+            let result = truncate("hello wörld, this is a long string", n);
+            assert!(
+                unicode_width::UnicodeWidthStr::width(result.as_str()) <= n,
+                "truncate(_, {n}) produced width {} > {n}: {result:?}",
+                unicode_width::UnicodeWidthStr::width(result.as_str())
+            );
+        }
+    }
+
+    #[test]
     fn truncate_handles_unicode() {
         let result = truncate("héllo wörld", 6);
-        assert!(result.ends_with('…'));
-        assert!(unicode_width::UnicodeWidthStr::width(result.as_str()) <= 7);
+        assert!(result.ends_with('\u{2026}'));
+        assert!(unicode_width::UnicodeWidthStr::width(result.as_str()) <= 6);
     }
 
     #[test]
     fn truncate_handles_wide_cjk() {
-        // Each CJK ideograph is 2 columns wide
+        // Each CJK ideograph is 2 columns wide; result must fit in 5.
         let result = truncate("日本語テスト", 5);
-        assert!(result.ends_with('…'));
-        assert!(unicode_width::UnicodeWidthStr::width(result.as_str()) <= 6);
+        assert!(result.ends_with('\u{2026}'));
+        assert!(unicode_width::UnicodeWidthStr::width(result.as_str()) <= 5);
     }
 
     #[test]

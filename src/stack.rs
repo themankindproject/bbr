@@ -37,28 +37,11 @@ impl StackConfig {
             return p.clone();
         }
 
-        // Use a short timeout for git rev-parse (read-only, fast)
-        use std::process::Command;
-
-        let result = Command::new("git")
-            .args(["rev-parse", "--show-toplevel"])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .output();
-
-        let path = if let Ok(output) = result {
-            if output.status.success() {
-                let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !root.is_empty() {
-                    PathBuf::from(root).join(".bbr").join("stack.toml")
-                } else {
-                    PathBuf::from(".bbr").join("stack.toml")
-                }
-            } else {
-                PathBuf::from(".bbr").join("stack.toml")
-            }
-        } else {
-            PathBuf::from(".bbr").join("stack.toml")
+        // Route through the shared git runner: it enforces the read timeout
+        // and drains pipes, so a wedged git can't hang stack commands.
+        let path = match crate::git::repo_toplevel() {
+            Some(root) => PathBuf::from(root).join(".bbr").join("stack.toml"),
+            None => PathBuf::from(".bbr").join("stack.toml"),
         };
         let _ = CACHED_PATH.set(path.clone());
         path

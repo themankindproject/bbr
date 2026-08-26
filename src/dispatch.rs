@@ -108,8 +108,9 @@ pub(crate) async fn dispatch(cli: Cli) -> Result<()> {
             path,
             data,
             paginate,
+            limit,
             g,
-        }) => commands::api::run(&g, &method, &path, data.as_deref(), paginate).await,
+        }) => commands::api::run(&g, &method, &path, data.as_deref(), paginate, limit).await,
         Some(Command::Webhook { action }) => dispatch_webhook(action).await,
         Some(Command::Src { action }) => match action {
             SrcAction::Cat { path, git_ref, g } => {

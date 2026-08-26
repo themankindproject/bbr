@@ -104,6 +104,15 @@ pub fn current_branch() -> Result<String> {
     Ok(branch)
 }
 
+/// Repository toplevel directory, or `None` when not inside a git repo.
+///
+/// Uses the shared timeout-guarded runner so a wedged git (locked index,
+/// slow network mount) can't hang callers forever.
+pub fn repo_toplevel() -> Option<String> {
+    let root = git(&["rev-parse", "--show-toplevel"]).ok()?;
+    (!root.is_empty()).then_some(root)
+}
+
 /// Short (12-char) commit hash for HEAD.
 pub fn current_commit() -> Result<String> {
     let full = git(&["rev-parse", "HEAD"])?;

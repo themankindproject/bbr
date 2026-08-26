@@ -82,6 +82,10 @@ syntect = { version = "5", default-features = false, features = ["parsing", "def
 # Terminal width detection (ioctl TIOCGWINSZ on Unix)
 libc = "0.2"
 
+[target.'cfg(windows)'.dependencies]
+# Zip extraction for Windows self-update assets (release.yml ships .zip there)
+zip = { version = "8", default-features = false, features = ["deflate"] }
+
 [dev-dependencies]
 wiremock = "0.6"
 assert_cmd = "2"

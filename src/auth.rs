@@ -80,6 +80,13 @@ fn from_config() -> Result<Option<Credentials>> {
     };
     let username = p.username.trim();
     if username.is_empty() {
+        // A token is present but unusable without a username. Warn instead
+        // of failing silently with "no credentials" — the env path already
+        // warns for the same condition.
+        tracing::warn!(
+            "credentials file has a token but an empty username; ignoring it. \
+             Re-run `bbr auth setup` to fix."
+        );
         return Ok(None);
     }
     Ok(Some(Credentials {

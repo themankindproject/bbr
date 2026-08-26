@@ -25,6 +25,10 @@ use crate::error::{BitbucketError, Result};
 /// Warn when remaining API quota drops below this threshold.
 const RATE_LIMIT_WARN_THRESHOLD: u64 = 50;
 
+/// Upper bound on server-provided `Retry-After` waits (seconds). A
+/// misbehaving proxy could otherwise stall the CLI for hours mid-command.
+const MAX_RETRY_AFTER_SECS: u64 = 60;
+
 /// Upper bound on the in-process ETag cache. Long-running watch loops can
 /// touch many paths; when the cap is hit the cache is dropped wholesale
 /// (worst case: one extra full fetch per path).
@@ -212,23 +216,33 @@ impl BitbucketClient {
     /// Compute the retry wait duration from a Retry-After header or backoff+jitter.
     fn retry_wait(attempt: u8, retry_after_secs: Option<u64>) -> std::time::Duration {
         if let Some(ra) = retry_after_secs {
-            return std::time::Duration::from_secs(ra);
+            // Cap server-provided waits: a misbehaving proxy could send an
+            // enormous Retry-After and stall the CLI for hours mid-command.
+            return std::time::Duration::from_secs(ra.min(MAX_RETRY_AFTER_SECS));
         }
         let base = u64::from(attempt) * 5;
         let jitter = rand_jitter();
         std::time::Duration::from_secs(base + jitter)
     }
 
-    /// Determine whether an error/status is retryable (429 or 5xx).
+    /// Determine whether an error/status is retryable for a given HTTP method.
+    ///
+    /// 429 is safe to retry for any method — the server rejected the request
+    /// before processing it. 5xx is only retried for idempotent methods: a
+    /// 5xx response can mean the server *did* process the request before
+    /// failing, so replaying a POST (merge, approve, comment, create) could
+    /// double-apply the mutation.
     ///
     /// 5xx detection is structural via [`BitbucketError::Server`], which
     /// carries the status code — deliberately not a string match on the
     /// formatted message, which would silently break if error wording
     /// ever changed.
-    fn is_retryable_error(err: &BitbucketError) -> bool {
+    fn is_retryable_error(err: &BitbucketError, method: &Method) -> bool {
         match err {
             BitbucketError::RateLimit(_) => true,
-            BitbucketError::Server { status, .. } => status.is_server_error(),
+            BitbucketError::Server { status, .. } => {
+                status.is_server_error() && method != Method::POST
+            }
             _ => false,
         }
     }
@@ -306,7 +320,7 @@ impl BitbucketClient {
                 let retry_after = Self::retry_after_secs(resp.headers());
                 match self.decode(resp, &path).await {
                     Ok(v) => Ok(RetryOutcome::Done(Ok(v))),
-                    Err(e) if Self::is_retryable_error(&e) => Ok(RetryOutcome::Retry {
+                    Err(e) if Self::is_retryable_error(&e, &method) => Ok(RetryOutcome::Retry {
                         err: e,
                         retry_after_secs: retry_after,
                     }),
@@ -360,7 +374,7 @@ impl BitbucketClient {
 
                 let text = resp.text().await.map_err(BitbucketError::Http)?;
                 let err = map_error(status, &text, &path);
-                if Self::is_retryable_error(&err) {
+                if Self::is_retryable_error(&err, &method) {
                     Ok(RetryOutcome::Retry {
                         err,
                         retry_after_secs: retry_after,
@@ -385,11 +399,16 @@ impl BitbucketClient {
         path: &str,
         limit: usize,
     ) -> Result<Vec<T>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
         if limit > 100 {
             self.fetch_all_pages(path, limit).await
         } else {
             let page: Paginated<T> = self.send(Method::GET, path, None).await?;
-            Ok(page.values)
+            // Truncate for parity with the all-pages path: servers may return
+            // more than requested (stale pagelen, ignored params).
+            Ok(page.values.into_iter().take(limit).collect())
         }
     }
 
@@ -398,6 +417,9 @@ impl BitbucketClient {
         path: &str,
         limit: usize,
     ) -> Result<Vec<T>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
         let first_page: Paginated<T> = self.send(Method::GET, path, None).await?;
         self.paginate_from(first_page, path, limit).await
     }
@@ -564,7 +586,7 @@ impl BitbucketClient {
                     return Ok(RetryOutcome::Done(Ok((body, false))));
                 }
                 let err = map_error(status, &body, &path);
-                if Self::is_retryable_error(&err) {
+                if Self::is_retryable_error(&err, &Method::GET) {
                     Ok(RetryOutcome::Retry {
                         err,
                         retry_after_secs: retry_after,
@@ -621,7 +643,7 @@ impl BitbucketClient {
                     return Ok(RetryOutcome::Done(Ok(body)));
                 }
                 let err = map_error(status, &body, &path);
-                if Self::is_retryable_error(&err) {
+                if Self::is_retryable_error(&err, &method) {
                     Ok(RetryOutcome::Retry {
                         err,
                         retry_after_secs: retry_after,
@@ -1007,21 +1029,50 @@ mod tests {
     }
 
     #[test]
-    fn map_error_500_is_retryable() {
+    fn map_error_500_is_retryable_for_get() {
         let err = map_error(StatusCode::INTERNAL_SERVER_ERROR, "boom", "/pipelines");
-        assert!(BitbucketClient::is_retryable_error(&err));
+        assert!(BitbucketClient::is_retryable_error(&err, &Method::GET));
     }
 
     #[test]
-    fn map_error_503_is_retryable() {
+    fn map_error_503_is_retryable_for_get() {
         let err = map_error(StatusCode::SERVICE_UNAVAILABLE, "down", "/pipelines");
-        assert!(BitbucketClient::is_retryable_error(&err));
+        assert!(BitbucketClient::is_retryable_error(&err, &Method::GET));
+    }
+
+    #[test]
+    fn map_error_5xx_is_not_retryable_for_post() {
+        // A 5xx response to a POST may mean the mutation was applied before
+        // the server failed — replaying it could double-apply (double merge,
+        // duplicate comment). Only 429 is safe to retry for POSTs.
+        let err = map_error(StatusCode::INTERNAL_SERVER_ERROR, "boom", "/merge");
+        assert!(!BitbucketClient::is_retryable_error(&err, &Method::POST));
+        let err = map_error(StatusCode::SERVICE_UNAVAILABLE, "down", "/merge");
+        assert!(!BitbucketClient::is_retryable_error(&err, &Method::POST));
+    }
+
+    #[test]
+    fn map_error_429_is_retryable_for_post() {
+        // 429 rejects the request before processing — always safe to retry.
+        let err = map_error(StatusCode::TOO_MANY_REQUESTS, "slow down", "/merge");
+        assert!(BitbucketClient::is_retryable_error(&err, &Method::POST));
     }
 
     #[test]
     fn map_error_400_is_not_retryable() {
         let err = map_error(StatusCode::BAD_REQUEST, "bad", "/pullrequests");
-        assert!(!BitbucketClient::is_retryable_error(&err));
+        assert!(!BitbucketClient::is_retryable_error(&err, &Method::GET));
+    }
+
+    #[test]
+    fn retry_after_is_capped() {
+        // A misbehaving proxy sending Retry-After: 86400 must not stall the
+        // CLI for a day.
+        let wait = BitbucketClient::retry_wait(1, Some(86400));
+        assert_eq!(wait, std::time::Duration::from_secs(60));
+        // Small values pass through unchanged.
+        let wait = BitbucketClient::retry_wait(1, Some(3));
+        assert_eq!(wait, std::time::Duration::from_secs(3));
     }
 
     #[test]

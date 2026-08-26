@@ -98,6 +98,10 @@ fn cache_is_fresh() -> bool {
 
 fn parse_version(tag: &str) -> Option<Vec<u64>> {
     let s = tag.strip_prefix('v').unwrap_or(tag);
+    // Drop prerelease/build metadata ("1.2.3-beta.1" -> "1.2.3") so the
+    // numeric comparison below works and prerelease tags never compare
+    // higher than the release they precede.
+    let s = s.split(['-', '+']).next().unwrap_or(s);
     s.split('.')
         .map(|p| p.parse::<u64>().ok())
         .collect::<Option<Vec<_>>>()
@@ -127,7 +131,22 @@ fn current_target() -> Option<&'static str> {
 
 fn asset_name() -> Option<String> {
     let target = current_target()?;
-    Some(format!("bbr-{target}.tar.gz"))
+    // release.yml packages Unix targets as .tar.gz and Windows as .zip —
+    // the asset name must match what the pipeline actually publishes.
+    if cfg!(windows) {
+        Some(format!("bbr-{target}.zip"))
+    } else {
+        Some(format!("bbr-{target}.tar.gz"))
+    }
+}
+
+/// Name of the binary inside the release archive / on disk.
+fn binary_file_name() -> &'static str {
+    if cfg!(windows) {
+        "bbr.exe"
+    } else {
+        "bbr"
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -146,18 +165,18 @@ fn install_dir() -> Option<PathBuf> {
             }
         }
     }
-    if let Ok(home) = std::env::var("HOME") {
-        let candidates = [
-            PathBuf::from(&home).join(".local").join("bin"),
-            PathBuf::from(&home).join("bin"),
-        ];
+    // `dirs::home_dir()` resolves the home directory portably — `$HOME` is
+    // not set on Windows (it uses `USERPROFILE`), so reading the env var
+    // directly would make every fallback below unreachable there.
+    if let Some(home) = dirs::home_dir() {
+        let candidates = [home.join(".local").join("bin"), home.join("bin")];
         for d in &candidates {
             if d.is_dir() {
                 return Some(d.clone());
             }
         }
         // Create ~/.local/bin if it doesn't exist
-        let local_bin = PathBuf::from(&home).join(".local").join("bin");
+        let local_bin = home.join(".local").join("bin");
         if fs::create_dir_all(&local_bin).is_ok() {
             return Some(local_bin);
         }
@@ -414,7 +433,7 @@ async fn download_and_install(release: &GithubRelease, _latest: &str, quiet: boo
                 .into(),
         )
     })?;
-    let dest_path = dest_dir.join("bbr");
+    let dest_path = dest_dir.join(binary_file_name());
 
     // Probe writability BEFORE downloading so a permission problem fails fast
     // with an actionable message instead of after a multi-MB download.
@@ -492,7 +511,7 @@ async fn download_and_install(release: &GithubRelease, _latest: &str, quiet: boo
     // The release pipeline always publishes checksums.txt, so a missing or
     // incomplete checksum file is treated as a hard failure unless the user
     // explicitly opts out with BBR_SKIP_CHECKSUM=1.
-    let skip_checksum = std::env::var("BBR_SKIP_CHECKSUM").is_ok();
+    let skip_checksum = env_flag_enabled("BBR_SKIP_CHECKSUM");
     let checksum_asset = release.assets.iter().find(|a| {
         let name = a.name.to_ascii_lowercase();
         name == "checksums.txt"
@@ -555,8 +574,32 @@ async fn download_and_install(release: &GithubRelease, _latest: &str, quiet: boo
         }
     }
 
-    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(&bytes[..]));
-    let mut extracted = false;
+    // Extract the binary from the archive (tar.gz on Unix, zip on Windows)
+    // and install it atomically.
+    let bin_name = binary_file_name();
+    let extracted = if target_name.ends_with(".zip") {
+        extract_from_zip(&bytes, &dest_dir, &dest_path, bin_name)?
+    } else {
+        extract_from_tar_gz(&bytes, &dest_dir, &dest_path, bin_name)?
+    };
+
+    if !extracted {
+        return Err(BitbucketError::Other(format!(
+            "Archive does not contain a '{bin_name}' binary"
+        )));
+    }
+
+    Ok(())
+}
+
+/// Extract `bin_name` from a gzipped tar archive into `dest_path`.
+fn extract_from_tar_gz(
+    bytes: &[u8],
+    dest_dir: &Path,
+    dest_path: &Path,
+    bin_name: &str,
+) -> Result<bool> {
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(bytes));
 
     for entry in archive
         .entries()
@@ -570,8 +613,8 @@ async fn download_and_install(release: &GithubRelease, _latest: &str, quiet: boo
             .map_err(|e| BitbucketError::Other(format!("Invalid archive entry path: {e}")))?
             .into_owned();
 
-        if path.file_name().and_then(|n| n.to_str()) == Some("bbr") {
-            let mut tmp = tempfile::NamedTempFile::new_in(&dest_dir).map_err(|e| {
+        if path.file_name().and_then(|n| n.to_str()) == Some(bin_name) {
+            let mut tmp = tempfile::NamedTempFile::new_in(dest_dir).map_err(|e| {
                 BitbucketError::Other(format!(
                     "Failed to create temp file in {}: {e}",
                     dest_dir.display()
@@ -589,25 +632,111 @@ async fn download_and_install(release: &GithubRelease, _latest: &str, quiet: boo
                 })?;
             }
 
-            tmp.persist(&dest_path).map_err(|e| {
+            install_binary(tmp, dest_path)?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Extract `bin_name` from a zip archive into `dest_path` (Windows assets).
+#[cfg(windows)]
+fn extract_from_zip(
+    bytes: &[u8],
+    dest_dir: &Path,
+    dest_path: &Path,
+    bin_name: &str,
+) -> Result<bool> {
+    use std::io::Read;
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+        .map_err(|e| BitbucketError::Other(format!("Failed to read zip archive: {e}")))?;
+
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| BitbucketError::Other(format!("Failed to read zip entry: {e}")))?;
+        if !entry.is_file() {
+            continue;
+        }
+        // Match on the file name component only — release archives may nest
+        // the binary under a directory.
+        let name_matches = std::path::Path::new(entry.name())
+            .file_name()
+            .and_then(|n| n.to_str())
+            == Some(bin_name);
+        if !name_matches {
+            continue;
+        }
+
+        let mut tmp = tempfile::NamedTempFile::new_in(dest_dir).map_err(|e| {
+            BitbucketError::Other(format!(
+                "Failed to create temp file in {}: {e}",
+                dest_dir.display()
+            ))
+        })?;
+        let mut buf = Vec::new();
+        entry
+            .read_to_end(&mut buf)
+            .map_err(|e| BitbucketError::Other(format!("Failed to read zip entry: {e}")))?;
+        tmp.write_all(&buf)
+            .map_err(|e| BitbucketError::Other(format!("Failed to write temp file: {e}")))?;
+
+        install_binary(tmp, dest_path)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// Zip extraction is only compiled on Windows (the only platform that ships
+/// .zip assets); other platforms never see a .zip target name.
+#[cfg(not(windows))]
+fn extract_from_zip(
+    _bytes: &[u8],
+    _dest_dir: &Path,
+    _dest_path: &Path,
+    _bin_name: &str,
+) -> Result<bool> {
+    Err(BitbucketError::Other(
+        "zip assets are only supported on Windows builds".into(),
+    ))
+}
+
+/// Move a fully-written temp file into place as the new binary.
+///
+/// On Windows the currently-running executable is locked against deletion or
+/// overwrite, so the old binary is first renamed out of the way (renaming a
+/// running .exe IS permitted). The stale `.old` copy from a previous update
+/// is removed best-effort.
+fn install_binary(tmp: tempfile::NamedTempFile, dest_path: &Path) -> Result<()> {
+    #[cfg(windows)]
+    {
+        if dest_path.exists() {
+            let mut old_path = dest_path.to_path_buf();
+            let mut old_name = dest_path
+                .file_name()
+                .map(|n| n.to_os_string())
+                .unwrap_or_default();
+            old_name.push(".old");
+            old_path.set_file_name(old_name);
+            let _ = fs::remove_file(&old_path);
+            fs::rename(dest_path, &old_path).map_err(|e| {
                 BitbucketError::Other(format!(
-                    "Failed to install to {}: {}",
-                    dest_path.display(),
-                    e.error
+                    "Failed to move the running binary out of the way ({}): {e}. \
+                     Close other bbr processes and retry.",
+                    dest_path.display()
                 ))
             })?;
-
-            extracted = true;
-            break;
         }
     }
 
-    if !extracted {
-        return Err(BitbucketError::Other(
-            "Archive does not contain a 'bbr' binary".into(),
-        ));
-    }
-
+    tmp.persist(dest_path).map_err(|e| {
+        BitbucketError::Other(format!(
+            "Failed to install to {}: {}",
+            dest_path.display(),
+            e.error
+        ))
+    })?;
     Ok(())
 }
 
@@ -640,8 +769,14 @@ fn parse_checksum_for_asset(checksums_text: &str, asset_name: &str) -> Option<St
         if parts.len() == 2 {
             let hash = parts[0].trim();
             let name = parts[1].trim().trim_start_matches('*');
-            // Match by exact filename or by filename at end of path
-            if name == asset_name || name.ends_with(asset_name) {
+            // Match on the basename of the entry path. Comparing with
+            // `ends_with` would let a sibling asset whose name merely ends
+            // with ours (e.g. "old-bbr-x86_64.tar.gz") match by accident.
+            let basename = std::path::Path::new(name)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(name);
+            if basename == asset_name {
                 // Validate it looks like a hex hash (64 chars for SHA256)
                 if hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
                     return Some(hash.to_lowercase());
@@ -650,6 +785,19 @@ fn parse_checksum_for_asset(checksums_text: &str, asset_name: &str) -> Option<St
         }
     }
     None
+}
+
+/// True when an env var is set to a truthy value (`1`, `true`, `yes`, `on`,
+/// case-insensitive). Merely being present (or set to `0`/empty) is NOT
+/// enough — `BBR_SKIP_CHECKSUM=0` must not skip verification.
+fn env_flag_enabled(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(v) => matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => false,
+    }
 }
 
 #[cfg(test)]
@@ -777,5 +925,82 @@ abc123def456abc123def456abc123def456abc123def456abc123def456abcd  bbr-x86_64-unk
             result,
             Some("abc123def456abc123def456abc123def456abc123def456abc123def456abcd".to_string())
         );
+    }
+
+    #[test]
+    fn parse_checksum_for_asset_matches_basename_in_path() {
+        // Checksum entries may carry a directory prefix; match on basename.
+        let checksums =
+            "abc123def456abc123def456abc123def456abc123def456abc123def456abcd  dist/bbr-x86_64-unknown-linux-gnu.tar.gz\n";
+        let result = parse_checksum_for_asset(checksums, "bbr-x86_64-unknown-linux-gnu.tar.gz");
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn parse_checksum_for_asset_rejects_suffix_collision() {
+        // A sibling asset whose name merely ENDS with ours must not match
+        // (the old `ends_with` logic would have accepted this).
+        let checksums =
+            "abc123def456abc123def456abc123def456abc123def456abc123def456abcd  old-bbr-x86_64-unknown-linux-gnu.tar.gz\n";
+        let result = parse_checksum_for_asset(checksums, "bbr-x86_64-unknown-linux-gnu.tar.gz");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn parse_version_strips_prerelease_metadata() {
+        // Prerelease/build metadata must not break numeric comparison.
+        assert_eq!(parse_version("v1.2.3-beta.1"), Some(vec![1, 2, 3]));
+        assert_eq!(parse_version("1.2.3+build.5"), Some(vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn is_newer_prerelease_not_newer_than_release() {
+        // A prerelease of the same version must not be offered as an update.
+        assert!(!is_newer("v1.2.3-beta.1", "v1.2.3"));
+        // But a prerelease of a HIGHER version still is.
+        assert!(is_newer("v1.3.0-rc.1", "v1.2.3"));
+    }
+
+    #[test]
+    fn env_flag_enabled_requires_truthy_value() {
+        let _guard = crate::test_support::env_lock();
+        std::env::set_var("BBR_TEST_FLAG", "1");
+        assert!(env_flag_enabled("BBR_TEST_FLAG"));
+        std::env::set_var("BBR_TEST_FLAG", "true");
+        assert!(env_flag_enabled("BBR_TEST_FLAG"));
+        std::env::set_var("BBR_TEST_FLAG", "0");
+        assert!(!env_flag_enabled("BBR_TEST_FLAG"));
+        std::env::set_var("BBR_TEST_FLAG", "");
+        assert!(!env_flag_enabled("BBR_TEST_FLAG"));
+        std::env::remove_var("BBR_TEST_FLAG");
+        assert!(!env_flag_enabled("BBR_TEST_FLAG"));
+    }
+
+    #[test]
+    fn asset_name_matches_platform_archive_format() {
+        // release.yml ships .zip for Windows and .tar.gz elsewhere; the
+        // updater must look for exactly what the pipeline publishes.
+        if let Some(name) = asset_name() {
+            if cfg!(windows) {
+                assert!(
+                    name.ends_with(".zip"),
+                    "windows asset must be a zip: {name}"
+                );
+            } else {
+                assert!(
+                    name.ends_with(".tar.gz"),
+                    "unix asset must be tar.gz: {name}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn binary_file_name_matches_platform() {
+        if cfg!(windows) {
+            assert_eq!(binary_file_name(), "bbr.exe");
+        } else {
+            assert_eq!(binary_file_name(), "bbr");
+        }
     }
 }

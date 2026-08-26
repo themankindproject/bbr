@@ -383,7 +383,10 @@ pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
                 }
             }
         }
-        tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
+        // Clamp to >=1s: `--interval 0` would otherwise busy-loop with no
+        // sleep, hammering the API and burning the hourly quota. The ci
+        // watch loops already clamp; keep the behavior consistent.
+        tokio::time::sleep(std::time::Duration::from_secs(interval_secs.max(1))).await;
     }
 }
 

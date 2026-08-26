@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`bbr api --paginate --limit <N>`** — cap on items fetched when following
+  pagination (default 10000). Previously `--paginate` buffered every page of
+  a huge repo in memory before emitting anything.
+
 ### Fixed
 
 - **Quitting the pager no longer prints an error** — pressing `q` in
@@ -14,6 +20,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   closed the pipe mid-write and surfaced `IO error: Broken pipe (os error
   32)`. EPIPE from an early-exiting pager or downstream consumer
   (`bbr status | head`) is now treated as a clean exit 0 with no message.
+- **stderr broken pipe no longer aborts with a core dump** — `bbr status
+  --watch 2>&1 | head -1` panicked on the first stderr write after the
+  consumer closed the pipe, and with `panic = "abort"` that became SIGABRT +
+  core dump. `main()` now resets `SIGPIPE` to its default disposition, so the
+  kernel terminates the process cleanly like standard Unix tools.
+- **`status --watch --interval 0` no longer busy-loops** — the poll interval
+  is clamped to at least 1s (matching the `ci` watch loops), so a zero
+  interval can't hammer the API and burn the hourly quota.
+- **Windows self-update now works** — the updater looked for a `.tar.gz`
+  asset and a `bbr` binary, but the release pipeline ships Windows as a
+  `.zip` containing `bbr.exe`. It now selects the right archive format and
+  binary name per platform, extracts zip assets, and renames the running
+  (locked) executable out of the way before installing. Install-dir fallback
+  uses a portable home lookup (`$HOME` is unset on Windows).
+- **POST requests are no longer retried on 5xx** — a 5xx response to a
+  mutation (merge, approve, comment, create) can mean the server applied it
+  before failing, so replaying could double-apply. 429 is still retried for
+  all methods (the server rejects it before processing); 5xx is retried only
+  for idempotent methods.
+- **`Retry-After` is capped at 60s** — a misbehaving proxy sending an
+  enormous `Retry-After` could stall the CLI for hours mid-command.
+- **`--limit` is honored on single-page fetches** — `fetch_paginated` now
+  truncates to the requested limit (parity with the all-pages path) and
+  returns empty for `--limit 0` instead of fetching a default page.
+- **Credentials file is written atomically** — `credentials.toml` is written
+  to a 0600 temp file and renamed into place, so a crash mid-write can no
+  longer leave a truncated credential file.
+- **`pr stack` no longer hangs on a wedged git** — the repo-root lookup now
+  goes through the shared timeout-guarded git runner instead of an unbounded
+  `git rev-parse`.
+- **`BBR_SKIP_CHECKSUM` requires a truthy value** — `=0` or empty no longer
+  skips checksum verification; only `1`/`true`/`yes`/`on` do.
+- **Checksum matching uses the asset basename** — a sibling asset whose name
+  merely ends with ours can no longer match by accident.
+- **Prerelease tags no longer compare as updates** — version parsing strips
+  prerelease/build metadata, so `v1.2.3-beta.1` isn't offered over `v1.2.3`.
+- **`$PAGER` values with quotes or spaces are parsed correctly** — e.g.
+  `PAGER="'my pager' -X"` now splits into the right argv instead of passing
+  literal quote characters.
+- **Truncated fields never exceed their column budget** — the ellipsis is
+  reserved out of the width, so truncated table cells can't widen columns.
+- **A credentials file with a token but empty username now warns** instead of
+  silently failing with "no credentials".
 
 ## [0.2.3] - 2026-08-26
 

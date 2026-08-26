@@ -185,6 +185,9 @@ pub enum Command {
         /// Follow pagination and emit merged values array.
         #[arg(long)]
         paginate: bool,
+        /// Max items to fetch with --paginate (guards memory on huge repos).
+        #[arg(long, default_value_t = 10000)]
+        limit: u32,
         #[command(flatten)]
         g: GlobalArgs,
     },

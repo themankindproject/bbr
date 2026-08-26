@@ -10,6 +10,7 @@ pub async fn run(
     path: &str,
     data: Option<&str>,
     paginate: bool,
+    limit: u32,
 ) -> Result<()> {
     let client = client(g)?;
     let http_method = method.parse::<reqwest::Method>().map_err(|_| {
@@ -20,8 +21,10 @@ pub async fn run(
     // first and then passing it through the JSON formatter would
     // double-encode it (a JSON string containing escaped JSON).
     let value: serde_json::Value = if paginate {
+        // Bounded by --limit (default 10k): an unbounded fetch on a huge
+        // repo would buffer every page in memory before emitting anything.
         let values = client
-            .fetch_all_pages::<serde_json::Value>(path, usize::MAX)
+            .fetch_all_pages::<serde_json::Value>(path, limit as usize)
             .await?;
         serde_json::Value::Array(values)
     } else {
