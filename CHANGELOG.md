@@ -7,17 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **Approvals from the web UI now count** — Bitbucket records an approval
-  from someone who isn't a listed reviewer as a `PARTICIPANT` participant,
-  not as a reviewer. `bbr status`, `bbr pr view`, and
-  `batch merge-approved --min-approvals` only counted formal reviewers, so
-  PRs kept showing "unapproved" (or were skipped by batch merges) after
-  being approved. Reviewers and approving/requesting participants are now
-  rolled up per person (UUID → nickname → name matching), so approvals from
-  either surface are reflected immediately.
-
 ### Added
 
 - **`bbr doctor`** — environment self-check: git, repo identity, credentials,
@@ -70,7 +59,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Side-by-side diff auto-collapses one-sided files** — a file that only
   adds or only deletes lines renders in unified layout instead of wasting
   half the terminal on an empty column.
-
 - `bbr status --watch` no longer full-screen-clears each tick (cursor-home +
   erase-to-EOL), reducing visible flicker.
 - **Rate-limit-aware request pacing** — parallel pagination fan-out scales
@@ -90,6 +78,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Approvals from the web UI now count** — Bitbucket records an approval
+  from someone who isn't a listed reviewer as a `PARTICIPANT` participant,
+  not as a reviewer. `bbr status`, `bbr pr view`, and
+  `batch merge-approved --min-approvals` only counted formal reviewers, so
+  PRs kept showing "unapproved" (or were skipped by batch merges) after
+  being approved. Reviewers and approving/requesting participants are now
+  rolled up per person (UUID → nickname → name matching), so approvals from
+  either surface are reflected immediately.
 - **Git subprocess deadlock** — `git` child processes are now drained
   concurrently with the wait; previously, output larger than the OS pipe
   buffer (~64KB) blocked until the command timed out and was killed,
