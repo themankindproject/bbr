@@ -124,6 +124,7 @@ fn send_desktop(_message: &str) {
     eprint!("\x07");
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn which(binary: &str) -> bool {
     // PATH lookup via `which` (portable, no extra deps). A missing `which`
     // itself means we can't verify, so we treat the binary as available and
