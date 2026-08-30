@@ -21,6 +21,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on a TTY; skip the prompt with `--yes` or run with `--json`. Note that
   Bitbucket marks a comment with visible replies as deleted rather than
   removing it, to preserve the comment tree.
+- **`bbr ci watch --notify [BACKEND]` / `bbr ci tail --notify [BACKEND]`** —
+  notify when the pipeline (watch) or step (tail) reaches a terminal state.
+  Bare `--notify` keeps the old terminal-bell behavior; `--notify desktop`
+  sends an OS desktop notification (`notify-send` on Linux, `osascript` on
+  macOS, with a bell fallback when the binary is absent); `--notify
+  command=<cmd>` runs a custom shell command with `%m` replaced by the
+  notification message. Bell output goes to stderr so pipes stay clean, and
+  desktop/command backends are suppressed under `--json`.
+- **`bbr ci tests --failed` / `--latest`** — step filters for the test-report
+  command. `--failed` selects the first failing step (erroring if there is
+  none) and `--latest` the last one. Previously both were ignored and the step
+  was hard-wired. With no `--step` and no filter flag, the first failing step
+  is preferred, falling back to the last step — the same default `ci logs`
+  already used.
 
 ## [0.2.4] - 2026-08-26
 

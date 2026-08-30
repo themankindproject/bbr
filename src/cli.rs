@@ -773,9 +773,10 @@ pub enum CiAction {
         interval: u64,
         #[arg(long, help = "stream step logs in real-time while watching")]
         logs: bool,
-        /// Ring the terminal bell when the pipeline reaches a terminal state.
-        #[arg(long)]
-        notify: bool,
+        /// Notify when the pipeline reaches a terminal state.
+        /// BACKEND: `bell` (default, no value), `desktop`, or `command=<cmd>`.
+        #[arg(long, value_name = "BACKEND", num_args = 0..=1)]
+        notify: Option<String>,
         /// Prefix streamed log lines with line numbers (with --logs).
         #[arg(long)]
         line_numbers: bool,
@@ -800,9 +801,10 @@ pub enum CiAction {
         /// state (logs may still be flushing).
         #[arg(long)]
         follow: bool,
-        /// Ring the terminal bell when the step reaches a terminal state.
-        #[arg(long)]
-        notify: bool,
+        /// Notify when the step reaches a terminal state.
+        /// BACKEND: `bell` (default, no value), `desktop`, or `command=<cmd>`.
+        #[arg(long, value_name = "BACKEND", num_args = 0..=1)]
+        notify: Option<String>,
         /// Auto-advance to the next step when the current one finishes,
         /// following the whole pipeline.
         #[arg(long)]
@@ -840,6 +842,12 @@ pub enum CiAction {
             help = "step UUID or step name (default: first failed or latest)"
         )]
         step: Option<String>,
+        /// Select the failing step automatically.
+        #[arg(long)]
+        failed: bool,
+        /// Select the latest step automatically.
+        #[arg(long)]
+        latest: bool,
         #[arg(long, help = "max test cases to show", default_value_t = 50)]
         limit: u32,
         #[command(flatten)]

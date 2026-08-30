@@ -461,9 +461,11 @@ async fn dispatch_ci(action: CiAction) -> Result<()> {
         CiAction::Tests {
             uuid,
             step,
+            failed,
+            latest,
             limit,
             g,
-        } => commands::ci::tests(&g, uuid.as_deref(), step.as_deref(), limit).await,
+        } => commands::ci::tests(&g, uuid.as_deref(), step.as_deref(), failed, latest, limit).await,
         CiAction::Compare { a, b, g } => commands::ci_compare::compare(&g, &a, &b).await,
         CiAction::Vars { action } => match action {
             CiVarsAction::List { g } => commands::ci_vars::list(&g).await,

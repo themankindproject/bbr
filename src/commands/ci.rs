@@ -10,6 +10,8 @@ use crate::api::pipeline::{
 };
 use crate::api::BitbucketClient;
 use crate::cli::GlobalArgs;
+use crate::commands::notify as notify_backend;
+use crate::commands::notify::{parse_notify, NotifyKind};
 use crate::commands::{
     client, confirm, current_head, human_duration, make_formatter, make_spinner, resolve_repo,
     SpinnerGuard,
@@ -17,6 +19,14 @@ use crate::commands::{
 use crate::error::{BitbucketError, Result};
 use crate::output::table::Table;
 use crate::output::theme::Theme;
+
+/// Parse a `--notify` CLI value into the (backend, command) tuple.
+/// A `None` input yields `None` (no notification); a malformed value is a
+/// usage error. The returned option is `None` when no notification was
+/// requested, otherwise `Some((kind, maybe_command))`.
+fn parse_notify_arg(v: Option<&str>) -> Result<Option<(NotifyKind, Option<String>)>> {
+    parse_notify(v).map_err(BitbucketError::Other)
+}
 
 #[derive(Debug, Serialize)]
 pub struct CiStatusOut {
@@ -208,10 +218,11 @@ pub async fn watch(
     branch: Option<&str>,
     interval: u64,
     include_logs: bool,
-    notify: bool,
+    notify: Option<String>,
     line_numbers: bool,
     from_offset: u64,
 ) -> Result<()> {
+    let notify = parse_notify_arg(notify.as_deref())?;
     let repo = resolve_repo(g)?;
     let branch = match branch {
         Some(b) => b.to_string(),
@@ -412,10 +423,9 @@ pub async fn watch(
         }
     }
     spinner.finish();
-    if notify && !g.json {
-        // Terminal bell: grab attention when a long build finishes in a
-        // background pane. stderr keeps stdout clean for piping.
-        eprint!("\x07");
+    if let Some((kind, cmd)) = &notify {
+        let msg = format!("pipeline for '{}' reached {}", branch, current.state_name());
+        notify_backend::notify(*kind, &msg, cmd.as_deref(), g.json);
     }
 
     let raw_steps = steps_for_pipeline(&client, &repo.workspace, &repo.slug, &uuid)
@@ -543,11 +553,12 @@ pub async fn tail(
     branch: Option<&str>,
     interval: u64,
     follow: bool,
-    notify: bool,
+    notify: Option<String>,
     all: bool,
     line_numbers: bool,
     from_offset: u64,
 ) -> Result<()> {
+    let notify = parse_notify_arg(notify.as_deref())?;
     let repo = resolve_repo(g)?;
     let branch: String = if let Some(b) = branch {
         b.to_string()
@@ -805,10 +816,11 @@ pub async fn tail(
             elapsed.as_secs_f64(),
         );
         crate::output::print_block(&format!("\n{summary}\n"))?;
-        if notify {
-            // Terminal bell: grab attention when a long tail finishes in a
-            // background pane. stderr keeps stdout clean for piping.
-            eprint!("\x07");
+        if let Some((kind, cmd)) = &notify {
+            // Only in human mode (mirrors the existing bell behavior, which
+            // was gated on `!g.json`).
+            let msg = format!("step '{}' reached {}", current_step_name, prev_state);
+            notify_backend::notify(*kind, &msg, cmd.as_deref(), g.json);
         }
     }
 
@@ -917,6 +929,8 @@ pub async fn tests(
     g: &GlobalArgs,
     uuid: Option<&str>,
     step: Option<&str>,
+    failed: bool,
+    latest: bool,
     limit: u32,
 ) -> Result<()> {
     let repo = resolve_repo(g)?;
@@ -942,7 +956,7 @@ pub async fn tests(
         .await?;
     spinner.finish();
 
-    let selected = select_step(&steps.values, step, false, false, step.is_none())?;
+    let selected = select_step(&steps.values, step, failed, latest, step.is_none())?;
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching test report...");

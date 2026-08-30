@@ -18,6 +18,7 @@ pub mod deploy_keys;
 pub mod doctor;
 pub mod export;
 pub mod issue;
+pub mod notify;
 pub mod open;
 pub mod picker;
 pub mod pr;
