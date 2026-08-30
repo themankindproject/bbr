@@ -513,11 +513,15 @@ bbr ci watch --branch main
 bbr ci watch --logs                  # stream step logs in real-time while watching
 bbr ci watch --interval-secs 10      # poll interval (default 5)
 bbr ci watch --notify                # ring the terminal bell when the pipeline finishes
+bbr ci watch --notify desktop        # OS desktop notification on finish
+bbr ci watch --notify 'command=notify-send bbr %m'   # run a custom command (%m = message)
 bbr ci watch --logs --line-numbers   # prefix streamed lines with line numbers
 bbr ci watch --logs --from-offset 12345   # resume streaming from a byte offset
 ```
 
 When `--logs` is active, step output is streamed with box-drawn headers as it arrives. Error and warning lines are highlighted (red/yellow) when colors are enabled; piped output is unchanged. If parallel steps stream at once, each line is tagged with its step name (`│ [build] …`) so interleaved output stays readable. The spinner shows the pipeline state, current step, and elapsed time. On failure without `--logs`, the first error line is located and shown with surrounding context (10 lines before, 30 after, plus a short tail); if nothing classifies as an error, the last 120 lines are shown instead. `--from-offset` resumes a dropped watch from a byte offset (the offset is the number of log bytes already streamed).
+
+`--notify` takes an optional BACKEND: bare `--notify` (default) rings the terminal bell, `--notify desktop` posts an OS desktop notification, and `--notify command=<cmd>` runs a shell command with `%m` replaced by the notification message. Bell output goes to stderr (piping stays clean); the desktop and command backends are skipped under `--json`.
 
 #### `bbr ci tail`
 
@@ -532,12 +536,14 @@ bbr ci tail --branch main            # specific branch
 bbr ci tail --interval 2             # poll every 2s (default 3)
 bbr ci tail --follow                 # keep polling after terminal state (flush)
 bbr ci tail --notify                 # ring the terminal bell when the step finishes
+bbr ci tail --notify desktop         # OS desktop notification on finish
+bbr ci tail --notify 'command=notify-send bbr %m'   # run a custom command (%m = message)
 bbr ci tail --all                    # auto-advance to the next step when one finishes
 bbr ci tail --line-numbers           # prefix streamed lines with line numbers
 bbr ci tail --from-offset 12345      # resume streaming from a byte offset
 ```
 
-Output: raw log text streamed to stdout with a header line (`==> StepName :: #42 :: uuid :: STATE`) and an exit summary showing elapsed time. Error and warning lines are highlighted (red/yellow) when colors are enabled; piped output is byte-identical. With `--all`, when the current step finishes and the pipeline is still running, tail automatically switches to the next step (preferring one already running, else the next pending one) and prints a fresh header. `--from-offset` resumes a dropped tail from a byte offset.
+Output: raw log text streamed to stdout with a header line (`==> StepName :: #42 :: uuid :: STATE`) and an exit summary showing elapsed time. Error and warning lines are highlighted (red/yellow) when colors are enabled; piped output is byte-identical. With `--all`, when the current step finishes and the pipeline is still running, tail automatically switches to the next step (preferring one already running, else the next pending one) and prints a fresh header. `--from-offset` resumes a dropped tail from a byte offset. `--notify` works the same as on `ci watch` (see above).
 
 #### `bbr ci trigger`
 
@@ -576,9 +582,11 @@ bbr ci stop --branch main
 Pipeline test reports from Bitbucket's test reporting API. Shows pass/fail/skip/error totals and individual test cases.
 
 ```bash
-bbr ci tests                         # latest pipeline (current branch), first failed/latest step
+bbr ci tests                         # latest pipeline (current branch); first failed step, else last
 bbr ci tests <uuid>                  # specific pipeline
 bbr ci tests --step <step-uuid>      # specific step UUID or name
+bbr ci tests --failed                # report for the first failing step (error if none failed)
+bbr ci tests --latest                # report for the last step
 bbr ci tests --limit 100             # max test cases (default 50)
 bbr ci tests --json
 ```

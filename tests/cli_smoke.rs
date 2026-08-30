@@ -597,3 +597,60 @@ fn watch_stderr_piped_to_closed_consumer_does_not_abort() {
         "stderr EPIPE must not panic/abort (got {status:?})"
     );
 }
+
+// ---------------------------------------------------------------------------
+// ci --notify backends + ci tests step filters (PR #50 sibling feature set)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ci_watch_help_lists_notify_backends() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["ci", "watch", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--notify"))
+        .stdout(predicate::str::contains("BACKEND"))
+        .stdout(predicate::str::contains("desktop"))
+        .stdout(predicate::str::contains("command=<cmd>"));
+}
+
+#[test]
+fn ci_tail_help_lists_notify_backends() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["ci", "tail", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--notify"))
+        .stdout(predicate::str::contains("BACKEND"))
+        .stdout(predicate::str::contains("desktop"));
+}
+
+#[test]
+fn ci_tests_help_lists_step_filters() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["ci", "tests", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--failed"))
+        .stdout(predicate::str::contains("--latest"));
+}
+
+#[test]
+fn ci_watch_rejects_bad_notify_value() {
+    // `--notify` takes an open-ended value (`command=<cmd>`), so clap accepts
+    // it and our runtime parser rejects unknown backends. That maps to the
+    // "generic" error (exit 1). HOME is isolated so no real credentials.
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .env("BITBUCKET_USERNAME", "fake@example.com")
+        .env("BITBUCKET_TOKEN", "fake-token")
+        .env("HOME", "/tmp")
+        .args(["ci", "watch", "--notify", "sms"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("invalid --notify value"));
+}
