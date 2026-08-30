@@ -234,6 +234,8 @@ async fn dispatch_pr(g: &GlobalArgs, action: PrAction) -> Result<()> {
             close_source_branch,
             draft,
             reviewer,
+            push,
+            force,
             g,
         } => {
             commands::pr::create(
@@ -247,6 +249,8 @@ async fn dispatch_pr(g: &GlobalArgs, action: PrAction) -> Result<()> {
                 close_source_branch,
                 draft,
                 &reviewer,
+                push,
+                force,
             )
             .await
         }
@@ -269,6 +273,12 @@ async fn dispatch_pr(g: &GlobalArgs, action: PrAction) -> Result<()> {
             .await
         }
         PrAction::Comments { id, limit, g } => commands::pr::comments(&g, id, limit).await,
+        PrAction::CommentDelete {
+            id,
+            comment_id,
+            yes,
+            g,
+        } => commands::pr::comment_delete(&g, id, comment_id, yes).await,
         PrAction::Tasks { id, limit, g } => commands::pr::tasks(&g, id, limit).await,
         PrAction::Commits { id, limit, g } => commands::pr::commits(&g, id, limit).await,
         PrAction::Statuses { id, limit, g } => commands::pr::statuses(&g, id, limit).await,

@@ -560,6 +560,22 @@ impl BitbucketClient {
         Ok(())
     }
 
+    /// `DELETE /repositories/{ws}/{slug}/pullrequests/{id}/comments/{comment_id}`
+    ///
+    /// Deleting a comment that has visible replies marks it as deleted rather
+    /// than removing it, to preserve the comment tree (Bitbucket behavior).
+    pub async fn delete_pr_comment(
+        &self,
+        workspace: &str,
+        slug: &str,
+        id: u64,
+        comment_id: u64,
+    ) -> Result<()> {
+        let path =
+            format!("/repositories/{workspace}/{slug}/pullrequests/{id}/comments/{comment_id}");
+        self.send_empty(reqwest::Method::DELETE, &path, None).await
+    }
+
     /// `PUT /repositories/{ws}/{slug}/pullrequests/{id}`
     pub async fn update_pr(
         &self,

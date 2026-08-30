@@ -207,9 +207,11 @@ bbr pr create --title "Fix X" \
   --close-source-branch                          # auto-close source
 bbr pr create --title "Fix X" \
   --reviewer "user1" --reviewer "user2"          # add reviewers (repeatable)
+bbr pr create --title "Fix X" --push             # push branch first, then create
+bbr pr create --title "Fix X" --push --force     # overwrite a diverged branch (force-with-lease)
 ```
 
-Defaults: `--src` = current branch, `--dst` = repo default branch.
+Defaults: `--src` = current branch, `--dst` = repo default branch. `--force` requires `--push`.
 
 #### `bbr pr update`
 
@@ -225,6 +227,8 @@ bbr pr update 467 --title "New" --description "New"
 bbr pr comment 467 --body "Looks good!"
 bbr pr comment 467 --body-file review.md
 bbr pr comment 467 --reply-to 123 --body "Agreed"   # reply to a comment
+bbr pr comment delete 467 1234                       # delete a comment (confirms on TTY)
+bbr pr comment delete 467 1234 --yes                 # skip the confirmation prompt
 ```
 
 #### `bbr pr approve / unapprove / decline / merge`
