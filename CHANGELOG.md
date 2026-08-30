@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`bbr pr create --push`** — push the source branch to `origin` before
+  creating the PR, so `git push && bbr pr create` collapses into a single
+  command. A new branch is pushed; an up-to-date or fast-forwardable branch is
+  pushed normally; a branch that has diverged from the remote is refused with a
+  clear message. Pass `--force` to overwrite a diverged remote branch via
+  `git push --force-with-lease` (which still refuses if the remote gained new
+  commits since). The `--force` flag requires `--push`.
+- **`bbr pr comment delete <id> <comment-id>`** — delete a comment on a pull
+  request (`DELETE .../comments/{comment_id}`). Destructive operations confirm
+  on a TTY; skip the prompt with `--yes` or run with `--json`. Note that
+  Bitbucket marks a comment with visible replies as deleted rather than
+  removing it, to preserve the comment tree.
+
 ## [0.2.4] - 2026-08-26
 
 ### Added

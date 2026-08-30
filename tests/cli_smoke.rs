@@ -256,6 +256,49 @@ fn pr_help_lists_create_merge_approve() {
 }
 
 #[test]
+fn pr_create_help_lists_push_and_force() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["pr", "create", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--push"))
+        .stdout(predicate::str::contains("--force"));
+}
+
+#[test]
+fn pr_create_force_requires_push() {
+    // --force only has meaning together with --push; clap enforces that via
+    // `requires`, so passing --force alone is a usage error (exit 64).
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["pr", "create", "--title", "x", "--force"])
+        .assert()
+        .code(64);
+}
+
+#[test]
+fn pr_help_lists_comment_delete() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["pr", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("comment-delete"));
+}
+
+#[test]
+fn pr_comment_delete_help_lists_yes_flag() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["pr", "comment-delete", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--yes"))
+        .stdout(predicate::str::contains("Comment ID"));
+}
+
+#[test]
 fn repo_help_lists_default_reviewers() {
     Command::cargo_bin("bbr")
         .unwrap()

@@ -209,6 +209,25 @@ async fn toggles_pr_change_request() {
     c.unrequest_pr_changes("sdadev", "bvrm", 467).await.unwrap();
 }
 
+#[tokio::test]
+async fn deletes_pr_comment() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path(
+            "/repositories/sdadev/bvrm/pullrequests/467/comments/1234",
+        ))
+        .and(header("authorization", AUTH_BASIC))
+        .respond_with(ResponseTemplate::new(204).set_body_string(""))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let c = client(&server.uri()).await;
+    c.delete_pr_comment("sdadev", "bvrm", 467, 1234)
+        .await
+        .expect("delete should succeed");
+}
+
 fn sample_pr_json(id: u64, state: &str) -> serde_json::Value {
     json!({
         "id": id,

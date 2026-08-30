@@ -439,6 +439,18 @@ pub enum PrAction {
         draft: bool,
         #[arg(long, help = "reviewer UUID (repeatable)")]
         reviewer: Vec<String>,
+        /// Push the source branch to origin before creating the PR.
+        ///
+        /// A branch that is not yet on the remote is pushed first; if the
+        /// remote branch already exists and has diverged, the push is refused
+        /// unless `--force` is given.
+        #[arg(long)]
+        push: bool,
+        /// Push with `--force-with-lease` when the remote branch has diverged
+        /// (used with `--push`). Safe form of force push: refuses if the
+        /// remote has commits that are not present locally.
+        #[arg(long, requires = "push")]
+        force: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -463,6 +475,18 @@ pub enum PrAction {
         id: Option<u64>,
         #[arg(long, help = "max results to return", default_value_t = 50)]
         limit: u32,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Delete a comment on a pull request.
+    CommentDelete {
+        /// Pull request ID.
+        id: u64,
+        /// Comment ID to delete.
+        comment_id: u64,
+        /// Skip the confirmation prompt.
+        #[arg(long, short)]
+        yes: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },

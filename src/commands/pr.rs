@@ -91,6 +91,13 @@ pub struct PrCommentOut {
 }
 
 #[derive(Debug, Serialize)]
+pub struct PrCommentDeleteOut {
+    pub pr_id: u64,
+    pub comment_id: u64,
+    pub deleted: bool,
+}
+
+#[derive(Debug, Serialize)]
 pub struct PrCommentsOut {
     pub pr_id: u64,
     pub comments: Vec<PrCommentSummary>,
@@ -350,6 +357,8 @@ pub async fn create(
     close_source_branch: bool,
     draft: bool,
     reviewers: &[String],
+    push: bool,
+    force: bool,
 ) -> Result<()> {
     let repo = resolve_repo(g)?;
     let client = client(g)?;
@@ -362,6 +371,12 @@ pub async fn create(
         Some(d) => d.to_string(),
         None => infer_default_branch(&repo.workspace, &repo.slug, &client).await?,
     };
+
+    // Ensure the source branch is on the remote before creating the PR:
+    // Bitbucket will reject a PR whose source branch doesn't exist remotely.
+    if push {
+        ensure_source_pushed(&source_branch, force).await?;
+    }
 
     let description = if body.is_some() || body_file.is_some() || body_stdin {
         Some(resolve_body(body, body_file, body_stdin).await?)
@@ -425,6 +440,42 @@ pub async fn create(
     }
 }
 
+/// Push the source branch to origin so a PR can be created against it.
+///
+/// Tries a plain `git push` first — git itself decides whether the branch is
+/// new (created), up to date (no-op), or fast-forwardable. Only if the push is
+/// rejected as non-fast-forward does it fall back to `--force-with-lease`
+/// when `force` was requested; otherwise the error is surfaced so the user
+/// re-runs with `--push --force` deliberately.
+async fn ensure_source_pushed(branch: &str, force: bool) -> Result<()> {
+    match git::push_branch_async(branch).await {
+        Ok(()) => Ok(()),
+        Err(e) if is_non_fast_forward(&e) => {
+            if force {
+                // --force-with-lease still refuses if the remote gained new
+                // commits since we last observed it; it only overwrites the
+                // divergence we already know about.
+                git::push_force_with_lease_async(branch).await
+            } else {
+                Err(BitbucketError::Git(format!(
+                    "push of '{branch}' was rejected (remote branch has diverged). \
+                     Re-run with --push --force to overwrite via git push --force-with-lease."
+                )))
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Git rejects a non-fast-forward push with a message like
+/// `! [rejected]        main -> main (non-fast-forward)`.
+fn is_non_fast_forward(err: &BitbucketError) -> bool {
+    match err {
+        BitbucketError::Git(msg) => msg.contains("non-fast-forward") || msg.contains("[rejected]"),
+        _ => false,
+    }
+}
+
 pub async fn comment(
     g: &GlobalArgs,
     id: u64,
@@ -451,6 +502,37 @@ pub async fn comment(
         format!("Commented on PR #{}", id)
     };
     fmt.print(&out, &human)
+}
+
+pub async fn comment_delete(g: &GlobalArgs, id: u64, comment_id: u64, yes: bool) -> Result<()> {
+    let repo = resolve_repo(g)?;
+    let client = client(g)?;
+
+    // Destructive: confirm unless --yes or JSON mode (mirrors `pr merge`).
+    if !yes
+        && !g.json
+        && !confirm(&format!("Delete comment {comment_id} on PR #{id}? [y/N] ")).await?
+    {
+        let fmt = make_formatter(g);
+        let human = "Aborted.".to_string();
+        fmt.print(&(), &human)?;
+        return Ok(());
+    }
+
+    let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
+    spinner.set_message("Deleting comment...");
+    client
+        .delete_pr_comment(&repo.workspace, &repo.slug, id, comment_id)
+        .await?;
+    spinner.finish();
+
+    let out = PrCommentDeleteOut {
+        pr_id: id,
+        comment_id,
+        deleted: true,
+    };
+    let fmt = make_formatter(g);
+    fmt.print(&out, &format!("Deleted comment {comment_id} on PR #{id}"))
 }
 
 pub async fn comments(g: &GlobalArgs, id: Option<u64>, limit: u32) -> Result<()> {
@@ -1618,5 +1700,28 @@ mod tests {
         let stat = serde_json::json!({ "values": [] });
         let out = render_diffstat(7, &stat);
         assert!(out.contains("No file changes for PR #7"));
+    }
+
+    #[test]
+    fn is_non_fast_forward_detects_push_rejection() {
+        // Real `git push` output for a rejected non-fast-forward update.
+        let rejected = BitbucketError::Git(
+            "To https://example.com/x/y.git\n ! [rejected]        main -> main (non-fast-forward)"
+                .into(),
+        );
+        assert!(is_non_fast_forward(&rejected));
+
+        // Any generic `[rejected]` line (e.g. pre-push hook) also counts.
+        let hook =
+            BitbucketError::Git("! [rejected] main -> main (pre-receive hook declined)".into());
+        assert!(is_non_fast_forward(&hook));
+
+        // Unrelated git errors are not treated as divergence.
+        let timeout = BitbucketError::Git("git command timed out after 60s".into());
+        assert!(!is_non_fast_forward(&timeout));
+
+        // Non-Git errors never match.
+        let other = BitbucketError::Other("boom".into());
+        assert!(!is_non_fast_forward(&other));
     }
 }
