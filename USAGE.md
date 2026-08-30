@@ -897,13 +897,32 @@ Deployment and environment management.
 
 ```bash
 bbr deploy list                            # list deployments
+bbr deploy view <deployment-uuid>          # show a single deployment
+bbr deploy view <deployment-uuid> --wait   # poll until terminal state (exit 5 on FAILED)
 bbr deploy env list                        # list environments
 bbr deploy env create staging --env-type staging   # create environment
 bbr deploy env create prod --env-type production
-bbr deploy trigger <env-uuid> --commit <hash>  # trigger a deployment
+bbr deploy trigger <env-uuid> --commit <hash>      # trigger a deployment
+bbr deploy trigger <env-uuid> --commit <hash> --wait   # trigger and wait
+bbr deploy rollback <env-uuid>             # revert to the previous deployment
+bbr deploy rollback <env-uuid> <dep-uuid>  # restore a specific deployment
+bbr deploy rollback <env-uuid> --wait --yes
 ```
 
 Environment types: `test`, `staging`, `production`.
+
+`deploy view` accepts the UUID with or without braces. `--wait` polls every
+`--interval` seconds (default 5) until the deployment reaches a terminal
+state, giving up after `--wait-timeout` seconds (default 600); a deployment
+that ends `FAILED`/`STOPPED` exits `5` (a timeout prints a note and exits 0,
+so a slow deploy is not mistaken for a failure).
+
+`deploy rollback` has no atomic API behind it — it re-deploys the target
+deployment's commit as a *new* change in the environment (Bitbucket's standard
+rollback pattern). With no target it uses the deployment just before the
+current top of the environment's history. It confirms before re-deploying
+(`--yes`/`--json` skip the prompt) and supports the same `--wait` flags as
+`trigger`.
 
 #### Environment variables
 
@@ -1134,7 +1153,7 @@ Platform paths:
 | 2 | auth failure |
 | 3 | not found |
 | 4 | rate limited |
-| 5 | pipeline failed (`bbr ci watch`) |
+| 5 | pipeline failed (`bbr ci watch`) or deployment failed (`bbr deploy view --wait` / `bbr deploy trigger --wait`) |
 | 64 | usage error (invalid flags/arguments — distinct from operation failures) |
 
 Exit codes are a stable public contract — scripts can branch on `$?`. Usage

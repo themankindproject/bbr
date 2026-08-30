@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`bbr deploy view <deployment-uuid>`** — show a single deployment (state,
+  environment, build, commit, release name/url, last update). `--wait`
+  polls until the deployment reaches a terminal state (`--interval` /
+  `--wait-timeout`); a deployment ending `FAILED`/`STOPPED` exits `5`, matching
+  `ci watch`.
+- **`bbr deploy trigger --wait`** — trigger a deployment and poll it to a
+  terminal state in one command (same `--interval` / `--wait-timeout` / exit-5
+  semantics as `deploy view --wait`).
+- **`bbr deploy rollback <env-uuid> [deployment-uuid]`** — roll back an
+  environment to a previous deployment. Bitbucket has no atomic rollback
+  endpoint, so this re-deploys the target deployment's commit as a new change
+  (the standard pattern); with no target it uses the deployment just before
+  the current top of the environment's history. Confirms before acting
+  (`--yes`/`--json` skip); supports `--wait`.
 - **`bbr pr create --push`** — push the source branch to `origin` before
   creating the PR, so `git push && bbr pr create` collapses into a single
   command. A new branch is pushed; an up-to-date or fast-forwardable branch is
