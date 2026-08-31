@@ -97,9 +97,11 @@ pub async fn list_deployments(g: &GlobalArgs, limit: u32) -> Result<()> {
         .collect();
 
     let fmt = make_formatter(g);
-    let mut table = Table::new().headers(["Environment", "State", "Build#", "Commit", "Date"]);
+    let mut table =
+        Table::new().headers(["UUID", "Environment", "State", "Build#", "Commit", "Date"]);
     for d in &out {
         table = table.add_row([
+            d.uuid.clone(),
             d.environment.as_deref().unwrap_or("-").to_string(),
             d.state.clone(),
             d.pipeline_build
@@ -624,11 +626,10 @@ async fn wait_for_deployment(
     spinner.finish();
     if !is_terminal_state(&current.state.name) {
         eprintln!(
-            "note: deployment {} still {} after {}s; check `bbr deploy view {}`",
+            "note: deployment {} still {} after {}s; check `bbr deploy view` for status",
             truncate(deployment_uuid, 8),
             current.state.name,
-            timeout_secs,
-            deployment_uuid
+            timeout_secs
         );
     }
     Ok(current)

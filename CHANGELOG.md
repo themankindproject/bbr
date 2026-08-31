@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (the standard pattern); with no target it uses the deployment just before
   the current top of the environment's history. Confirms before acting
   (`--yes`/`--json` skip); supports `--wait`.
+- **`bbr deploy list`** — the table now includes a `UUID` column (previously
+  only available via `--json`).
 - **`bbr pr create --push`** — push the source branch to `origin` before
   creating the PR, so `git push && bbr pr create` collapses into a single
   command. A new branch is pushed; an up-to-date or fast-forwardable branch is
