@@ -52,6 +52,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is preferred, falling back to the last step — the same default `ci logs`
   already used.
 
+### Fixed
+
+- **`bbr update` download no longer flickers** — the "Updating bbr …"
+  spinner was still animating when the download progress bar started, so two
+  animations fought over stderr and the progress stream flickered. The
+  spinner is now cleared before the download begins. The download bar is
+  also suppressed under `--json`, matching the rest of the CLI.
+
 ## [0.2.4] - 2026-08-26
 
 ### Added
