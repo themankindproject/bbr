@@ -677,11 +677,54 @@ async fn dispatch_webhook(action: WebhookAction) -> Result<()> {
 async fn dispatch_deploy(action: DeployAction) -> Result<()> {
     match action {
         DeployAction::List { limit, g } => commands::deploy::list_deployments(&g, limit).await,
+        DeployAction::View {
+            deployment_uuid,
+            wait,
+            interval,
+            wait_timeout,
+            g,
+        } => {
+            commands::deploy::view_deployment(&g, &deployment_uuid, wait, interval, wait_timeout)
+                .await
+        }
         DeployAction::Trigger {
             env_uuid,
             commit,
+            wait,
+            interval,
+            wait_timeout,
             g,
-        } => commands::deploy::trigger_deployment(&g, &env_uuid, &commit).await,
+        } => {
+            commands::deploy::trigger_deployment(
+                &g,
+                &env_uuid,
+                &commit,
+                wait,
+                interval,
+                wait_timeout,
+            )
+            .await
+        }
+        DeployAction::Rollback {
+            env_uuid,
+            target,
+            wait,
+            interval,
+            wait_timeout,
+            yes,
+            g,
+        } => {
+            commands::deploy::rollback_deployment(
+                &g,
+                &env_uuid,
+                target.as_deref(),
+                wait,
+                interval,
+                wait_timeout,
+                yes,
+            )
+            .await
+        }
         DeployAction::Env { action } => match action {
             DeployEnvAction::List { g } => commands::deploy::list_environments(&g).await,
             DeployEnvAction::Create { name, env_type, g } => {

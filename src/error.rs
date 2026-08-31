@@ -67,6 +67,17 @@ pub enum BitbucketError {
         branch: Option<String>,
     },
 
+    #[error("deployment {} failed ({}){}",
+        deployment,
+        state,
+        environment.as_ref().map(|e| format!(" in {e}")).unwrap_or_default()
+    )]
+    DeployFailed {
+        deployment: String,
+        state: String,
+        environment: Option<String>,
+    },
+
     #[error("{0}")]
     Other(String),
 
@@ -92,6 +103,7 @@ impl BitbucketError {
             BitbucketError::NotFound(_) => ExitCode::NotFound,
             BitbucketError::RateLimit(_) => ExitCode::RateLimit,
             BitbucketError::PipelineFailed { .. } => ExitCode::PipelineFailed,
+            BitbucketError::DeployFailed { .. } => ExitCode::PipelineFailed,
             BitbucketError::Server { source, .. } => source.exit_code(),
             _ => ExitCode::Generic,
         }
@@ -109,6 +121,7 @@ impl BitbucketError {
             BitbucketError::Git(_) => "git",
             BitbucketError::Io(_) => "io",
             BitbucketError::PipelineFailed { .. } => "pipeline_failed",
+            BitbucketError::DeployFailed { .. } => "deploy_failed",
             BitbucketError::Other(_) => "generic",
             BitbucketError::BadRequest(_) => "bad_request",
             BitbucketError::Server { .. } => "server",

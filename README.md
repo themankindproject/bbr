@@ -67,7 +67,7 @@ Stable public contract — scripts can branch on `$?`.
 | 2 | auth failure |
 | 3 | not found |
 | 4 | rate limited |
-| 5 | pipeline failed (`bbr ci watch`) |
+| 5 | pipeline failed (`bbr ci watch`) or deployment failed (`bbr deploy view --wait` / `bbr deploy trigger --wait`) |
 | 64 | usage error (invalid flags/arguments) |
 
 ## Environment Variables

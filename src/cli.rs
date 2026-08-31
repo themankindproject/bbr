@@ -1361,6 +1361,22 @@ pub enum DeployAction {
         #[command(flatten)]
         g: GlobalArgs,
     },
+    /// Show a single deployment (by UUID).
+    View {
+        /// Deployment UUID.
+        deployment_uuid: String,
+        /// Poll until the deployment reaches a terminal state (or timeout).
+        #[arg(long)]
+        wait: bool,
+        /// Poll interval in seconds (with --wait).
+        #[arg(long, default_value_t = 5)]
+        interval: u64,
+        /// Give up after this many seconds (with --wait).
+        #[arg(long, default_value_t = 600)]
+        wait_timeout: u64,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
     /// Trigger a deployment.
     Trigger {
         /// The environment UUID.
@@ -1368,6 +1384,37 @@ pub enum DeployAction {
         /// The commit hash to deploy.
         #[arg(long)]
         commit: String,
+        /// Wait for the deployment to reach a terminal state (or timeout).
+        #[arg(long)]
+        wait: bool,
+        /// Poll interval in seconds (with --wait).
+        #[arg(long, default_value_t = 5)]
+        interval: u64,
+        /// Give up after this many seconds (with --wait).
+        #[arg(long, default_value_t = 600)]
+        wait_timeout: u64,
+        #[command(flatten)]
+        g: GlobalArgs,
+    },
+    /// Roll back an environment to a previous deployment (re-deploys that
+    /// deployment's commit as a new change).
+    Rollback {
+        /// The environment UUID.
+        env_uuid: String,
+        /// Deployment UUID to restore (default: the one before the current top).
+        target: Option<String>,
+        /// Wait for the new deployment to reach a terminal state (or timeout).
+        #[arg(long)]
+        wait: bool,
+        /// Poll interval in seconds (with --wait).
+        #[arg(long, default_value_t = 5)]
+        interval: u64,
+        /// Give up after this many seconds (with --wait).
+        #[arg(long, default_value_t = 600)]
+        wait_timeout: u64,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },

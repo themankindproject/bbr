@@ -654,3 +654,67 @@ fn ci_watch_rejects_bad_notify_value() {
         .code(1)
         .stderr(predicate::str::contains("invalid --notify value"));
 }
+
+// ---------------------------------------------------------------------------
+// deploy view / trigger --wait / rollback (new subcommands + flags)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deploy_help_lists_view_rollback() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["deploy", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("view"))
+        .stdout(predicate::str::contains("rollback"))
+        .stdout(predicate::str::contains("trigger"))
+        .stdout(predicate::str::contains("list"));
+}
+
+#[test]
+fn deploy_view_help_lists_wait_and_timeout() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["deploy", "view", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--wait"))
+        .stdout(predicate::str::contains("--interval"))
+        .stdout(predicate::str::contains("--wait-timeout"));
+}
+
+#[test]
+fn deploy_trigger_help_lists_wait() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["deploy", "trigger", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--wait"))
+        .stdout(predicate::str::contains("--commit"))
+        .stdout(predicate::str::contains("--wait-timeout"));
+}
+
+#[test]
+fn deploy_rollback_help_lists_yes_and_target() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["deploy", "rollback", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--wait"))
+        .stdout(predicate::str::contains("--yes"))
+        // `target` is a positional arg; it shows up in the usage line.
+        .stdout(predicate::str::contains("[TARGET]"));
+}
+
+#[test]
+fn deploy_view_requires_uuid() {
+    // `deploy view` with no UUID must fail at the CLI layer (exit 64).
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["deploy", "view"])
+        .assert()
+        .code(64);
+}

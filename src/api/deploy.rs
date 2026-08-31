@@ -52,7 +52,28 @@ pub struct Deployment {
     #[serde(default)]
     pub deployable: Option<DeploymentDeployable>,
     #[serde(default)]
+    pub release: Option<DeploymentRelease>,
+    #[serde(default)]
     pub last_update_time: Option<String>,
+}
+
+/// A deployment release — the pipeline-produced artifact a deployment ran.
+///
+/// Newer API responses surface this in `Deployment::release`; older ones
+/// (and the `POST .../changes` response) put the same data in
+/// `Deployment::deployable`. `commit_hash`/`pipeline_build` read both.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DeploymentRelease {
+    #[serde(default)]
+    pub uuid: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub commit: Option<DeployableCommit>,
+    #[serde(default)]
+    pub created_on: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -211,6 +232,44 @@ impl BitbucketClient {
             }
         });
         self.post(&path, &body).await
+    }
+
+    /// Fetch a single deployment by UUID (`GET /deployments/{uuid}`).
+    ///
+    /// Accepts the UUID with or without braces (braces are required in the
+    /// URL and `ensure_uuid_braces` adds them when missing).
+    pub async fn get_deployment(
+        &self,
+        workspace: &str,
+        slug: &str,
+        deployment_uuid: &str,
+    ) -> Result<Deployment> {
+        let uuid = crate::api::pipeline::ensure_uuid_braces(deployment_uuid);
+        let path = format!("/repositories/{workspace}/{slug}/deployments/{uuid}");
+        self.send(reqwest::Method::GET, &path, None).await
+    }
+
+    /// List an environment's deployment history, most recent first
+    /// (`GET .../environments/{env}/changes`).
+    ///
+    /// This is the authoritative "what is currently deployed here" source —
+    /// the global `/deployments` list omits deployments of repos that have
+    /// several, so rollback resolves the environment's own history.
+    pub async fn list_deployments_for_environment(
+        &self,
+        workspace: &str,
+        slug: &str,
+        env_uuid: &str,
+        limit: u32,
+    ) -> Result<Vec<Deployment>> {
+        let pagelen = limit.clamp(1, 100);
+        let path = format!(
+            "/repositories/{workspace}/{slug}/deployments_config/environments/{env_uuid}/changes?pagelen={pagelen}"
+        );
+        let all = self
+            .fetch_all_pages::<Deployment>(&path, limit as usize)
+            .await?;
+        Ok(all)
     }
 
     // ---- Deploy Keys ------------------------------------------------------
