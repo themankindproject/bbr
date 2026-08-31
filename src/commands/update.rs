@@ -351,9 +351,12 @@ pub async fn run(g: &GlobalArgs, check_only: bool) -> Result<()> {
     };
     loading.set_message(format!("Updating bbr {} {arrow} {}...", current, latest));
 
-    download_and_install(&release, &latest, g.quiet).await?;
-
+    // The download below runs its own progress bar on stderr; finish this
+    // spinner first, or the two animations fight over the terminal and the
+    // download progress flickers.
     loading.finish();
+
+    download_and_install(&release, &latest, g.json, g.quiet).await?;
 
     let theme = Theme::current();
     eprintln!("{}  Updated bbr to {latest}", theme.checkmark());
@@ -409,7 +412,12 @@ fn render_update(out: &UpdateOut) -> String {
 // Download + extract helper
 // ---------------------------------------------------------------------------
 
-async fn download_and_install(release: &GithubRelease, _latest: &str, quiet: bool) -> Result<()> {
+async fn download_and_install(
+    release: &GithubRelease,
+    _latest: &str,
+    json: bool,
+    quiet: bool,
+) -> Result<()> {
     let target_name = asset_name().ok_or_else(|| {
         BitbucketError::Other(format!(
             "Unsupported platform: {}-{}",
@@ -471,7 +479,7 @@ async fn download_and_install(release: &GithubRelease, _latest: &str, quiet: boo
     let mut stream = resp.bytes_stream();
     let mut buf: Vec<u8> = Vec::with_capacity(total_size.unwrap_or(0) as usize);
 
-    let pb = if quiet || std::env::var_os("BBR_QUIET").is_some() {
+    let pb = if json || quiet || std::env::var_os("BBR_QUIET").is_some() {
         indicatif::ProgressBar::hidden()
     } else if let Some(total) = total_size {
         let pb = indicatif::ProgressBar::new(total);
