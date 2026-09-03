@@ -321,8 +321,7 @@ impl BitbucketClient {
     /// Like [`Self::step_log_range`] but also reports whether the server
     /// honored the range request. When `honored` is `false` the body is the
     /// *entire* log (the server ignored `Range`), so streaming callers must
-    /// reset their offset to the body length instead of appending — appending
-    /// would replay content already printed.
+    /// discard the already-emitted prefix before printing new content.
     pub async fn step_log_range_checked(
         &self,
         workspace: &str,

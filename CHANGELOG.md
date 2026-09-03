@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **CI log streaming no longer repeats or silently drops logs** — `ci watch --logs`
+  and `ci tail` now preserve their byte offsets when a log request fails, and
+  when a server/proxy ignores a Range request and returns the full log, they
+  emit only the unseen suffix instead of replaying it on every poll. Transport
+  errors are reported as warnings and retried from the prior offset, and
+  truncated/non-UTF-8-boundary full responses restart safely without panicking.
+
 ## [0.2.5] - 2026-08-31
 
 ### Added

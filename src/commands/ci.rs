@@ -333,7 +333,7 @@ pub async fn watch(
                 }
                 state.prev_state = step_state_name;
 
-                let (chunk, range_honored) = client
+                let (body, range_honored) = match client
                     .step_log_range_checked(
                         &repo.workspace,
                         &repo.slug,
@@ -342,11 +342,18 @@ pub async fn watch(
                         state.offset,
                     )
                     .await
-                    .unwrap_or_default();
-
-                if !range_honored {
-                    // Server ignored Range and sent the whole log — reset the
-                    // offset so we don't re-append content already streamed.
+                {
+                    Ok(response) => response,
+                    Err(error) => {
+                        spinner.println(format!(
+                            "warning: failed to stream logs for {}: {error}",
+                            step.name
+                        ));
+                        continue;
+                    }
+                };
+                let (chunk, reset_offset) = unseen_log_chunk(&body, range_honored, state.offset);
+                if reset_offset {
                     state.offset = 0;
                 }
 
@@ -649,7 +656,7 @@ pub async fn tail(
     'steps: loop {
         // Stream the current step until it reaches a terminal state.
         loop {
-            let (chunk, range_honored) = client
+            let log_response = client
                 .step_log_range_checked(
                     &repo.workspace,
                     &repo.slug,
@@ -657,34 +664,43 @@ pub async fn tail(
                     &current_step_uuid,
                     offset,
                 )
-                .await
-                .unwrap_or_default();
+                .await;
 
-            if !range_honored {
-                // Server ignored Range and sent the whole log — reset so the
-                // accounting below doesn't re-append already-streamed bytes.
-                offset = 0;
-            }
+            match log_response {
+                Ok((body, range_honored)) => {
+                    let (chunk, reset_offset) = unseen_log_chunk(&body, range_honored, offset);
+                    if reset_offset {
+                        offset = 0;
+                    }
 
-            if !chunk.is_empty() {
-                // Only print up to the last complete line. If the chunk
-                // doesn't end with '\n', hold back the partial trailing line
-                // so the next poll re-fetches it complete.
-                let printable_end = if chunk.ends_with('\n') {
-                    chunk.len()
-                } else {
-                    chunk.rfind('\n').map(|i| i + 1).unwrap_or(0)
-                };
+                    if !chunk.is_empty() {
+                        // Only print up to the last complete line. If the chunk
+                        // doesn't end with '\n', hold back the partial trailing line
+                        // so the next poll re-fetches it complete.
+                        let printable_end = if chunk.ends_with('\n') {
+                            chunk.len()
+                        } else {
+                            chunk.rfind('\n').map(|i| i + 1).unwrap_or(0)
+                        };
 
-                if printable_end > 0 && !g.json {
-                    let rendered = if line_numbers {
-                        render_log_chunk_numbered(theme, &chunk[..printable_end], &mut nums)
-                    } else {
-                        highlight_log_chunk(theme, &chunk[..printable_end])
-                    };
-                    crate::output::print_block(&rendered)?;
+                        if printable_end > 0 && !g.json {
+                            let rendered = if line_numbers {
+                                render_log_chunk_numbered(theme, &chunk[..printable_end], &mut nums)
+                            } else {
+                                highlight_log_chunk(theme, &chunk[..printable_end])
+                            };
+                            crate::output::print_block(&rendered)?;
+                        }
+                        offset += printable_end as u64;
+                    }
                 }
-                offset += printable_end as u64;
+                Err(error) => {
+                    if !g.json {
+                        eprintln!(
+                            "warning: failed to stream logs for {current_step_name}: {error}"
+                        );
+                    }
+                }
             }
 
             if step_is_terminal {
@@ -765,8 +781,8 @@ pub async fn tail(
         if follow {
             for _ in 0..3 {
                 time::sleep(Duration::from_secs(interval.max(1))).await;
-                let chunk = client
-                    .step_log_range(
+                let (body, range_honored) = match client
+                    .step_log_range_checked(
                         &repo.workspace,
                         &repo.slug,
                         &pipeline_uuid,
@@ -774,7 +790,21 @@ pub async fn tail(
                         offset,
                     )
                     .await
-                    .unwrap_or_default();
+                {
+                    Ok(response) => response,
+                    Err(error) => {
+                        if !g.json {
+                            eprintln!(
+                                "warning: failed to stream logs for {current_step_name}: {error}"
+                            );
+                        }
+                        continue;
+                    }
+                };
+                let (chunk, reset_offset) = unseen_log_chunk(&body, range_honored, offset);
+                if reset_offset {
+                    offset = 0;
+                }
                 if chunk.is_empty() {
                     break;
                 }
@@ -1220,6 +1250,26 @@ async fn steps_for_pipeline(
         .list_steps(workspace, slug, uuid)
         .await
         .map(|page| page.values)
+}
+
+/// Return the portion of a log response that has not yet been emitted.
+///
+/// A response to an honored Range request already contains only new bytes. If
+/// a server ignores Range and returns the complete log, discard the prefix
+/// already emitted. If the log was truncated or the offset is not a UTF-8
+/// boundary, restart from the full response and reset the caller's offset.
+fn unseen_log_chunk(body: &str, range_honored: bool, offset: u64) -> (&str, bool) {
+    if range_honored {
+        return (body, false);
+    }
+
+    match usize::try_from(offset)
+        .ok()
+        .and_then(|start| body.get(start..))
+    {
+        Some(new_content) => (new_content, false),
+        None => (body, true),
+    }
 }
 
 fn select_step<'a>(
@@ -1719,6 +1769,39 @@ mod tests {
         assert_eq!(out.name, "Build");
         assert_eq!(out.state, "SUCCESSFUL");
         assert_eq!(out.duration_seconds, 1);
+    }
+
+    #[test]
+    fn full_log_response_emits_only_unseen_suffix() {
+        let full_log = "first line\nsecond line\n";
+        let (chunk, reset_offset) = unseen_log_chunk(full_log, false, "first line\n".len() as u64);
+
+        assert_eq!(chunk, "second line\n");
+        assert!(!reset_offset);
+    }
+
+    #[test]
+    fn range_response_is_already_unseen() {
+        let (chunk, reset_offset) = unseen_log_chunk("second line\n", true, 11);
+
+        assert_eq!(chunk, "second line\n");
+        assert!(!reset_offset);
+    }
+
+    #[test]
+    fn truncated_full_log_resets_the_stream_offset() {
+        let (chunk, reset_offset) = unseen_log_chunk("fresh log\n", false, 100);
+
+        assert_eq!(chunk, "fresh log\n");
+        assert!(reset_offset);
+    }
+
+    #[test]
+    fn invalid_utf8_boundary_resets_without_panicking() {
+        let (chunk, reset_offset) = unseen_log_chunk("é\n", false, 1);
+
+        assert_eq!(chunk, "é\n");
+        assert!(reset_offset);
     }
 
     // ---- UI formatting tests ------------------------------------------------
