@@ -17,6 +17,17 @@ pub async fn run(
         crate::error::BitbucketError::Other(format!("invalid HTTP method: {method}"))
     })?;
 
+    if paginate {
+        // `fetch_all_pages` issues GET requests. Reject a mutation (or a
+        // request with a body) before it can be silently discarded.
+        let is_get = http_method == reqwest::Method::GET;
+        if !is_get || data.is_some() {
+            return Err(crate::error::BitbucketError::Other(
+                "--paginate only supports GET requests without --data".into(),
+            ));
+        }
+    }
+
     // Keep the response as a `Value` end-to-end: serializing to a string
     // first and then passing it through the JSON formatter would
     // double-encode it (a JSON string containing escaped JSON).

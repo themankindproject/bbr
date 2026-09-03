@@ -71,6 +71,31 @@ pub struct CiLogsOut {
     pub log: String,
 }
 
+/// One complete line emitted by `bbr ci tail --json`.
+///
+/// `offset` is the byte offset of the *end* of the complete line within the
+/// step log. Consumers can persist it and resume with `--from-offset`.
+#[derive(Debug, Serialize)]
+pub struct CiTailLogEvent {
+    pub event: &'static str,
+    pub pipeline_uuid: String,
+    pub step_uuid: String,
+    pub step_name: String,
+    pub line: String,
+    pub line_number: u64,
+    pub offset: u64,
+}
+
+/// Final event emitted by `bbr ci tail --json`.
+#[derive(Debug, Serialize)]
+pub struct CiTailSummaryEvent {
+    pub event: &'static str,
+    pub pipeline_uuid: String,
+    pub step_uuid: String,
+    pub step_name: String,
+    pub state: String,
+}
+
 pub async fn list(g: &GlobalArgs, branch: Option<&str>, limit: u32, no_steps: bool) -> Result<()> {
     let repo = resolve_repo(g)?;
     let branch = match branch {
@@ -638,7 +663,15 @@ pub async fn tail(
         short_uuid,
         pipe_state.as_str(),
     );
-    if !g.json {
+    if g.json {
+        crate::output::json::print_ndjson(&CiTailSummaryEvent {
+            event: "header",
+            pipeline_uuid: pipeline_uuid.clone(),
+            step_uuid: step_uuid.clone(),
+            step_name: step_name.clone(),
+            state: pipe_state.clone(),
+        })?;
+    } else {
         crate::output::print_block(&format!("{header}\n"))?;
     }
 
@@ -674,24 +707,40 @@ pub async fn tail(
                     }
 
                     if !chunk.is_empty() {
-                        // Only print up to the last complete line. If the chunk
-                        // doesn't end with '\n', hold back the partial trailing line
-                        // so the next poll re-fetches it complete.
+                        // Only emit up to the last complete line. If the chunk
+                        // doesn't end with '\n', hold back the partial trailing
+                        // line so the next poll re-fetches it complete.
                         let printable_end = if chunk.ends_with('\n') {
                             chunk.len()
                         } else {
                             chunk.rfind('\n').map(|i| i + 1).unwrap_or(0)
                         };
 
-                        if printable_end > 0 && !g.json {
-                            let rendered = if line_numbers {
-                                render_log_chunk_numbered(theme, &chunk[..printable_end], &mut nums)
+                        if printable_end > 0 {
+                            let printable = &chunk[..printable_end];
+                            if g.json {
+                                emit_tail_log_json(
+                                    &pipeline_uuid,
+                                    &current_step_uuid,
+                                    &current_step_name,
+                                    printable,
+                                    &mut nums,
+                                    &mut offset,
+                                )?;
                             } else {
-                                highlight_log_chunk(theme, &chunk[..printable_end])
-                            };
-                            crate::output::print_block(&rendered)?;
+                                let rendered = if line_numbers {
+                                    render_log_chunk_numbered(
+                                        theme,
+                                        &chunk[..printable_end],
+                                        &mut nums,
+                                    )
+                                } else {
+                                    highlight_log_chunk(theme, &chunk[..printable_end])
+                                };
+                                crate::output::print_block(&rendered)?;
+                                offset += printable_end as u64;
+                            }
                         }
-                        offset += printable_end as u64;
                     }
                 }
                 Err(error) => {
@@ -760,7 +809,15 @@ pub async fn tail(
                     nums = LineNumState::new(1);
                     prev_state = next_step.state_name().to_string();
                     step_is_terminal = next_step.is_terminal();
-                    if !g.json {
+                    if g.json {
+                        crate::output::json::print_ndjson(&CiTailSummaryEvent {
+                            event: "header",
+                            pipeline_uuid: pipeline_uuid.clone(),
+                            step_uuid: current_step_uuid.clone(),
+                            step_name: current_step_name.clone(),
+                            state: next_step.state_name().to_string(),
+                        })?;
+                    } else {
                         let short = current_step_uuid.trim_matches(|c| c == '{' || c == '}');
                         let header = render_tail_header(
                             theme,
@@ -808,36 +865,50 @@ pub async fn tail(
                 if chunk.is_empty() {
                     break;
                 }
-                if !g.json {
-                    // Same partial-line holdback as the main stream loop: only
-                    // print up to the last complete newline so a line split
-                    // across the final flush isn't rendered twice.
-                    let printable_end = if chunk.ends_with('\n') {
-                        chunk.len()
+                // Same partial-line holdback as the main stream loop: only
+                // emit up to the last complete newline so a line split across
+                // the final flush isn't emitted twice.
+                let printable_end = if chunk.ends_with('\n') {
+                    chunk.len()
+                } else {
+                    chunk.rfind('\n').map(|i| i + 1).unwrap_or(0)
+                };
+                if printable_end > 0 {
+                    let printable = &chunk[..printable_end];
+                    if g.json {
+                        emit_tail_log_json(
+                            &pipeline_uuid,
+                            &current_step_uuid,
+                            &current_step_name,
+                            printable,
+                            &mut nums,
+                            &mut offset,
+                        )?;
                     } else {
-                        chunk.rfind('\n').map(|i| i + 1).unwrap_or(0)
-                    };
-                    if printable_end > 0 {
                         let rendered = if line_numbers {
                             render_log_chunk_numbered(theme, &chunk[..printable_end], &mut nums)
                         } else {
                             highlight_log_chunk(theme, &chunk[..printable_end])
                         };
                         crate::output::print_block(&rendered)?;
+                        offset += printable_end as u64;
                     }
                 }
-                offset += if chunk.ends_with('\n') {
-                    chunk.len() as u64
-                } else {
-                    chunk.rfind('\n').map(|i| i + 1).unwrap_or(0) as u64
-                };
             }
         }
         break;
     }
 
     // Exit summary
-    if !g.json {
+    if g.json {
+        crate::output::json::print_ndjson(&CiTailSummaryEvent {
+            event: "summary",
+            pipeline_uuid,
+            step_uuid: current_step_uuid,
+            step_name: current_step_name,
+            state: prev_state,
+        })?;
+    } else {
         let elapsed = started.elapsed();
         let summary = render_tail_exit_summary(
             theme,
@@ -1270,6 +1341,38 @@ fn unseen_log_chunk(body: &str, range_honored: bool, offset: u64) -> (&str, bool
         Some(new_content) => (new_content, false),
         None => (body, true),
     }
+}
+
+/// Emit one NDJSON event per complete log line and advance the byte offset.
+///
+/// `nums` supplies stable line numbers even when `--line-numbers` is off; JSON
+/// consumers get the same field regardless of presentation mode.
+fn emit_tail_log_json(
+    pipeline_uuid: &str,
+    step_uuid: &str,
+    step_name: &str,
+    chunk: &str,
+    nums: &mut LineNumState,
+    offset: &mut u64,
+) -> Result<()> {
+    for line in chunk.split_inclusive('\n') {
+        let body = line.strip_suffix('\n').unwrap_or(line);
+        let line_len = line.len() as u64;
+        let event = CiTailLogEvent {
+            event: "log",
+            pipeline_uuid: pipeline_uuid.to_string(),
+            step_uuid: step_uuid.to_string(),
+            step_name: step_name.to_string(),
+            line: body.to_string(),
+            line_number: nums.next,
+            offset: *offset + line_len,
+        };
+        nums.next += 1;
+        nums.at_line_start = true;
+        *offset += line_len;
+        crate::output::json::print_ndjson(&event)?;
+    }
+    Ok(())
 }
 
 fn select_step<'a>(

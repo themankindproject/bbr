@@ -615,6 +615,118 @@ fn ci_watch_help_lists_notify_backends() {
         .stdout(predicate::str::contains("command=<cmd>"));
 }
 
+#[tokio::test]
+async fn ci_tail_json_emits_ndjson_log_events() {
+    use std::process::Command as StdCommand;
+
+    // Start a deterministic mock server owned by the test. The command below
+    // sends this exact stdout to `bbr ci tail`; the parent parses it as JSONL.
+    let server = wiremock::MockServer::start().await;
+
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/repositories/ws/repo/pipelines/"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "values": [{
+                    "uuid": "{pipe-1}",
+                    "build_number": 7,
+                    "state": {"name": "COMPLETED", "result": {"name": "SUCCESSFUL"}},
+                    "result": {"name": "SUCCESSFUL"},
+                    "duration_in_seconds": 1,
+                    "target": {"ref_name": "main", "ref_type": "branch"}
+                }],
+                "pagelen": 1,
+                "size": 1
+            })),
+        )
+        .mount(&server)
+        .await;
+
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path(
+            "/repositories/ws/repo/pipelines/%7Bpipe-1%7D",
+        ))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "uuid": "{pipe-1}",
+                "build_number": 7,
+                "state": {"name": "COMPLETED", "result": {"name": "SUCCESSFUL"}},
+                "result": {"name": "SUCCESSFUL"},
+                "duration_in_seconds": 1,
+                "target": {"ref_name": "main", "ref_type": "branch"}
+            })),
+        )
+        .mount(&server)
+        .await;
+
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path(
+            "/repositories/ws/repo/pipelines/%7Bpipe-1%7D/steps/",
+        ))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "values": [{
+                    "uuid": "{step-1}",
+                    "name": "Build",
+                    "state": {"name": "COMPLETED", "result": {"name": "SUCCESSFUL"}},
+                    "duration_in_seconds": 1
+                }]
+            })),
+        )
+        .mount(&server)
+        .await;
+
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path(
+            "/repositories/ws/repo/pipelines/%7Bpipe-1%7D/steps/%7Bstep-1%7D/log",
+        ))
+        .and(wiremock::matchers::header("Range", "bytes=0-"))
+        .respond_with(wiremock::ResponseTemplate::new(206).set_body_string("hello\nworld\n"))
+        .mount(&server)
+        .await;
+
+    let output = StdCommand::new(assert_cmd::cargo::cargo_bin("bbr"))
+        .args([
+            "ci",
+            "tail",
+            "--pipeline",
+            "{pipe-1}",
+            "--workspace",
+            "ws",
+            "--slug",
+            "repo",
+            "--json",
+        ])
+        .env("BITBUCKET_API_BASE", server.uri())
+        .env("BITBUCKET_USERNAME", "u")
+        .env("BITBUCKET_TOKEN", "t")
+        .env("HOME", "/tmp")
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        output.status.success(),
+        "tail --json must succeed; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let events: Vec<serde_json::Value> = text
+        .lines()
+        .map(serde_json::from_str)
+        .collect::<Result<_, _>>()
+        .unwrap_or_else(|e| panic!("tail --json must emit NDJSON: {e}\n{text}"));
+
+    assert_eq!(events.len(), 4, "header + two logs + summary: {events:?}");
+    assert_eq!(events[0]["event"], "header");
+    assert_eq!(events[1]["event"], "log");
+    assert_eq!(events[1]["line"], "hello");
+    assert_eq!(events[1]["offset"], 6);
+    assert_eq!(events[2]["line"], "world");
+    assert_eq!(events[2]["offset"], 12);
+    assert_eq!(events[3]["event"], "summary");
+    assert_eq!(events[3]["state"], "SUCCESSFUL");
+}
+
 #[test]
 fn ci_tail_help_lists_notify_backends() {
     Command::cargo_bin("bbr")

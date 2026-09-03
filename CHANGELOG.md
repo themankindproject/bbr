@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   errors are reported as warnings and retried from the prior offset, and
   truncated/non-UTF-8-boundary full responses restart safely without panicking.
 
+- **`bbr ci tail --json` now emits machine-readable NDJSON** — each complete log
+  line is a compact `log` event with pipeline/step identity, line number, and
+  resumable byte offset, followed by `header` and final `summary` events. This
+  restores the documented `--json` contract without silently producing no
+  output.
 ## [0.2.5] - 2026-08-31
 
 ### Added
