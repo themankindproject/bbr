@@ -13,6 +13,7 @@ pub mod diff;
 pub(crate) mod dispatch;
 pub mod error;
 pub mod git;
+pub mod logging;
 pub mod output;
 pub mod stack;
 #[cfg(test)]

@@ -77,6 +77,7 @@ impl Formatter {
 
 /// Write a human-readable block to stdout.
 pub fn print_block(s: &str) -> Result<()> {
+    let s = sanitize_human_output(s);
     let mut out = io::stdout().lock();
     out.write_all(s.as_bytes())?;
     if !s.ends_with('\n') {
@@ -85,9 +86,91 @@ pub fn print_block(s: &str) -> Result<()> {
     Ok(())
 }
 
+/// Neutralize terminal escape sequences that originate from remote data while
+/// preserving the SGR color codes bbr itself emits.
+///
+/// Remote strings (PR titles, branch and pipeline-step names, commit messages,
+/// webhook URLs, API error bodies) are printed inside human output. A crafted
+/// title such as `\x1b]52;c;<base64>\x07` can hijack the clipboard (OSC 52) or
+/// `\x1b[2J\x1b[H` can clear the screen and forge output.
+///
+/// The filter is deliberately *allow-list* rather than strip-all: `colored`,
+/// `comfy-table`/`crossterm` and `syntect` all emit SGR sequences
+/// (`ESC [ <params> m`), so those are kept and every other escape is dropped.
+/// Other C0 controls are dropped too, except `\n` and `\t`.
+pub fn sanitize_human_output(s: &str) -> std::borrow::Cow<'_, str> {
+    // Fast path: nothing to do for the overwhelmingly common case.
+    let needs_work = s
+        .chars()
+        .any(|c| c == '\x1b' || c == '\u{9b}' || (c.is_control() && c != '\n' && c != '\t'));
+    if !needs_work {
+        return std::borrow::Cow::Borrowed(s);
+    }
+
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\x1b' => match chars.peek().copied() {
+                // CSI: keep only SGR (`...m`); drop screen/cursor manipulation.
+                Some('[') => {
+                    chars.next();
+                    let mut params = String::new();
+                    let mut final_byte = None;
+                    for c in chars.by_ref() {
+                        if ('\x40'..='\x7e').contains(&c) {
+                            final_byte = Some(c);
+                            break;
+                        }
+                        params.push(c);
+                    }
+                    if final_byte == Some('m') {
+                        out.push('\x1b');
+                        out.push('[');
+                        out.push_str(&params);
+                        out.push('m');
+                    }
+                }
+                // OSC (e.g. clipboard hijack via OSC 52): consume to BEL or ST.
+                Some(']') => {
+                    chars.next();
+                    while let Some(c) = chars.next() {
+                        if c == '\x07' {
+                            break;
+                        }
+                        if c == '\x1b' && chars.peek() == Some(&'\\') {
+                            chars.next();
+                            break;
+                        }
+                    }
+                }
+                // Any other ESC-introduced sequence: drop ESC + introducer.
+                Some(_) => {
+                    chars.next();
+                }
+                None => {}
+            },
+            // Single-byte C1 CSI introducer.
+            '\u{9b}' => {
+                for c in chars.by_ref() {
+                    if ('\x40'..='\x7e').contains(&c) {
+                        break;
+                    }
+                }
+            }
+            '\n' | '\t' => out.push(ch),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 /// Print a diff with syntax highlighting (via `bat`) and paging, falling
 /// back to `print_paginated` if `bat` is not available.
 pub fn print_diff(s: &str) -> Result<()> {
+    let s = sanitize_human_output(s);
+    let s = s.as_ref();
     if !io::stdout().is_terminal() {
         return print_block(s);
     }
@@ -143,8 +226,9 @@ pub fn print_diff(s: &str) -> Result<()> {
 
 /// Write a human-readable block to stdout with optional pagination using less/PAGER.
 pub fn print_paginated(s: &str) -> Result<()> {
+    let s = sanitize_human_output(s);
     if !io::stdout().is_terminal() {
-        return print_block(s);
+        return print_block(&s);
     }
 
     write_paginated(|w| {
@@ -285,5 +369,42 @@ mod tests {
     #[test]
     fn split_pager_args_single_token() {
         assert_eq!(split_pager_args("bat"), vec!["bat"]);
+    }
+
+    #[test]
+    fn sanitize_preserves_sgr_color_codes() {
+        // `colored`/crossterm/syntect all emit SGR; those must survive or all
+        // human output loses its color.
+        let colored = "\x1b[1;31mFAILED\x1b[0m";
+        assert_eq!(sanitize_human_output(colored), colored);
+    }
+
+    #[test]
+    fn sanitize_keeps_ordinary_text_borrowed() {
+        let plain = "PR #12: Add login API\n\tindented";
+        assert!(matches!(
+            sanitize_human_output(plain),
+            std::borrow::Cow::Borrowed(_)
+        ));
+    }
+
+    #[test]
+    fn sanitize_strips_osc52_clipboard_hijack() {
+        let hostile = "title\x1b]52;c;aGFja2Vk\x07rest";
+        assert_eq!(sanitize_human_output(hostile), "titlerest");
+    }
+
+    #[test]
+    fn sanitize_strips_screen_clear_and_cursor_moves() {
+        assert_eq!(sanitize_human_output("a\x1b[2J\x1b[Hb"), "ab");
+        // OSC terminated by ST (ESC \) rather than BEL.
+        assert_eq!(sanitize_human_output("a\x1b]0;evil\x1b\\b"), "ab");
+    }
+
+    #[test]
+    fn sanitize_strips_bare_control_chars_but_keeps_newline_tab() {
+        assert_eq!(sanitize_human_output("a\x07b\x0dc\nd\te"), "abc\nd\te");
+        // C1 single-byte CSI introducer.
+        assert_eq!(sanitize_human_output("a\u{9b}31mb"), "ab");
     }
 }

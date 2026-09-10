@@ -465,27 +465,29 @@ fn sanitize_terminal_escapes(s: &str) -> String {
     while let Some(ch) = chars.next() {
         if ch == '\x1b' {
             match chars.peek() {
-                Some('[') | Some(']') => {
-                    let opener = chars.next().unwrap();
-                    if opener == '[' {
-                        // CSI: consume until 0x40-0x7E
-                        for c in chars.by_ref() {
-                            if ('\x40'..='\x7e').contains(&c) {
-                                break;
-                            }
+                Some('[') => {
+                    // Consume the '[' we just peeked, then the CSI body:
+                    // parameters and intermediates up to a final byte 0x40-0x7E.
+                    chars.next();
+                    for c in chars.by_ref() {
+                        if ('\x40'..='\x7e').contains(&c) {
+                            break;
                         }
-                    } else {
-                        // OSC: consume until ST (ESC \ or BEL)
-                        for c in chars.by_ref() {
-                            if c == '\x07' {
-                                break;
+                    }
+                }
+                Some(']') => {
+                    // Consume the ']' we just peeked, then the OSC body up to
+                    // ST (ESC \ or BEL).
+                    chars.next();
+                    for c in chars.by_ref() {
+                        if c == '\x07' {
+                            break;
+                        }
+                        if c == '\x1b' {
+                            if chars.peek() == Some(&'\\') {
+                                chars.next();
                             }
-                            if c == '\x1b' {
-                                if chars.peek() == Some(&'\\') {
-                                    chars.next();
-                                }
-                                break;
-                            }
+                            break;
                         }
                     }
                 }
@@ -1114,5 +1116,41 @@ diff --git a/b.rs b/b.rs
         );
         assert_eq!(sanitize_terminal_escapes(""), "");
         assert_eq!(sanitize_terminal_escapes("tabs\there"), "tabs\there");
+    }
+
+    #[test]
+    fn test_sanitize_strips_csi_sequences() {
+        // SGR color codes and cursor movement must not survive: a diff line
+        // is untrusted remote content.
+        assert_eq!(sanitize_terminal_escapes("\x1b[31mred\x1b[0m"), "red");
+        assert_eq!(sanitize_terminal_escapes("\x1b[2Jcleared"), "cleared");
+        assert_eq!(sanitize_terminal_escapes("\x1b[1;1Hmoved"), "moved");
+        // An unterminated CSI at end-of-string must not panic or hang.
+        assert_eq!(sanitize_terminal_escapes("tail\x1b[38;2;1"), "tail");
+    }
+
+    #[test]
+    fn test_sanitize_strips_osc_sequences() {
+        // OSC 52 is the clipboard-hijack vector; both terminators count.
+        assert_eq!(sanitize_terminal_escapes("\x1b]52;c;cGF5bG9hZA==\x07"), "");
+        assert_eq!(
+            sanitize_terminal_escapes("\x1b]0;evil title\x1b\\kept"),
+            "kept"
+        );
+        // Unterminated OSC at end-of-string.
+        assert_eq!(sanitize_terminal_escapes("tail\x1b]52;c;data"), "tail");
+    }
+
+    #[test]
+    fn test_sanitize_handles_every_truncation_of_an_escape() {
+        // Feeding every prefix of a hostile line to the sanitizer must never
+        // panic. This is the property that the two-branch peek/consume in
+        // `sanitize_terminal_escapes` has to preserve.
+        let hostile = "\x1b[31mred\x1b]52;c;x\x07\x1b[0m\x1b\\";
+        for end in 0..=hostile.len() {
+            if hostile.is_char_boundary(end) {
+                let _ = sanitize_terminal_escapes(&hostile[..end]);
+            }
+        }
     }
 }

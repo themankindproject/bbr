@@ -4,7 +4,7 @@
 [![Version](https://img.shields.io/github/v/release/themankindproject/bbr)](https://github.com/themankindproject/bbr/releases/latest)
 ![Rust Version](https://img.shields.io/badge/rust-1.88%2B-blue)
 [![License](https://img.shields.io/crates/l/bbr)](LICENSE)
-![Tests](https://img.shields.io/badge/tests-433%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-531%20passing-brightgreen)
 
 A fast, single-binary Bitbucket Cloud CLI. Agent-first (`--json` everywhere, stable schemas and exit codes, env auth) with pretty human output.
 
@@ -15,16 +15,34 @@ Full command reference: **[USAGE.md](USAGE.md)** · JSON schemas: **[docs/output
 ## Install
 
 ```bash
-# One-liner (Linux x86_64/aarch64, macOS Intel/ARM)
+# One-liner — Linux (x86_64/aarch64, musl or glibc), macOS (Intel/Apple Silicon)
 curl -fsSL https://github.com/themankindproject/bbr/raw/main/install.sh | bash
 
-# Or from source
+# Binary install, no Rust toolchain needed
+cargo binstall bbr        # https://github.com/cargo-bins/cargo-binstall
+
+# From source
 cargo install --locked --git https://github.com/themankindproject/bbr
 
-bbr completion --install    # shell completions (bash/zsh/fish/powershell)
+bbr completion --install  # shell completions (bash/zsh/fish/powershell)
 ```
 
-Pre-built archives: [Releases](https://github.com/themankindproject/bbr/releases/latest).
+Pre-built archives with SHA-256 checksums: [Releases](https://github.com/themankindproject/bbr/releases/latest).
+Homebrew, Scoop, and winget manifests are attached to every release; see
+[docs/distribution.md](docs/distribution.md) for every channel and how to enable
+the optional package registries.
+
+> **Do not run `cargo install bbr`.** The name `bbr` on crates.io belongs to an
+> unrelated crate. Always use `--git` (as above) or `cargo binstall`.
+
+`install.sh` verifies the download against the release's `checksums.txt` and
+**fails closed** — a missing or mismatched checksum aborts the install. Set
+`BBR_SKIP_CHECKSUM=1` only if you must bypass it. Pin a version by passing a tag:
+`... | bash -s v0.2.5`. Set `GITHUB_TOKEN` to avoid GitHub API rate limits in CI.
+
+If you installed through a package manager (Homebrew, Scoop, Nix, apt), use that
+channel to upgrade — `bbr update` detects a package-managed install and refuses
+to overwrite it.
 
 ## Auth
 

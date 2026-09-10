@@ -3,7 +3,7 @@
 use std::io;
 
 use clap::CommandFactory;
-use clap_complete::{generate, Shell};
+use clap_complete::generate;
 
 use crate::cli::{
     AuthAction, BatchAction, CiAction, CiSchedulesAction, CiVarsAction, Cli, Command, CommitAction,
@@ -12,14 +12,13 @@ use crate::cli::{
     SrcAction, StackAction, VariableAction, WebhookAction, WorkspaceAction,
 };
 use crate::commands;
-use crate::error::Result;
+use crate::error::{BitbucketError, Result};
 
 pub(crate) async fn dispatch(cli: Cli) -> Result<()> {
     let g = &cli.global;
 
     // Warm the syntax-highlighting engine in the background while network
     // and git work proceed; a no-op for commands that never render diffs.
-    crate::diff::syntax::warm();
 
     // Fail fast on missing credentials BEFORE git detection so the error
     // says "auth first", not "not a git repo". Commands that legitimately
@@ -81,7 +80,10 @@ pub(crate) async fn dispatch(cli: Cli) -> Result<()> {
             if install {
                 commands::completion::install(shell)?;
             } else {
-                let shell = shell.unwrap_or(Shell::Bash);
+                // Honour $SHELL for `bbr completion` as well as
+                // `--install`; defaulting to Bash silently emitted the wrong
+                // dialect for zsh/fish users.
+                let shell = shell.unwrap_or_else(commands::completion::detect_shell);
                 // Generate into a buffer first: clap_complete panics on write
                 // errors (e.g. EPIPE when piped to `head`). Writing the buffer
                 // ourselves turns that into a clean exit.
@@ -162,7 +164,15 @@ async fn dispatch_status(
         let text = match fmt.as_str() {
             "slack" => commands::export::format_slack(&status_res),
             "markdown" => commands::export::format_markdown(&status_res),
-            _ => unreachable!(),
+            // clap restricts `--export` to the values above, so this is a
+            // defensive arm rather than a reachable one. Returning a usage
+            // error keeps it that way even if the parser is relaxed later,
+            // instead of aborting the process.
+            other => {
+                return Err(BitbucketError::Usage(format!(
+                    "unknown --export format '{other}' (expected slack|markdown)"
+                )))
+            }
         };
         crate::output::print_block(&text)?;
         Ok(())
@@ -312,7 +322,7 @@ async fn dispatch_pr(g: &GlobalArgs, action: PrAction) -> Result<()> {
             commands::pr::approve(&g, id, message.as_deref()).await
         }
         PrAction::Unapprove { id, g } => commands::pr::unapprove(&g, id).await,
-        PrAction::Decline { id, g } => commands::pr::decline(&g, id).await,
+        PrAction::Decline { id, yes, g } => commands::pr::decline(&g, id, yes).await,
         PrAction::Checkout { id, g } => commands::pr::checkout(&g, id).await,
         PrAction::Diff {
             id,
@@ -447,16 +457,19 @@ async fn dispatch_ci(action: CiAction) -> Result<()> {
             no_steps,
             g,
         } => commands::ci::list(&g, branch.as_deref(), limit, no_steps).await,
-        CiAction::Rerun { branch, g } => commands::ci::rerun(&g, branch.as_deref()).await,
+        CiAction::Rerun { branch, yes, g } => commands::ci::rerun(&g, branch.as_deref(), yes).await,
         CiAction::Trigger {
             branch,
             vars,
             secured,
             g,
         } => commands::ci::trigger(&g, branch.as_deref(), &vars, &secured).await,
-        CiAction::Stop { uuid, branch, g } => {
-            commands::ci::stop(&g, uuid.as_deref(), branch.as_deref()).await
-        }
+        CiAction::Stop {
+            uuid,
+            branch,
+            yes,
+            g,
+        } => commands::ci::stop(&g, uuid.as_deref(), branch.as_deref(), yes).await,
         CiAction::Steps { uuid, g } => commands::ci::steps(&g, uuid.as_deref()).await,
         CiAction::Tests {
             uuid,
@@ -738,9 +751,26 @@ async fn dispatch_deploy(action: DeployAction) -> Result<()> {
                     env_uuid,
                     key,
                     value,
+                    stdin,
                     secured,
                     g,
-                } => commands::deploy::set_env_var(&g, &env_uuid, &key, &value, secured).await,
+                } => {
+                    let value = match (value, stdin) {
+                        (Some(v), false) => v,
+                        (None, true) => commands::read_secret_stdin()?,
+                        (None, false) => {
+                            return Err(BitbucketError::Usage(
+                                "--value is required (or use --stdin)".into(),
+                            ))
+                        }
+                        (Some(_), true) => {
+                            return Err(BitbucketError::Usage(
+                                "--value and --stdin cannot be used together".into(),
+                            ))
+                        }
+                    };
+                    commands::deploy::set_env_var(&g, &env_uuid, &key, &value, secured).await
+                }
                 DeployEnvVarsAction::Delete { env_uuid, key, g } => {
                     commands::deploy::delete_env_var(&g, &env_uuid, &key).await
                 }

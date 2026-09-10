@@ -34,6 +34,9 @@ const MAX_RETRY_AFTER_SECS: u64 = 60;
 /// (worst case: one extra full fetch per path).
 const MAX_ETAG_CACHE_ENTRIES: usize = 256;
 
+/// Total bytes of cached response bodies we are willing to hold.
+const MAX_ETAG_CACHE_BYTES: usize = 8 * 1024 * 1024;
+
 #[derive(Clone)]
 struct CachedResponse {
     etag: String,
@@ -66,6 +69,100 @@ impl<T> Default for Paginated<T> {
             values: Vec::new(),
         }
     }
+}
+
+/// Maximum response body we will buffer into memory (32 MiB).
+///
+/// Pipeline logs, diffs and `bbr api --paginate` all stream remote-controlled
+/// bodies; without a cap a huge (or hostile) response OOM-kills the process.
+pub const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+
+/// Validate an API base URL before credentials are attached to it.
+///
+/// The `Authorization` header is sent to whatever host this points at, so a
+/// non-TLS base is a token-exfiltration path: anything able to set
+/// `BITBUCKET_API_BASE` in the environment (a CI job definition, a `.env`
+/// loader, a wrapper script, a container env) could redirect the token to a
+/// plaintext endpoint. Plain `http` is therefore allowed only for loopback
+/// hosts, which is what integration tests and a local proxy use.
+fn validate_api_base(base_url: &str) -> Result<()> {
+    let trimmed = base_url.trim();
+    let Some((scheme, rest)) = trimmed.split_once("://") else {
+        return Err(BitbucketError::Usage(format!(
+            "invalid API base URL '{base_url}': expected an https:// URL"
+        )));
+    };
+
+    // Authority is everything up to the first path/query/fragment separator.
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    // Strip any userinfo (`user:pass@host`) and port.
+    let host_port = authority.rsplit('@').next().unwrap_or(authority);
+    let host = if let Some(h) = host_port.strip_prefix('[') {
+        // IPv6 literal: `[::1]:8080`
+        h.split(']').next().unwrap_or_default().to_string()
+    } else {
+        host_port.split(':').next().unwrap_or_default().to_string()
+    };
+
+    match scheme.to_ascii_lowercase().as_str() {
+        "https" if !host.is_empty() => Ok(()),
+        "https" => Err(BitbucketError::Usage(format!(
+            "invalid API base URL '{base_url}': missing host"
+        ))),
+        "http" if is_loopback_host(&host) => Ok(()),
+        "http" => Err(BitbucketError::Usage(format!(
+            "refusing to send credentials over plaintext http to '{host}'.\n\
+             Use an https:// API base URL."
+        ))),
+        other => Err(BitbucketError::Usage(format!(
+            "unsupported API base scheme '{other}://': expected https://"
+        ))),
+    }
+}
+
+/// Whether `host` refers to the local machine.
+fn is_loopback_host(host: &str) -> bool {
+    matches!(
+        host.to_ascii_lowercase().as_str(),
+        "localhost" | "127.0.0.1" | "::1" | "0.0.0.0"
+    )
+}
+
+/// Read a response body into a `String`, refusing to buffer more than
+/// [`MAX_RESPONSE_BYTES`].
+///
+/// `Response::text()` has no size limit, so a multi-gigabyte pipeline log or a
+/// hostile endpoint would OOM the process. This checks the declared
+/// `Content-Length` up front and then enforces the cap again on every streamed
+/// chunk, so a chunked response with no declared length is still bounded.
+async fn read_body_capped(resp: reqwest::Response, path: &str) -> Result<String> {
+    if let Some(len) = resp.content_length() {
+        if len > MAX_RESPONSE_BYTES as u64 {
+            return Err(oversized_body_err(len as usize, path));
+        }
+    }
+    let mut stream = resp.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(BitbucketError::Http)?;
+        if buf.len() + chunk.len() > MAX_RESPONSE_BYTES {
+            return Err(oversized_body_err(buf.len() + chunk.len(), path));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    String::from_utf8(buf).map_err(|e| {
+        BitbucketError::Other(format!(
+            "response body for [{path}] is not valid UTF-8: {e}"
+        ))
+    })
+}
+
+fn oversized_body_err(size: usize, path: &str) -> BitbucketError {
+    BitbucketError::Other(format!(
+        "response body for [{path}] is {size} bytes, over the {} MiB cap; \
+         narrow the query or lower --limit",
+        MAX_RESPONSE_BYTES / (1024 * 1024)
+    ))
 }
 
 /// Bitbucket Cloud REST API v2 wrapper.
@@ -114,6 +211,7 @@ impl BitbucketClient {
 
     /// Construct a new client with a specific timeout in seconds.
     pub fn with_timeout(base_url: &str, creds: Credentials, timeout_secs: u64) -> Result<Self> {
+        validate_api_base(base_url)?;
         let raw = format!("{}:{}", creds.username, creds.secret.expose_secret());
         let encoded = base64_encode(raw.as_bytes());
         let auth_header = SecretString::from(format!("Basic {encoded}"));
@@ -169,7 +267,7 @@ impl BitbucketClient {
                 self.rate_limit_remaining
                     .store(n, std::sync::atomic::Ordering::Relaxed);
                 if n < RATE_LIMIT_WARN_THRESHOLD {
-                    tracing::warn!(
+                    crate::log_warn!(
                         "Bitbucket API rate limit low: {n} requests remaining (threshold {RATE_LIMIT_WARN_THRESHOLD})"
                     );
                 }
@@ -194,23 +292,38 @@ impl BitbucketClient {
     }
 
     /// Store an ETag and body from a response for future conditional GETs.
+    ///
+    /// The cache is bounded both by entry count and by total body bytes, so a
+    /// handful of very large responses cannot pin memory the way an
+    /// entry-count-only cap would allow.
     fn store_etag(&self, path: &str, headers: &reqwest::header::HeaderMap, body: &str) {
-        if let Some(etag) = headers.get(ETAG).and_then(|v| v.to_str().ok()) {
-            if !etag.is_empty() {
-                if let Ok(mut cache) = self.etag_cache.lock() {
-                    if cache.len() >= MAX_ETAG_CACHE_ENTRIES && !cache.contains_key(path) {
-                        cache.clear();
-                    }
-                    cache.insert(
-                        path.to_string(),
-                        CachedResponse {
-                            etag: etag.to_string(),
-                            body: body.to_string(),
-                        },
-                    );
-                }
+        let Some(etag) = headers.get(ETAG).and_then(|v| v.to_str().ok()) else {
+            return;
+        };
+        if etag.is_empty() {
+            return;
+        }
+        // A single body larger than the whole budget is not worth caching.
+        if body.len() > MAX_ETAG_CACHE_BYTES {
+            return;
+        }
+        let Ok(mut cache) = self.etag_cache.lock() else {
+            return;
+        };
+        if !cache.contains_key(path) {
+            let would_be = cache.len() + 1;
+            let bytes: usize = cache.values().map(|c| c.body.len()).sum();
+            if would_be > MAX_ETAG_CACHE_ENTRIES || bytes + body.len() > MAX_ETAG_CACHE_BYTES {
+                cache.clear();
             }
         }
+        cache.insert(
+            path.to_string(),
+            CachedResponse {
+                etag: etag.to_string(),
+                body: body.to_string(),
+            },
+        );
     }
 
     /// Compute the retry wait duration from a Retry-After header or backoff+jitter.
@@ -274,7 +387,7 @@ impl BitbucketClient {
                     }
                     attempt += 1;
                     let wait = Self::retry_wait(attempt, retry_after_secs);
-                    tracing::warn!("retrying in {wait:?} (attempt {attempt}) for {path}");
+                    crate::log_warn!("retrying in {wait:?} (attempt {attempt}) for {path}");
                     tokio::time::sleep(wait).await;
                 }
             }
@@ -372,7 +485,7 @@ impl BitbucketClient {
                     return Ok(RetryOutcome::Done(Ok(())));
                 }
 
-                let text = resp.text().await.map_err(BitbucketError::Http)?;
+                let text = read_body_capped(resp, &path).await?;
                 let err = map_error(status, &text, &path);
                 if Self::is_retryable_error(&err, &method) {
                     Ok(RetryOutcome::Retry {
@@ -575,7 +688,7 @@ impl BitbucketClient {
                 if status == StatusCode::RANGE_NOT_SATISFIABLE {
                     return Ok(RetryOutcome::Done(Ok((String::new(), true))));
                 }
-                let body = resp.text().await.map_err(BitbucketError::Http)?;
+                let body = read_body_capped(resp, &path).await?;
                 if status == StatusCode::PARTIAL_CONTENT {
                     return Ok(RetryOutcome::Done(Ok((body, true))));
                 }
@@ -635,7 +748,7 @@ impl BitbucketClient {
                     )))));
                 }
 
-                let body = resp.text().await.map_err(BitbucketError::Http)?;
+                let body = read_body_capped(resp, &path).await?;
                 if status.is_success() {
                     if method == Method::GET {
                         self.store_etag(&path, &headers, &body);
@@ -669,7 +782,7 @@ impl BitbucketClient {
             )));
         }
 
-        let text = resp.text().await.map_err(BitbucketError::Http)?;
+        let text = read_body_capped(resp, path).await?;
 
         if status.is_success() {
             self.store_etag(path, &headers, &text);
@@ -695,12 +808,12 @@ fn deserialize_body<T: DeserializeOwned>(text: &str, path: &str) -> Result<T> {
         return serde_json::from_str("null")
             .or_else(|_| serde_json::from_str("{}"))
             .map_err(|e| {
-                tracing::debug!("JSON decode failed for empty body ({path}): {e}");
+                crate::log_debug!("JSON decode failed for empty body ({path}): {e}");
                 BitbucketError::Json(e)
             });
     }
     serde_json::from_str(trimmed).map_err(|e| {
-        tracing::debug!("JSON decode failed ({path}): {trimmed:.200}");
+        crate::log_debug!("JSON decode failed ({path}): {trimmed:.200}");
         BitbucketError::Json(e)
     })
 }

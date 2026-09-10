@@ -13,8 +13,8 @@ use crate::cli::GlobalArgs;
 use crate::commands::notify as notify_backend;
 use crate::commands::notify::{parse_notify, NotifyKind};
 use crate::commands::{
-    client, confirm, current_head, human_duration, make_formatter, make_spinner, resolve_repo,
-    SpinnerGuard,
+    aborted, client, confirm_destructive, current_head, ensure_confirmable, human_duration,
+    make_formatter, make_spinner, resolve_repo, SpinnerGuard,
 };
 use crate::error::{BitbucketError, Result};
 use crate::output::table::Table;
@@ -168,12 +168,7 @@ pub async fn list(g: &GlobalArgs, branch: Option<&str>, limit: u32, no_steps: bo
     human.push_str(&format!("{}\n", theme.separator()));
     let mut table = Table::new().headers(["#", "State", "Step", "Duration"]);
     for p in &pips {
-        let state_label = match p.state.to_ascii_uppercase().as_str() {
-            "SUCCESSFUL" => theme.success(&p.state),
-            "FAILED" => theme.error(&p.state),
-            "IN_PROGRESS" | "PENDING" => theme.warn(&p.state),
-            _ => theme.dim(&p.state),
-        };
+        let state_label = theme.state_label(&p.state);
         if p.steps.is_empty() {
             table = table.add_row([
                 format!("#{}", p.build_number),
@@ -275,11 +270,12 @@ pub async fn watch(
         line_no: u64,
     }
 
-    let mut log_state: Option<std::collections::HashMap<String, StepLogState>> = if include_logs {
-        Some(std::collections::HashMap::new())
-    } else {
-        None
-    };
+    // Always present: it stays empty unless `include_logs`, and an empty map
+    // costs nothing. Keeping it unconditional removes the `Option` (and the
+    // `unwrap()`s that paired with it) so the "some iff include_logs"
+    // invariant cannot be broken by a later edit.
+    let mut log_state: std::collections::HashMap<String, StepLogState> =
+        std::collections::HashMap::new();
     // --from-offset resumes the first step that streams (the reconnect case);
     // subsequent steps start at byte 0.
     let mut resume_offset_remaining = from_offset;
@@ -315,7 +311,7 @@ pub async fn watch(
                     .find(|s| !s.is_terminal())
                     .or_else(|| steps.last())
                 {
-                    log_state.as_mut().unwrap().insert(
+                    log_state.insert(
                         target.uuid.clone(),
                         StepLogState {
                             offset: resume_offset_remaining,
@@ -330,8 +326,6 @@ pub async fn watch(
 
             for step in &steps {
                 let state = log_state
-                    .as_mut()
-                    .unwrap()
                     .entry(step.uuid.clone())
                     .or_insert_with(|| StepLogState {
                         offset: 0,
@@ -1145,7 +1139,15 @@ pub async fn tests(
     fmt.print(&out, &human)
 }
 
-pub async fn stop(g: &GlobalArgs, uuid: Option<&str>, branch: Option<&str>) -> Result<()> {
+pub async fn stop(
+    g: &GlobalArgs,
+    uuid: Option<&str>,
+    branch: Option<&str>,
+    yes: bool,
+) -> Result<()> {
+    if !confirm_destructive(g, yes, "Stop the running pipeline").await? {
+        return aborted();
+    }
     let repo = resolve_repo(g)?;
     let client = client(g)?;
     let pipeline_uuid = match uuid {
@@ -1177,7 +1179,10 @@ pub async fn stop(g: &GlobalArgs, uuid: Option<&str>, branch: Option<&str>) -> R
     )
 }
 
-pub async fn rerun(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
+pub async fn rerun(g: &GlobalArgs, branch: Option<&str>, yes: bool) -> Result<()> {
+    // Refuse before the first network call: a caller that forgot `--yes` must
+    // not have to wait for a round-trip to find out.
+    ensure_confirmable(yes, "Rerun the latest pipeline")?;
     let repo = resolve_repo(g)?;
     let branch = match branch {
         Some(b) => b.to_string(),
@@ -1193,18 +1198,19 @@ pub async fn rerun(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
         .ok_or_else(|| BitbucketError::NotFound(format!("no pipeline for branch '{branch}'")))?;
     spinner.finish();
 
-    if !g.json
-        && !confirm(&format!(
-            "Rerun pipeline #{} (current state: {}) for branch '{}'? [y/N] ",
+    if !confirm_destructive(
+        g,
+        yes,
+        &format!(
+            "Rerun pipeline #{} (current state: {}) for branch '{}'",
             pipeline.build_number,
             pipeline.state_name(),
             branch,
-        ))
-        .await?
+        ),
+    )
+    .await?
     {
-        let fmt = make_formatter(g);
-        fmt.print(&(), "Aborted.")?;
-        return Ok(());
+        return aborted();
     }
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));

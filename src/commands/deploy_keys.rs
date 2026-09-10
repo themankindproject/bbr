@@ -1,8 +1,8 @@
 //! `bbr deploy-keys` — repository deploy key management.
 use crate::cli::GlobalArgs;
 use crate::commands::{
-    client, confirm, make_formatter, make_spinner, resolve_repo, table_or_empty, truncate,
-    SpinnerGuard,
+    aborted, client, confirm_destructive, make_formatter, make_spinner, resolve_repo,
+    table_or_empty, truncate, SpinnerGuard,
 };
 use crate::error::{BitbucketError, Result};
 use crate::output::table::Table;
@@ -124,11 +124,8 @@ pub async fn view(g: &GlobalArgs, key_id: u64) -> Result<()> {
 }
 
 pub async fn delete(g: &GlobalArgs, key_id: u64, yes: bool) -> Result<()> {
-    if !yes {
-        let ok = confirm(&format!("Delete deploy key #{key_id}? [y/N] ")).await?;
-        if !ok {
-            return Ok(());
-        }
+    if !confirm_destructive(g, yes, &format!("Delete deploy key #{key_id}?")).await? {
+        return aborted();
     }
     let repo = resolve_repo(g)?;
     let client = client(g)?;

@@ -7,7 +7,167 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`bbr help <command>`** — the `help` subcommand is now enabled, so
+  `bbr help pr` and `bbr help pr merge` work alongside `bbr pr --help`.
+  Programmatic callers that prefer a subcommand over a flag no longer get a
+  usage error.
+- **`--yes` on the remaining destructive commands** — `pr decline`, `ci rerun`,
+  and `ci stop` now confirm before acting and accept `--yes`/`-y` to proceed
+  non-interactively. Previously they acted immediately, with no way to opt in
+  ahead of time and no way to make a script fail loudly.
+- **`deploy env vars set --stdin`** — read an environment-variable value from
+  stdin so secrets stay out of `ps` output and shell history. `--value` and
+  `--stdin` are mutually exclusive; a missing value is a usage error.
+- **`cargo binstall` metadata** (`[package.metadata.binstall]`) so
+  `cargo binstall bbr` fetches the right release archive per platform.
+- **Cargo-deny policy** (`deny.toml`) plus `cargo deny` and install-script
+  jobs in CI, and `scripts/install-smoke.sh`, which drives `install.sh`
+  end-to-end against a synthetic local release and asserts every fail-closed
+  branch.
+- **Package-manager manifests** — `scripts/gen-packages.sh` generates a
+  Homebrew formula, a Scoop manifest, and a winget manifest set from a release's
+  own `checksums.txt`, so a published manifest can never advertise a digest that
+  disagrees with the archive. A missing asset is a hard error rather than a
+  blank hash, and the script validates its own JSON/YAML output. The manifests
+  are attached to every GitHub release, and `docs/distribution.md` documents
+  each channel, the integrity guarantees, and how to enable the optional
+  registries.
+
+### Changed
+
+- **Destructive commands now share one confirmation contract.** Previously the
+  behaviour was inconsistent: some commands let `--json` silently bypass the
+  prompt while others did not, declined actions returned exit `0` with no
+  output, and a non-interactive run could read EOF, treat it as "no", and
+  report success for work that never happened. Now:
+  - `--yes` is the only way to consent non-interactively;
+  - `--json` selects an output format and **never** implies consent;
+  - declining prints `Aborted — nothing changed.` and exits non-zero;
+  - a destructive command with no `--yes` and no TTY (for example, a CI job or
+    a cron entry) is a **usage error (exit `64`)** with an actionable message,
+    instead of hanging or silently succeeding.
+
+  Consent is checked **before** the first network request. `pr merge`,
+  `deploy rollback`, `ci rerun`, and the `batch *` commands previously fetched
+  remote state (the PR title, the deployment history, the pipeline list) before
+  asking, so a caller that had forgotten `--yes` learned about it only after a
+  round-trip, as a confusing network failure. `batch *` still accepts
+  `--dry-run` without consent, since listing a plan changes nothing.
+- **Startup is faster on every command.** Argument parsing now happens before
+  the Tokio runtime is built, so `--help`, `--version`, and flag errors spawn no
+  threads; the runtime itself is current-thread rather than multi-thread, which
+  is sufficient for the bounded, I/O-bound concurrency bbr uses. The eager
+  `syntax::warm()` call that pre-loaded syntect's syntax set and themes on a
+  background thread for ~60 of 62 commands was removed — its documented
+  "100-300ms" saving was three orders of magnitude off the measured cost, and
+  it paid that cost on commands that never render a diff.
+- **The logging stack was replaced with a dependency-free logger.** bbr logs
+  from fifteen call sites, all of them plain format strings. `tracing` plus
+  `tracing-subscriber` (with `env-filter`) pulled in `matchers`,
+  `regex-automata`, `regex-syntax`, `sharded-slab`, `thread_local`, and
+  `nu-ansi-term`, and installed a global subscriber on every command, to serve
+  those lines. `src/logging.rs` does the same job in about sixty lines: the
+  release binary is **640 KB smaller** (10.55 MB → 9.91 MB) and the dependency
+  tree drops by **29 crates** (203 → 174). `-v`/`-vv` and `RUST_LOG` behave as
+  before, except that `RUST_LOG` now takes a bare level (`RUST_LOG=debug`)
+  rather than `target=level` directives — bbr is a single crate, so target
+  filtering had nothing to filter.
+- **`config.toml` is parsed once per process.** It was previously read and
+  parsed up to four times (theme init plus three context lookups). The cache is
+  invalidated on write, so `context use` still observes its own update.
+- **`bbr completion` honours `$SHELL`.** Generating completions without
+  `--install` used to default to Bash regardless of shell, silently emitting the
+  wrong dialect for zsh and fish users.
+- **Release matrix rebuilt.** Published targets are now
+  `x86_64/aarch64-unknown-linux-musl` (fully static, no glibc floor, runs on
+  Alpine), `x86_64/aarch64-unknown-linux-gnu` (built on Ubuntu 22.04 so the
+  glibc floor stays 2.35 rather than the 2.39 a `ubuntu-latest` runner imposes),
+  the two macOS targets, and `x86_64-pc-windows-msvc`. Every leg smoke-tests
+  the built binary, verifies the archive contents, and publishes a per-asset
+  `.sha256`. The `checksums` job is no longer gated on a tag push, so
+  workflow-dispatch releases are verifiable too, and it now also generates the
+  package-manager manifests from the checksums it just wrote. A post-release job
+  downloads the published artifacts and installs them inside `ubuntu:22.04` and
+  `alpine:3.20`.
+- **`install.sh` rewritten** to be fail-closed and honest about failure:
+  previously a missing `checksums.txt` or an unmatched entry **silently skipped
+  verification**, the aarch64 Linux branch requested an archive that was never
+  built, and archive extraction assumed the binary sat at the root. It now
+  verifies against the release's `checksums.txt` and aborts on a missing or
+  mismatched digest (`BBR_SKIP_CHECKSUM=1` opts out), prefers the musl build
+  with a gnu fallback, searches the archive for the binary, reports the exact
+  release URL when no asset matches, and prints a PATH export line when the
+  install directory is not already on `PATH`.
+- **`bbr update` refuses to overwrite a package-manager-owned binary.** When
+  `current_exe()` lives under Homebrew, Scoop, Nix, or a system prefix, the
+  command now exits `64` and names the correct upgrade command
+  (`brew upgrade bbr`, …) instead of replacing a file the package manager
+  believes it owns.
+- **`--limit` is bounded** to `1..=10000` at parse time. An unbounded `u32`
+  let a typo turn `--paginate` into billions of requests.
+- **README install instructions corrected.** The one-liner's platform support
+  now matches what is actually published, and the `cargo install bbr` footgun
+  is called out explicitly: the `bbr` name on crates.io belongs to an unrelated
+  crate, so that command installs the wrong tool.
+
 ### Fixed
+
+- **Command injection via `--notify command=…` (security).** The message was
+  interpolated raw into a shell command string, so a crafted pipeline step name
+  or branch name reached the shell unquoted and could execute arbitrary
+  commands. The message is now also passed as `BBR_NOTIFY_MESSAGE` in the
+  environment and the `%m` placeholder is single-quoted.
+- **Credential exfiltration via a plaintext API base (security).** `--api-base`
+  and `BITBUCKET_API_BASE` accepted any scheme and host, so pointing them at an
+  `http://` URL sent the Atlassian token in the clear. The base URL must now be
+  `https://`, with plain `http://` allowed only for loopback hosts so tests
+  still work.
+- **Terminal escape injection in rendered output (security).** Remote-controlled
+  strings (PR titles, branch names, commit messages) were written to the
+  terminal verbatim, so a crafted title could emit an OSC 52 sequence to set
+  the clipboard or clear the screen. Human output is now filtered through an
+  allow-list that preserves SGR colour codes and drops OSC, other CSI, C1, and
+  C0 control sequences.
+- **Credentials file could be written through a symlink.** The atomic write used
+  a predictable `<file>.tmp.<pid>` name; it now uses a randomly named temporary
+  file created with `O_EXCL` in the destination directory, so a pre-planted
+  symlink cannot redirect the write.
+- **Response bodies and the ETag cache are size-bounded.** Bodies are streamed
+  against a 32 MiB cap (checked against `Content-Length` up front and enforced
+  per chunk), and the ETag cache is bounded by both entry count and total bytes.
+  A hostile or misconfigured endpoint can no longer drive the process out of
+  memory.
+- **Self-update download is capped** at 256 MiB, and the Windows install path
+  restores the previous binary if the final rename fails instead of leaving no
+  `bbr.exe` behind.
+- **Runtime validation errors exit `64`.** Invalid `--state`, `--kind`,
+  `--priority`, `--env-type`, and `--strategy` values, an incomplete
+  `auth setup --username/--token` pair, and an out-of-range `--limit` are usage
+  errors and now exit `64` rather than the generic `1`.
+- **Closed value sets are validated by the parser.** `--state`, `--strategy`,
+  `--kind`, `--priority`, and `--env-type` now reject unknown values during
+  argument parsing, listing the accepted choices, instead of failing later with
+  a generic error.
+- **Body-source flags are mutually exclusive.** `--body`, `--body-file`, and
+  `--body-stdin` on `pr create` and `pr comment` are now a clap group, so
+  passing two is a usage error instead of a silent precedence rule.
+- **`ci logs --step/--failed/--latest` are mutually exclusive.** Combining them
+  is a usage error rather than a silent pick.
+- **`--active` and `--enabled` can be set to false.** `webhook create` and
+  `ci schedules create` declared `default_value_t = true` booleans, which clap
+  renders as a flag that can only ever turn the value *on*; there was no way to
+  create a disabled webhook or schedule. They are now `ArgAction::Set`, so
+  `--active=false` and `--enabled=false` parse. (`ci schedules update` already
+  accepted `--enabled=false` via `Option<bool>` and is unchanged.)
+- **A panic in a release build prints an actionable message.** With
+  `panic = "abort"` the default hook left users with `Aborted (core dumped)`;
+  a custom hook now prints the location, the message, and the issue tracker URL.
+- **`bbr update` changelog/version mismatch guard.** The release workflow now
+  refuses to publish when the git tag, `Cargo.toml` version, and `CHANGELOG.md`
+  heading disagree, and asserts that every matrix target is known to
+  `src/commands/update.rs`.
 
 - **CI log streaming no longer repeats or silently drops logs** — `ci watch --logs`
   and `ci tail` now preserve their byte offsets when a log request fails, and
@@ -38,7 +198,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   endpoint, so this re-deploys the target deployment's commit as a new change
   (the standard pattern); with no target it uses the deployment just before
   the current top of the environment's history. Confirms before acting
-  (`--yes`/`--json` skip); supports `--wait`.
+  (`--yes` skips); supports `--wait`.
 - **`bbr deploy list`** — the table now includes a `UUID` column (previously
   only available via `--json`).
 - **`bbr pr create --push`** — push the source branch to `origin` before
@@ -50,7 +210,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   commits since). The `--force` flag requires `--push`.
 - **`bbr pr comment delete <id> <comment-id>`** — delete a comment on a pull
   request (`DELETE .../comments/{comment_id}`). Destructive operations confirm
-  on a TTY; skip the prompt with `--yes` or run with `--json`. Note that
+  on a TTY; skip the prompt with `--yes`. Note that
   Bitbucket marks a comment with visible replies as deleted rather than
   removing it, to preserve the comment tree.
 - **`bbr ci watch --notify [BACKEND]` / `bbr ci tail --notify [BACKEND]`** —

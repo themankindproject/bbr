@@ -70,7 +70,7 @@ fn normalize_state(state: &str) -> Result<String> {
         "FAILED" | "FAILURE" | "ERROR" => Ok("FAILED".into()),
         "INPROGRESS" | "RUNNING" | "PENDING" => Ok("INPROGRESS".into()),
         "STOPPED" | "CANCELLED" | "CANCELED" => Ok("STOPPED".into()),
-        _ => Err(BitbucketError::Other(
+        _ => Err(BitbucketError::Usage(
             "invalid --state (expected successful|failed|inprogress|stopped)".into(),
         )),
     }

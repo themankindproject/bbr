@@ -32,6 +32,7 @@ pub mod update;
 pub mod webhook;
 pub mod workspace;
 
+use std::io::IsTerminal;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -381,6 +382,60 @@ pub async fn confirm(msg: &str) -> Result<bool> {
     })
     .await
     .map_err(|e| BitbucketError::Other(format!("confirm task panicked: {e}")))?
+}
+
+/// Refuse a destructive action that cannot obtain consent, *before* doing any
+/// work.
+///
+/// Commands that need remote data to phrase their prompt (the PR title, the
+/// target commit) still have to refuse before their first network call: a
+/// caller that forgot `--yes` must learn that immediately, not after a slow
+/// round-trip that ends in a confusing network error. Call this at the top of
+/// such a command, then call [`confirm_destructive`] once the details are in
+/// hand to run the actual prompt.
+pub fn ensure_confirmable(yes: bool, action: &str) -> Result<()> {
+    if yes || std::io::stdin().is_terminal() {
+        return Ok(());
+    }
+    Err(BitbucketError::Usage(format!(
+        "{action} needs confirmation, but stdin is not a terminal.\n\
+         Pass --yes to proceed non-interactively."
+    )))
+}
+
+/// Gate a destructive action on an explicit confirmation.
+///
+/// This is the single confirmation path for every irreversible command, so
+/// the prompt text and the failure mode stay consistent:
+///
+/// * `yes == true` (`--yes`) proceeds without prompting — the only
+///   non-interactive way to consent.
+/// * `--json` does **not** imply consent. It selects an output format, and
+///   silently approving a merge or a delete because the caller asked for JSON
+///   is how accidents happen.
+/// * When stdin is not a terminal and `--yes` was not passed, this is a
+///   **usage error (exit 64)** with an actionable message, instead of reading
+///   EOF (which used to look like a "no" and exit 0) or blocking forever.
+///
+/// Returns `Ok(false)` only when an interactive user actually declined; the
+/// caller must then call [`aborted`] so the run is not reported as success.
+pub async fn confirm_destructive(_g: &GlobalArgs, yes: bool, action: &str) -> Result<bool> {
+    if yes {
+        return Ok(true);
+    }
+    ensure_confirmable(yes, action)?;
+    confirm(&format!("{action}? [y/N] ")).await
+}
+
+/// Print the standard "nothing happened" notice for a declined action.
+///
+/// Every caller that got `Ok(false)` from [`confirm_destructive`] must return
+/// this, so a cancelled destructive command never exits 0 silently — a script
+/// checking `$?` would otherwise take the success branch for work that was
+/// never done.
+pub fn aborted() -> Result<()> {
+    eprintln!("Aborted — nothing changed.");
+    Ok(())
 }
 
 #[cfg(test)]

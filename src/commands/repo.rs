@@ -4,7 +4,8 @@ use serde::Serialize;
 
 use crate::cli::GlobalArgs;
 use crate::commands::{
-    client, make_formatter, make_spinner, resolve_repo, table_or_empty, truncate, SpinnerGuard,
+    aborted, client, confirm_destructive, make_formatter, make_spinner, resolve_repo,
+    table_or_empty, truncate, SpinnerGuard,
 };
 use crate::error::Result;
 use crate::output::table::Table;
@@ -222,11 +223,14 @@ pub async fn delete(g: &GlobalArgs, slug: &str, yes: bool) -> Result<()> {
     let ws = resolve_repo(g)?.workspace;
     let client = client(g)?;
 
-    if !yes
-        && !crate::commands::confirm(&format!("Delete {ws}/{slug}? This is permanent. (y/n): "))
-            .await?
+    if !confirm_destructive(
+        g,
+        yes,
+        &format!("Delete {ws}/{slug} — this is permanent and cannot be undone"),
+    )
+    .await?
     {
-        return Ok(());
+        return aborted();
     }
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));

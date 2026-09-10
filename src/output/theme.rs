@@ -133,7 +133,7 @@ impl Theme {
         let val = if force_color { 2u8 } else { 1u8 };
         COLOR_OVERRIDE.store(val, Ordering::Release);
         if THEME_INITIALIZED.load(Ordering::Acquire) {
-            tracing::warn!(
+            crate::log_warn!(
                 "set_color_override({}) called after Theme was already initialized; \
                  override will not take effect",
                 force_color
@@ -148,7 +148,7 @@ impl Theme {
         let val = if enable_unicode { 2u8 } else { 1u8 };
         UNICODE_OVERRIDE.store(val, Ordering::Release);
         if THEME_INITIALIZED.load(Ordering::Acquire) {
-            tracing::warn!(
+            crate::log_warn!(
                 "set_unicode_override({}) called after Theme was already initialized; \
                  override will not take effect",
                 enable_unicode
@@ -279,6 +279,35 @@ impl Theme {
             self.dim("[.]").into_owned()
         } else {
             self.dim("[?]").into_owned()
+        }
+    }
+
+    /// Color a pipeline/deployment/step state name for display.
+    ///
+    /// Kept beside [`Theme::status_glyph`] so the state vocabulary and its colors
+    /// live in one place: `ci list` used to re-derive this mapping inline, which
+    /// meant a new state (say `PAUSED`) would be colored in one view and not the
+    /// other.
+    pub fn state_label<'a>(&self, state: &'a str) -> Cow<'a, str> {
+        if matches_ignore_ascii_case(state, &["SUCCESSFUL", "SUCCESS", "PASSED"]) {
+            self.success(state)
+        } else if matches_ignore_ascii_case(state, &["FAILED", "ERROR"]) {
+            self.error(state)
+        } else if matches_ignore_ascii_case(
+            state,
+            &[
+                "STOPPED",
+                "CANCELLED",
+                "CANCELED",
+                "PAUSED",
+                "INPROGRESS",
+                "IN_PROGRESS",
+                "RUNNING",
+            ],
+        ) {
+            self.warn(state)
+        } else {
+            self.dim(state)
         }
     }
 }
@@ -416,6 +445,43 @@ mod tests {
             light_bg: false,
         };
         assert!(!t.colors_enabled());
+    }
+
+    #[test]
+    fn state_label_colors_the_whole_state_vocabulary() {
+        let plain = Theme {
+            colors: false,
+            unicode: true,
+            light_bg: false,
+        };
+        // With colors disabled the label is just the state back.
+        for state in ["SUCCESSFUL", "FAILED", "IN_PROGRESS", "PENDING", "weird"] {
+            assert_eq!(plain.state_label(state), state);
+        }
+
+        // The `colored` crate auto-disables when stdout is not a TTY (as in
+        // this test), so force it on for the colored assertions.
+        colored::control::set_override(true);
+        let colored = Theme {
+            colors: true,
+            unicode: true,
+            light_bg: false,
+        };
+        for state in ["SUCCESSFUL", "FAILED", "IN_PROGRESS", "PENDING", "weird"] {
+            let out = colored.state_label(state);
+            assert!(out.contains(state), "{state} should survive coloring");
+            assert!(out.contains('\u{1b}'), "{state} should be colored");
+        }
+        colored::control::unset_override();
+
+        // And with colors off, the label is the bare state — piped output and
+        // `--no-color` must stay byte-clean.
+        let plain = Theme {
+            colors: false,
+            unicode: true,
+            light_bg: false,
+        };
+        assert_eq!(plain.state_label("FAILED"), "FAILED");
     }
 
     #[test]

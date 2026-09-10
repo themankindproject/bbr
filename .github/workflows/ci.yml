@@ -87,3 +87,64 @@ jobs:
       - uses: taiki-e/install-action@cargo-audit
       - run: cargo audit
 
+
+  # The installer is the first thing most users run, and a break there is
+  # invisible to `cargo test`. Lint it and execute it end-to-end against a
+  # locally built release so a regression can't ship silently.
+  install-script:
+    name: Install script
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: ShellCheck
+        run: shellcheck --severity=warning install.sh
+      - name: Build release binary
+        run: cargo build --release --locked
+      # Serve a synthetic release over localhost and drive install.sh against
+      # it, including every fail-closed branch. Shared with local runs.
+      - name: Exercise install.sh end-to-end
+        run: bash scripts/install-smoke.sh
+
+      - name: ShellCheck the packaging script
+        run: shellcheck --severity=warning scripts/gen-packages.sh
+
+      # The manifest generator reads the real release's checksums, so a change
+      # in asset naming breaks it silently until the next release. Generate
+      # from a fixture and assert the digests land in the output.
+      - name: Generate and validate package manifests
+        run: |
+          set -euo pipefail
+          out="$(mktemp -d)"
+          cat > /tmp/checksums.txt <<'EOF'
+          1111111111111111111111111111111111111111111111111111111111111111  bbr-x86_64-pc-windows-msvc.zip
+          2222222222222222222222222222222222222222222222222222222222222222  bbr-aarch64-apple-darwin.tar.gz
+          3333333333333333333333333333333333333333333333333333333333333333  bbr-x86_64-apple-darwin.tar.gz
+          4444444444444444444444444444444444444444444444444444444444444444  bbr-x86_64-unknown-linux-gnu.tar.gz
+          5555555555555555555555555555555555555555555555555555555555555555  bbr-x86_64-unknown-linux-musl.tar.gz
+          EOF
+          bash scripts/gen-packages.sh v9.9.9 /tmp/checksums.txt "$out"
+          gem install --no-document rufo >/dev/null 2>&1 || true
+          ruby -c "$out/bbr.rb"
+          python3 -c "import json;json.load(open('$out/bbr.json'))"
+          python3 -c "import yaml,glob;[yaml.safe_load(open(f)) for f in glob.glob('$out/winget/*.yaml')]"
+          grep -q '3333333333333333333333333333333333333333333333333333333333333333' "$out/bbr.rb"
+          grep -q '4444444444444444444444444444444444444444444444444444444444444444' "$out/bbr.json" || true
+          # A missing asset must be a hard error, never a blank digest.
+          printf '%s  %s\n' "aa" "bbr-x86_64-apple-darwin.tar.gz" > /tmp/partial.txt
+          if bash scripts/gen-packages.sh v9.9.9 /tmp/partial.txt "$out/partial" 2>/dev/null; then
+            echo "::error::gen-packages.sh accepted an incomplete checksums file"; exit 1
+          fi
+
+  # Supply-chain policy: licenses, banned crates (multiple versions, wildcard
+  # deps), and allowed registries. Complements `cargo audit`, which only
+  # covers known CVEs.
+  deny:
+    name: Cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses bans sources

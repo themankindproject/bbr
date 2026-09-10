@@ -23,6 +23,18 @@ exclude = [
 name = "bbr"
 path = "src/main.rs"
 
+# `cargo binstall bbr` support. Asset naming must match release.yml exactly:
+#   bbr-<target>.tar.gz  (unix)   bbr-<target>.zip  (windows)
+# plus the per-asset `bbr-<target>.<ext>.sha256` we publish, which binstall
+# picks up automatically for checksum verification.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }{ archive-suffix }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
+
 [dependencies]
 # CLI
 clap = { version = "=4.5.6", features = ["derive", "env", "wrap_help"] }
@@ -31,7 +43,7 @@ clap_complete = "=4.5.4"
 # HTTP / async
 futures = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip", "http2", "stream"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["macros", "rt", "time"] }
 
 # Serde / JSON
 serde = { version = "1", features = ["derive"] }
@@ -40,8 +52,6 @@ toml = "0.8"
 
 # Errors / logging
 thiserror = "1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # Pretty output
 comfy-table = { version = "=7.1.4", features = ["custom_styling"] }
@@ -102,6 +112,9 @@ strip = "symbols"
 
 [profile.dev]
 opt-level = 1
+# Slimmer debug artifacts: line tables keep usable backtraces while
+# cutting debuginfo bloat in target/debug (see RUST_BUILD_CACHE policy).
+debug = "line-tables-only"
 
 [profile.dist]
 inherits = "release"

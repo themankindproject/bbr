@@ -3,7 +3,10 @@
 use crate::api::pr::{MergePrRequest, PrState};
 use crate::api::BitbucketClient;
 use crate::cli::GlobalArgs;
-use crate::commands::{client, confirm, make_formatter, make_spinner, resolve_repo, SpinnerGuard};
+use crate::commands::{
+    aborted, client, confirm_destructive, ensure_confirmable, make_formatter, make_spinner,
+    resolve_repo, SpinnerGuard,
+};
 use crate::error::Result;
 use crate::output::table::Table;
 use crate::output::theme::Theme;
@@ -76,6 +79,13 @@ pub async fn merge_approved(
     max: Option<usize>,
     min_approvals: u32,
 ) -> Result<()> {
+    // Refuse before the first network call: a caller that forgot `--yes` must
+    // not have to wait for a round-trip to find out. `--dry-run` still lists a
+    // plan first, so it does not need consent to proceed.
+    if !dry_run {
+        ensure_confirmable(yes, "Merge the approved pull requests")?;
+    }
+
     let client = client(g)?;
     let repo = resolve_repo(g)?;
     let slug = repo_arg.unwrap_or(&repo.slug);
@@ -190,14 +200,14 @@ pub async fn merge_approved(
         return Ok(());
     }
 
-    if !yes
-        && !confirm(&format!(
-            "Merge {} pull requests? (y/n): ",
-            approved_actions.len()
-        ))
-        .await?
+    if !confirm_destructive(
+        g,
+        yes,
+        &format!("Merge {} pull requests? (y/n): ", approved_actions.len()),
+    )
+    .await?
     {
-        return Ok(());
+        return aborted();
     }
 
     let mut succeeded = Vec::new();
@@ -249,6 +259,13 @@ pub async fn rerun_failed(
     yes: bool,
     max: Option<usize>,
 ) -> Result<()> {
+    // Refuse before the first network call: a caller that forgot `--yes` must
+    // not have to wait for a round-trip to find out. `--dry-run` still lists a
+    // plan first, so it does not need consent to proceed.
+    if !dry_run {
+        ensure_confirmable(yes, "Rerun the failed pipelines")?;
+    }
+
     let client = client(g)?;
     let repo = resolve_repo(g)?;
     let slug = repo_arg.unwrap_or(&repo.slug);
@@ -335,14 +352,14 @@ pub async fn rerun_failed(
         return Ok(());
     }
 
-    if !yes
-        && !confirm(&format!(
-            "Rerun {} pipelines? (y/n): ",
-            failed_actions.len()
-        ))
-        .await?
+    if !confirm_destructive(
+        g,
+        yes,
+        &format!("Rerun {} pipelines? (y/n): ", failed_actions.len()),
+    )
+    .await?
     {
-        return Ok(());
+        return aborted();
     }
 
     let mut succeeded = Vec::new();
@@ -388,6 +405,13 @@ pub async fn cleanup_merged_branches(
     yes: bool,
     max: Option<usize>,
 ) -> Result<()> {
+    // Refuse before the first network call: a caller that forgot `--yes` must
+    // not have to wait for a round-trip to find out. `--dry-run` still lists a
+    // plan first, so it does not need consent to proceed.
+    if !dry_run {
+        ensure_confirmable(yes, "Delete the merged branches")?;
+    }
+
     let client = client(g)?;
     let repo = resolve_repo(g)?;
     let slug = repo_arg.unwrap_or(&repo.slug);
@@ -467,14 +491,17 @@ pub async fn cleanup_merged_branches(
         return Ok(());
     }
 
-    if !yes
-        && !confirm(&format!(
+    if !confirm_destructive(
+        g,
+        yes,
+        &format!(
             "Delete/cleanup {} branch targets? (y/n): ",
             cleanup_actions.len()
-        ))
-        .await?
+        ),
+    )
+    .await?
     {
-        return Ok(());
+        return aborted();
     }
 
     let mut succeeded = Vec::new();

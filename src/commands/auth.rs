@@ -52,21 +52,21 @@ pub fn setup(username: Option<String>, token: Option<String>) -> Result<()> {
 
             let u = prompt("Bitbucket username (email): ")?;
             if u.trim().is_empty() {
-                return Err(BitbucketError::Other("username is required".into()));
+                return Err(BitbucketError::Usage("username is required".into()));
             }
             let s = prompt_secret("API token: ")?;
             if s.is_empty() {
-                return Err(BitbucketError::Other("secret is required".into()));
+                return Err(BitbucketError::Usage("secret is required".into()));
             }
             (u.trim().to_string(), s)
         }
         (Some(_), None) => {
-            return Err(BitbucketError::Other(
+            return Err(BitbucketError::Usage(
                 "--token is required when --username is provided".into(),
             ));
         }
         (None, Some(_)) => {
-            return Err(BitbucketError::Other(
+            return Err(BitbucketError::Usage(
                 "--username is required when --token is provided".into(),
             ));
         }

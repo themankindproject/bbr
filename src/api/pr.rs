@@ -22,7 +22,7 @@ impl PrState {
             "declined" => PrState::Declined,
             "all" => PrState::All,
             other => {
-                return Err(BitbucketError::Other(format!(
+                return Err(BitbucketError::Usage(format!(
                     "invalid --state '{other}' (expected open|merged|declined|all)"
                 )))
             }

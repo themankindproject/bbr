@@ -1,4 +1,4 @@
-//! `bbr completion install` — auto-wire shell completions.
+//! `bbr completion [--install]` — emit or auto-wire shell completions.
 
 use std::fmt::Write as FmtWrite;
 use std::fs;
@@ -44,7 +44,7 @@ pub fn install(shell: Option<Shell>) -> Result<()> {
     Ok(())
 }
 
-fn detect_shell() -> Shell {
+pub fn detect_shell() -> Shell {
     let shell = std::env::var("SHELL").unwrap_or_default();
     if shell.ends_with("zsh") {
         Shell::Zsh

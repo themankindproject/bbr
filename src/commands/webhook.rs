@@ -1,8 +1,8 @@
 //! `bbr webhook` — repository webhook management.
 use crate::cli::GlobalArgs;
 use crate::commands::{
-    client, confirm, make_formatter, make_spinner, resolve_repo, table_or_empty, truncate,
-    SpinnerGuard,
+    aborted, client, confirm_destructive, make_formatter, make_spinner, resolve_repo,
+    table_or_empty, truncate, SpinnerGuard,
 };
 use crate::error::{BitbucketError, Result};
 use crate::output::table::Table;
@@ -195,11 +195,8 @@ pub async fn update(
 }
 
 pub async fn delete(g: &GlobalArgs, uid: &str, yes: bool) -> Result<()> {
-    if !yes {
-        let ok = confirm(&format!("Delete webhook {uid}? [y/N] ")).await?;
-        if !ok {
-            return Ok(());
-        }
+    if !confirm_destructive(g, yes, &format!("Delete webhook {uid}?")).await? {
+        return aborted();
     }
     let repo = resolve_repo(g)?;
     let client = client(g)?;

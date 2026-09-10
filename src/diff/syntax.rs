@@ -15,21 +15,13 @@ fn syntax_set() -> &'static SyntaxSet {
     SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines)
 }
 
-/// Pre-load the syntax set + themes on a background thread.
+/// Fallback used only if syntect's bundled theme set is unexpectedly empty.
 ///
-/// `SyntaxSet::load_defaults_newlines` costs 100-300ms; calling this early
-/// (CLI startup) hides that latency behind the first network round-trip so
-/// `pr view --diff` doesn't pay it when rendering begins. Safe to call more
-/// than once — later calls are cheap no-ops once initialized.
-pub fn warm() {
-    std::thread::Builder::new()
-        .name("syntax-warm".into())
-        .spawn(|| {
-            let _ = syntax_set();
-            let _ = THEME_SET.get_or_init(ThemeSet::load_defaults);
-        })
-        .ok();
-}
+/// `ThemeSet::load_defaults` ships dozens of themes, so this is unreachable in
+/// practice — but with `panic = "abort"` in release builds, an `expect` here
+/// would mean a core dump rather than a degraded diff. A default (unstyled)
+/// theme still renders the diff, just without color.
+static FALLBACK_THEME: OnceLock<Theme> = OnceLock::new();
 
 fn theme() -> &'static Theme {
     let ts = THEME_SET.get_or_init(ThemeSet::load_defaults);
@@ -44,7 +36,7 @@ fn theme() -> &'static Theme {
     ts.themes
         .get(preferred)
         .or_else(|| ts.themes.values().next())
-        .expect("syntect default themes must include at least one theme")
+        .unwrap_or_else(|| FALLBACK_THEME.get_or_init(Theme::default))
 }
 
 fn syntax_for_path(path: &str) -> &'static syntect::parsing::SyntaxReference {
@@ -156,11 +148,15 @@ pub fn wrap_spans(spans: &[(Style, &str)], max_width: usize) -> Vec<Vec<(Style, 
                 rows.push(Vec::new());
                 w = 0;
             }
-            let row = rows.last_mut().expect("rows never empty");
-            match row.last_mut() {
-                // Extend the previous span when styles match (fewer escapes).
-                Some((s, t)) if *s == *style => t.push(ch),
-                _ => row.push((*style, ch.to_string())),
+            // `rows` starts with one element and is only ever pushed to, so
+            // this is always `Some`; written without `expect` so a future
+            // change cannot turn a rendering edge case into an abort.
+            if let Some(row) = rows.last_mut() {
+                match row.last_mut() {
+                    // Extend the previous span when styles match (fewer escapes).
+                    Some((s, t)) if *s == *style => t.push(ch),
+                    _ => row.push((*style, ch.to_string())),
+                }
             }
             w += cw;
         }

@@ -118,26 +118,35 @@ fn is_newer(latest: &str, current: &str) -> bool {
 // Target triple detection
 // ---------------------------------------------------------------------------
 
-fn current_target() -> Option<&'static str> {
+/// Release targets this platform can run, most-preferred first.
+///
+/// Must stay in sync with the `release.yml` build matrix (and with
+/// `install.sh`). Linux prefers the fully-static musl build, which has no
+/// glibc version floor and therefore runs on Alpine and every glibc distro;
+/// the gnu build is the fallback for older releases that predate musl
+/// artifacts.
+fn target_candidates() -> Vec<&'static str> {
     match (std::env::consts::ARCH, std::env::consts::OS) {
-        ("x86_64", "linux") => Some("x86_64-unknown-linux-gnu"),
-        ("aarch64", "linux") => Some("aarch64-unknown-linux-gnu"),
-        ("x86_64", "macos") => Some("x86_64-apple-darwin"),
-        ("aarch64", "macos") => Some("aarch64-apple-darwin"),
-        ("x86_64", "windows") => Some("x86_64-pc-windows-msvc"),
-        _ => None,
+        ("x86_64", "linux") => vec!["x86_64-unknown-linux-musl", "x86_64-unknown-linux-gnu"],
+        ("aarch64", "linux") => vec!["aarch64-unknown-linux-musl", "aarch64-unknown-linux-gnu"],
+        ("x86_64", "macos") => vec!["x86_64-apple-darwin"],
+        ("aarch64", "macos") => vec!["aarch64-apple-darwin"],
+        ("x86_64", "windows") => vec!["x86_64-pc-windows-msvc"],
+        ("aarch64", "windows") => vec!["aarch64-pc-windows-msvc"],
+        _ => Vec::new(),
     }
 }
 
-fn asset_name() -> Option<String> {
-    let target = current_target()?;
-    // release.yml packages Unix targets as .tar.gz and Windows as .zip —
-    // the asset name must match what the pipeline actually publishes.
-    if cfg!(windows) {
-        Some(format!("bbr-{target}.zip"))
-    } else {
-        Some(format!("bbr-{target}.tar.gz"))
-    }
+/// Release asset filenames this platform can install, most-preferred first.
+///
+/// `release.yml` packages Unix targets as `.tar.gz` and Windows as `.zip` —
+/// the names must match what the pipeline actually publishes.
+fn asset_candidates() -> Vec<String> {
+    let ext = if cfg!(windows) { "zip" } else { "tar.gz" };
+    target_candidates()
+        .into_iter()
+        .map(|t| format!("bbr-{t}.{ext}"))
+        .collect()
 }
 
 /// Name of the binary inside the release archive / on disk.
@@ -192,6 +201,11 @@ fn install_dir() -> Option<PathBuf> {
 // ---------------------------------------------------------------------------
 
 const GITHUB_API: &str = "https://api.github.com/repos/themankindproject/bbr/releases/latest";
+
+/// Hard ceiling on a self-update download (256 MiB). The release archive is
+/// a few MB; the cap exists so a hostile or broken server cannot make us
+/// allocate an arbitrary amount of memory from a forged `Content-Length`.
+const MAX_DOWNLOAD_BYTES: u64 = 256 * 1024 * 1024;
 const USER_AGENT: &str = concat!("bbr-update/", env!("CARGO_PKG_VERSION"));
 
 /// Shared HTTP client for update checks (reused across calls).
@@ -303,7 +317,62 @@ pub(crate) async fn outdated_version() -> Result<Option<String>> {
 // `bbr update` command
 // ---------------------------------------------------------------------------
 
+/// Detect a copy of `bbr` that a package manager owns, and refuse to
+/// overwrite it.
+///
+/// Self-update writes the new binary over `current_exe()`. When that path is
+/// Homebrew's Cellar, Scoop's apps directory, or a distro package's
+/// `/usr/bin`, replacing the file out from under the package manager leaves
+/// the system in a state where `brew upgrade`/`apt upgrade` will silently
+/// undo the change, or the package database and the file on disk disagree.
+/// Users should upgrade through the same channel that installed them.
+fn package_manager_owner(exe: &Path) -> Option<&'static str> {
+    let path = exe.to_string_lossy();
+    // Normalize separators so the Windows checks work on any host.
+    let lower = path.replace('\\', "/").to_ascii_lowercase();
+
+    if lower.contains("/cellar/") || lower.contains("/homebrew/") || lower.contains("/linuxbrew/") {
+        return Some("Homebrew");
+    }
+    if lower.contains("/scoop/apps/") || lower.contains("\\scoop\\") {
+        return Some("Scoop");
+    }
+    if lower.contains("/nix/store/") {
+        return Some("Nix");
+    }
+    // System-wide Unix prefixes are owned by apt/dnf/pacman.
+    if ["/usr/bin/", "/usr/local/bin/", "/bin/", "/snap/"]
+        .iter()
+        .any(|p| lower.starts_with(p))
+    {
+        return Some("your system package manager");
+    }
+    None
+}
+
+/// The command a user should run instead of `bbr update`, per channel.
+fn package_manager_hint(owner: &str) -> &'static str {
+    match owner {
+        "Homebrew" => "brew upgrade bbr",
+        "Scoop" => "scoop update bbr",
+        "Nix" => "nix profile upgrade bbr",
+        _ => "your package manager's upgrade command",
+    }
+}
+
 pub async fn run(g: &GlobalArgs, check_only: bool) -> Result<()> {
+    // Fail fast on a package-managed install, before any network work.
+    if !check_only {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(owner) = package_manager_owner(&exe) {
+                return Err(BitbucketError::Usage(format!(
+                    "this bbr was installed by {owner}, so it manages its own updates.\n                       Run `{}` instead.\n                       To force a self-update anyway, reinstall via:\n                         curl -fsSL https://github.com/themankindproject/bbr/raw/main/install.sh | bash",
+                    package_manager_hint(owner)
+                )));
+            }
+        }
+    }
+
     let loading =
         crate::commands::SpinnerGuard::new(crate::commands::make_spinner(g.json, g.quiet));
     loading.set_message("Checking for updates...");
@@ -418,21 +487,27 @@ async fn download_and_install(
     json: bool,
     quiet: bool,
 ) -> Result<()> {
-    let target_name = asset_name().ok_or_else(|| {
-        BitbucketError::Other(format!(
+    let candidates = asset_candidates();
+    if candidates.is_empty() {
+        return Err(BitbucketError::Other(format!(
             "Unsupported platform: {}-{}",
             std::env::consts::ARCH,
             std::env::consts::OS,
-        ))
-    })?;
-
-    let asset = release
-        .assets
+        )));
+    }
+    // Prefer musl on Linux but accept the gnu build when the release predates
+    // musl artifacts, instead of failing on a missing asset.
+    let asset = candidates
         .iter()
-        .find(|a| a.name == target_name)
+        .find_map(|name| release.assets.iter().find(|a| &a.name == name))
         .ok_or_else(|| {
-            BitbucketError::Other(format!("No release asset found for {target_name}"))
+            BitbucketError::Other(format!(
+                "No release asset found for {} (looked for: {})",
+                candidates[0],
+                candidates.join(", ")
+            ))
         })?;
+    let target_name = asset.name.clone();
 
     let dest_dir = install_dir().ok_or_else(|| {
         BitbucketError::Other(
@@ -476,8 +551,21 @@ async fn download_and_install(
     // Stream the download with a progress bar — multi-MB binaries on slow
     // links otherwise look like a hang.
     let total_size = resp.content_length();
+    // The declared length comes from the server, so it cannot be trusted for an
+    // allocation: reject an absurd size up front, and clamp the pre-allocation
+    // so a bogus `Content-Length` cannot abort the process before we ever get
+    // to verify the checksum.
+    if let Some(total) = total_size {
+        if total > MAX_DOWNLOAD_BYTES {
+            return Err(BitbucketError::Other(format!(
+                "Refusing to download {total} bytes for {target_name}:                  over the {} MiB limit.",
+                MAX_DOWNLOAD_BYTES / (1024 * 1024)
+            )));
+        }
+    }
     let mut stream = resp.bytes_stream();
-    let mut buf: Vec<u8> = Vec::with_capacity(total_size.unwrap_or(0) as usize);
+    let mut buf: Vec<u8> =
+        Vec::with_capacity(total_size.unwrap_or(0).min(MAX_DOWNLOAD_BYTES) as usize);
 
     let pb = if json || quiet || std::env::var_os("BBR_QUIET").is_some() {
         indicatif::ProgressBar::hidden()
@@ -507,6 +595,14 @@ async fn download_and_install(
     use futures::StreamExt;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(BitbucketError::Http)?;
+        // Enforce the cap on the streamed bytes too, so a chunked response
+        // with no declared length is still bounded.
+        if buf.len() as u64 + chunk.len() as u64 > MAX_DOWNLOAD_BYTES {
+            return Err(BitbucketError::Other(format!(
+                "Download of {target_name} exceeded the {} MiB limit.",
+                MAX_DOWNLOAD_BYTES / (1024 * 1024)
+            )));
+        }
         buf.extend_from_slice(&chunk);
         pb.set_position(buf.len() as u64);
     }
@@ -549,12 +645,12 @@ async fn download_and_install(
                     )));
                 }
                 verified = true;
-                tracing::debug!("SHA256 checksum verified for {target_name}");
+                crate::log_debug!("SHA256 checksum verified for {target_name}");
             } else {
-                tracing::warn!("Checksum file found but no entry for {target_name}");
+                crate::log_warn!("Checksum file found but no entry for {target_name}");
             }
         } else {
-            tracing::warn!(
+            crate::log_warn!(
                 "Checksum asset returned HTTP {}; could not verify",
                 cs_resp.status()
             );
@@ -714,13 +810,15 @@ fn extract_from_zip(
 ///
 /// On Windows the currently-running executable is locked against deletion or
 /// overwrite, so the old binary is first renamed out of the way (renaming a
-/// running .exe IS permitted). The stale `.old` copy from a previous update
-/// is removed best-effort.
+/// running .exe IS permitted). If the final move then fails (antivirus lock,
+/// disk full, permissions), the old binary is restored so a failed update can
+/// never leave the install with no `bbr.exe` at all.
 fn install_binary(tmp: tempfile::NamedTempFile, dest_path: &Path) -> Result<()> {
     #[cfg(windows)]
     {
+        let mut old_path = dest_path.to_path_buf();
+        let mut moved_aside = false;
         if dest_path.exists() {
-            let mut old_path = dest_path.to_path_buf();
             let mut old_name = dest_path
                 .file_name()
                 .map(|n| n.to_os_string())
@@ -735,17 +833,46 @@ fn install_binary(tmp: tempfile::NamedTempFile, dest_path: &Path) -> Result<()> 
                     dest_path.display()
                 ))
             })?;
+            moved_aside = true;
         }
+
+        if let Err(e) = tmp.persist(dest_path) {
+            if moved_aside {
+                // Put the working binary back: a failed update must not brick
+                // the tool.
+                if let Err(restore_err) = fs::rename(&old_path, dest_path) {
+                    return Err(BitbucketError::Other(format!(
+                        "Failed to install to {}: {}.\n\
+                         Could not restore the previous binary from {} either ({}). \
+                         Recover it manually by renaming that file to {}.",
+                        dest_path.display(),
+                        e.error,
+                        old_path.display(),
+                        restore_err,
+                        dest_path.display(),
+                    )));
+                }
+            }
+            return Err(BitbucketError::Other(format!(
+                "Failed to install to {}: {}. The previous binary was restored.",
+                dest_path.display(),
+                e.error
+            )));
+        }
+        return Ok(());
     }
 
-    tmp.persist(dest_path).map_err(|e| {
-        BitbucketError::Other(format!(
-            "Failed to install to {}: {}",
-            dest_path.display(),
-            e.error
-        ))
-    })?;
-    Ok(())
+    #[cfg(not(windows))]
+    {
+        tmp.persist(dest_path).map_err(|e| {
+            BitbucketError::Other(format!(
+                "Failed to install to {}: {}",
+                dest_path.display(),
+                e.error
+            ))
+        })?;
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -811,6 +938,55 @@ fn env_flag_enabled(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_package_manager_owned_paths() {
+        // Homebrew (macOS + Linuxbrew)
+        assert_eq!(
+            package_manager_owner(Path::new("/opt/homebrew/Cellar/bbr/0.2.5/bin/bbr")),
+            Some("Homebrew")
+        );
+        assert_eq!(
+            package_manager_owner(Path::new("/home/linuxbrew/.linuxbrew/bin/bbr")),
+            Some("Homebrew")
+        );
+        // Scoop
+        assert_eq!(
+            package_manager_owner(Path::new(r"C:\Users\me\scoop\apps\bbr\current\bbr.exe")),
+            Some("Scoop")
+        );
+        // Nix
+        assert_eq!(
+            package_manager_owner(Path::new("/nix/store/abc123-bbr-0.2.5/bin/bbr")),
+            Some("Nix")
+        );
+        // Distro packages
+        assert_eq!(
+            package_manager_owner(Path::new("/usr/bin/bbr")),
+            Some("your system package manager")
+        );
+        assert_eq!(
+            package_manager_owner(Path::new("/usr/local/bin/bbr")),
+            Some("your system package manager")
+        );
+    }
+
+    #[test]
+    fn allows_self_managed_install_paths() {
+        // The install.sh destination and cargo-install destinations.
+        assert_eq!(
+            package_manager_owner(Path::new("/home/me/.local/bin/bbr")),
+            None
+        );
+        assert_eq!(
+            package_manager_owner(Path::new("/home/me/.cargo/bin/bbr")),
+            None
+        );
+        assert_eq!(
+            package_manager_owner(Path::new("/home/me/.local/share/bbr/bin/bbr")),
+            None
+        );
+    }
 
     #[test]
     fn parse_version_strips_v_prefix() {
@@ -988,7 +1164,7 @@ abc123def456abc123def456abc123def456abc123def456abc123def456abcd  bbr-x86_64-unk
     fn asset_name_matches_platform_archive_format() {
         // release.yml ships .zip for Windows and .tar.gz elsewhere; the
         // updater must look for exactly what the pipeline publishes.
-        if let Some(name) = asset_name() {
+        for name in asset_candidates() {
             if cfg!(windows) {
                 assert!(
                     name.ends_with(".zip"),
@@ -1000,6 +1176,31 @@ abc123def456abc123def456abc123def456abc123def456abc123def456abcd  bbr-x86_64-unk
                     "unix asset must be tar.gz: {name}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn linux_prefers_musl_and_falls_back_to_gnu() {
+        if cfg!(target_os = "linux") {
+            let c = asset_candidates();
+            assert!(
+                c[0].contains("musl"),
+                "linux should prefer the static musl build, got {c:?}"
+            );
+            assert!(
+                c.iter().any(|n| n.contains("gnu")),
+                "gnu must remain as a fallback for older releases: {c:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_platform_has_no_candidates() {
+        // Sanity-check that the table is exhaustive for the platforms we
+        // actually ship, so a new target cannot silently go missing.
+        let c = asset_candidates();
+        if matches!(std::env::consts::OS, "linux" | "macos" | "windows") {
+            assert!(!c.is_empty(), "shipped OS must have at least one asset");
         }
     }
 

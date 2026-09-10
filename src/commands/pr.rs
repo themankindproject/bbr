@@ -13,8 +13,8 @@ use crate::api::status::BuildStatus;
 use crate::api::BitbucketClient;
 use crate::cli::GlobalArgs;
 use crate::commands::{
-    client, confirm, current_head, make_formatter, make_spinner, resolve_body, resolve_repo,
-    truncate, SpinnerGuard,
+    aborted, client, confirm_destructive, current_head, ensure_confirmable, make_formatter,
+    make_spinner, resolve_body, resolve_repo, truncate, SpinnerGuard,
 };
 use crate::error::{BitbucketError, Result};
 use crate::git;
@@ -509,14 +509,8 @@ pub async fn comment_delete(g: &GlobalArgs, id: u64, comment_id: u64, yes: bool)
     let client = client(g)?;
 
     // Destructive: confirm unless --yes or JSON mode (mirrors `pr merge`).
-    if !yes
-        && !g.json
-        && !confirm(&format!("Delete comment {comment_id} on PR #{id}? [y/N] ")).await?
-    {
-        let fmt = make_formatter(g);
-        let human = "Aborted.".to_string();
-        fmt.print(&(), &human)?;
-        return Ok(());
+    if !confirm_destructive(g, yes, &format!("Delete comment {comment_id} on PR #{id}")).await? {
+        return aborted();
     }
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
@@ -897,7 +891,10 @@ pub async fn unapprove(g: &GlobalArgs, id: u64) -> Result<()> {
     )
 }
 
-pub async fn decline(g: &GlobalArgs, id: u64) -> Result<()> {
+pub async fn decline(g: &GlobalArgs, id: u64, yes: bool) -> Result<()> {
+    if !confirm_destructive(g, yes, &format!("Decline PR #{id} (cannot be undone)")).await? {
+        return aborted();
+    }
     let repo = resolve_repo(g)?;
     let client = client(g)?;
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
@@ -917,6 +914,10 @@ pub async fn merge(
     message: Option<&str>,
     yes: bool,
 ) -> Result<()> {
+    // Refuse before the first network call: a caller that forgot `--yes` must
+    // not have to wait for a round-trip to find out.
+    ensure_confirmable(yes, &format!("Merge PR #{id}"))?;
+
     let repo = resolve_repo(g)?;
     let client = client(g)?;
 
@@ -935,21 +936,20 @@ pub async fn merge(
     let pr = client.get_pr(&repo.workspace, &repo.slug, id).await?;
     spinner.finish();
 
-    if !yes
-        && !g.json
-        && !confirm(&format!(
-            "Merge PR #{} ({}) from {} into {}? [y/N] ",
+    if !confirm_destructive(
+        g,
+        yes,
+        &format!(
+            "Merge PR #{} ({}) from {} into {}",
             pr.id,
             pr.title,
             empty_as_unknown(pr.source_branch()),
             empty_as_unknown(pr.destination_branch()),
-        ))
-        .await?
+        ),
+    )
+    .await?
     {
-        let fmt = make_formatter(g);
-        let human = "Aborted.".to_string();
-        fmt.print(&(), &human)?;
-        return Ok(());
+        return aborted();
     }
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));

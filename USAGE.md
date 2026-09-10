@@ -560,21 +560,24 @@ bbr ci trigger --branch main --var DEPLOY_ENV=staging --json
 
 #### `bbr ci rerun`
 
-Rerun the latest pipeline for a branch.
+Rerun the latest pipeline for a branch. Confirms first; `--yes` skips the
+prompt (required when stdin is not a terminal).
 
 ```bash
 bbr ci rerun                         # current branch
 bbr ci rerun --branch main
+bbr ci rerun --branch main --yes     # non-interactive
 ```
 
 #### `bbr ci stop`
 
-Stop a running pipeline.
+Stop a running pipeline. Confirms first; `--yes` skips the prompt.
 
 ```bash
 bbr ci stop                          # latest running pipeline on current branch
 bbr ci stop <uuid>                   # specific pipeline UUID
 bbr ci stop --branch main
+bbr ci stop --yes                    # non-interactive
 ```
 
 #### `bbr ci tests`
@@ -614,10 +617,12 @@ bbr ci logs --failed                 # require a failed step
 bbr ci logs --latest                 # latest step from latest pipeline
 bbr ci logs <uuid>                   # first step's log for a pipeline
 bbr ci logs <uuid> --failed          # failed step for a pipeline
-bbr ci logs <uuid> --step <step-uuid> # specific step UUID
-bbr ci logs <uuid> --step "Run Tests" # specific step name
+bbr ci logs <uuid> --step <step-uuid> # specific step UUID or name
 bbr ci logs --output ./pipeline.log  # write log to file (not stdout)
 ```
+
+`--step`, `--failed`, and `--latest` are mutually exclusive; passing more than
+one is a usage error (exit `64`) rather than a silent precedence rule.
 
 #### `bbr ci compare`
 
@@ -921,7 +926,7 @@ so a slow deploy is not mistaken for a failure).
 deployment's commit as a *new* change in the environment (Bitbucket's standard
 rollback pattern). With no target it uses the deployment just before the
 current top of the environment's history. It confirms before re-deploying
-(`--yes`/`--json` skip the prompt) and supports the same `--wait` flags as
+(`--yes` skips the prompt) and supports the same `--wait` flags as
 `trigger`.
 
 #### Environment variables
@@ -1144,6 +1149,41 @@ Platform paths:
 
 ---
 
+## Confirmations & Non-Interactive Use
+
+Every destructive command (`pr merge`, `pr decline`, `pr comment delete`,
+`repo delete`, `webhook delete`, `deploy-keys delete`, `ci schedules delete`,
+`ci rerun`, `ci stop`, `deploy rollback`, `batch *`, `stack land|abort`) runs
+through one confirmation path with consistent rules:
+
+| Situation | Behaviour |
+|-----------|-----------|
+| `--yes` passed | Proceeds without prompting. |
+| Interactive TTY, no `--yes` | Prompts on **stderr**; `y`/`yes` proceeds, anything else declines. |
+| **No TTY**, no `--yes` | **Exits `64`** (usage error) with `Pass --yes to proceed non-interactively.` |
+| User declines | Prints `Aborted — nothing changed.` and exits non-zero. |
+
+`--json` selects an **output format only** — it never implies consent. A script
+that asks for JSON still must pass `--yes` to perform a destructive action.
+
+```bash
+bbr pr merge 467 --yes            # non-interactive: approved explicitly
+bbr repo delete old-repo --yes --json
+```
+
+Because a missing `--yes` on a non-TTY is a usage error rather than a silent
+success, a CI job that forgets the flag fails loudly instead of hanging on a
+prompt or reporting success for work that never happened.
+
+Commands that need remote data to phrase their prompt (`pr merge` names the PR
+title and branches, `deploy rollback` names the target commit) check for
+consent **before** their first network request, so a caller that forgot `--yes`
+is told immediately rather than after a slow round-trip ends in a network
+error. `batch *` accepts `--dry-run` without consent, since listing the plan
+changes nothing.
+
+---
+
 ## Exit Codes
 
 | Code | Meaning |
@@ -1154,7 +1194,7 @@ Platform paths:
 | 3 | not found |
 | 4 | rate limited |
 | 5 | pipeline failed (`bbr ci watch`) or deployment failed (`bbr deploy view --wait` / `bbr deploy trigger --wait`) |
-| 64 | usage error (invalid flags/arguments — distinct from operation failures) |
+| 64 | usage error (invalid flags/arguments, or a destructive command without `--yes` on a non-interactive stdin) |
 
 Exit codes are a stable public contract — scripts can branch on `$?`. Usage
 errors (unknown flags, invalid values) exit with `64` (BSD sysexits) so they
@@ -1260,4 +1300,4 @@ Exit codes are stable — scripts can branch on `$?`.
 | `CLICOLOR_FORCE` | Force color on (unless `0`) | — |
 | `CLICOLOR` | Set to `0` to disable color | — |
 | `XDG_CONFIG_HOME` | Config directory (Linux) | `~/.config` |
-| `RUST_LOG` | Tracing log filter (overrides `--verbose`) | — |
+| `RUST_LOG` | Log level: `off`, `error`, `warn`, `info`, `debug`, `trace` (overrides `--verbose`) | — |

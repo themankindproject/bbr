@@ -3,7 +3,8 @@
 use crate::api::pipeline::PipelineSchedule;
 use crate::cli::GlobalArgs;
 use crate::commands::{
-    client, confirm, make_formatter, make_spinner, resolve_repo, table_or_empty, SpinnerGuard,
+    aborted, client, confirm_destructive, make_formatter, make_spinner, resolve_repo,
+    table_or_empty, SpinnerGuard,
 };
 use crate::error::Result;
 use crate::output::table::Table;
@@ -154,12 +155,8 @@ pub async fn update(
 }
 
 pub async fn delete(g: &GlobalArgs, uuid: &str, yes: bool) -> Result<()> {
-    if !yes {
-        let confirmed = confirm(&format!("Delete schedule {uuid}? [y/N] ")).await?;
-        if !confirmed {
-            eprintln!("Aborted.");
-            return Ok(());
-        }
+    if !confirm_destructive(g, yes, &format!("Delete schedule {uuid}?")).await? {
+        return aborted();
     }
 
     let repo = resolve_repo(g)?;

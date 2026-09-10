@@ -99,13 +99,48 @@ async fn ci_url(g: &GlobalArgs, branch: Option<&str>) -> Result<(String, String)
     Ok(("ci".into(), url))
 }
 
+/// Whether a URL is safe to hand to an external opener.
+///
+/// The URL may come straight from an API response (`links.html.href`), so it
+/// is untrusted input. Only `http`/`https` are allowed: a `file://`, a
+/// `javascript:` or an option-shaped string like `--version` must never reach
+/// `xdg-open`/`open`/`cmd start`.
+fn is_safe_browser_url(url: &str) -> bool {
+    let trimmed = url.trim();
+    // Reject anything that could be parsed as an option rather than a URL.
+    if trimmed.starts_with('-') {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let rest = if let Some(r) = lower.strip_prefix("https://") {
+        r
+    } else if let Some(r) = lower.strip_prefix("http://") {
+        r
+    } else {
+        return false;
+    };
+    // Must have a non-empty host and no characters that shell/opener tools
+    // treat specially.
+    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    !host.is_empty()
+        && !host.starts_with(':')
+        && !trimmed
+            .chars()
+            .any(|c| c.is_control() || c == '"' || c == '|' || c == '^' || c == '&')
+}
+
 async fn open_url(url: &str) -> Result<bool> {
+    if !is_safe_browser_url(url) {
+        return Err(BitbucketError::Other(format!(
+            "refusing to open '{url}': not an http(s) URL"
+        )));
+    }
     let url = url.to_string();
     tokio::task::spawn_blocking(move || {
         let status = match opener_command(&url).status() {
             Ok(s) => s,
             Err(e) => {
-                tracing::debug!("failed to launch browser opener: {e}");
+                crate::log_debug!("failed to launch browser opener: {e}");
                 return Ok(false);
             }
         };
@@ -118,14 +153,21 @@ async fn open_url(url: &str) -> Result<bool> {
 #[cfg(target_os = "macos")]
 fn opener_command(url: &str) -> std::process::Command {
     let mut cmd = std::process::Command::new("open");
-    cmd.arg(url);
+    // `--` stops `open` from treating a URL as a flag.
+    cmd.arg("--").arg(url);
     cmd
 }
 
+/// Windows: use `ShellExecuteW` via `rundll32`-free path.
+///
+/// `cmd /C start "" <url>` is a command-injection sink: `cmd.exe` re-parses
+/// the argument, so `&`, `|`, `^` and `"` in an attacker-supplied
+/// `links.html.href` execute commands. `explorer.exe` receives the URL as a
+/// single opaque argument and does not run a command interpreter.
 #[cfg(target_os = "windows")]
 fn opener_command(url: &str) -> std::process::Command {
-    let mut cmd = std::process::Command::new("cmd");
-    cmd.args(["/C", "start", "", url]);
+    let mut cmd = std::process::Command::new("explorer");
+    cmd.arg(url);
     cmd
 }
 
@@ -139,6 +181,37 @@ fn opener_command(url: &str) -> std::process::Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepts_http_and_https() {
+        assert!(is_safe_browser_url("https://bitbucket.org/ws/r"));
+        assert!(is_safe_browser_url("http://127.0.0.1:8080/x"));
+        assert!(is_safe_browser_url("  https://x.com/y  "));
+    }
+
+    #[test]
+    fn rejects_non_http_schemes() {
+        assert!(!is_safe_browser_url("file:///etc/passwd"));
+        assert!(!is_safe_browser_url("javascript:alert(1)"));
+        assert!(!is_safe_browser_url("ftp://x/y"));
+        assert!(!is_safe_browser_url("not a url"));
+    }
+
+    #[test]
+    fn rejects_option_shaped_and_injection_payloads() {
+        // `xdg-open --version` would be a flag, not a URL.
+        assert!(!is_safe_browser_url("--version"));
+        assert!(!is_safe_browser_url("-a"));
+        // Windows `cmd /C start` injection payloads.
+        assert!(!is_safe_browser_url("https://x&calc.exe"));
+        assert!(!is_safe_browser_url("https://x|calc"));
+        assert!(!is_safe_browser_url("https://x^y"));
+        assert!(!is_safe_browser_url("https://x\"y"));
+        assert!(!is_safe_browser_url("https://x\x1by"));
+        // Missing host.
+        assert!(!is_safe_browser_url("https://"));
+        assert!(!is_safe_browser_url("https:///path"));
+    }
 
     #[test]
     fn open_out_serializes_correctly() {

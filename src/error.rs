@@ -19,6 +19,10 @@ pub enum ExitCode {
     NotFound = 3,
     RateLimit = 4,
     PipelineFailed = 5,
+    /// Invalid user input detected after clap parsing (e.g. a value that
+    /// clap could not constrain, or a missing required combination).
+    /// Matches `USAGE_ERROR_EXIT` in `cli.rs` so scripts see one contract.
+    Usage = 64,
 }
 
 impl ExitCode {
@@ -84,6 +88,13 @@ pub enum BitbucketError {
     #[error("bad request: {0}")]
     BadRequest(String),
 
+    /// Invalid usage detected at runtime — the user passed a value or a
+    /// flag combination that is wrong before any network call. Maps to the
+    /// documented exit code 64 so scripts can distinguish "typed it wrong"
+    /// from "the operation failed".
+    #[error("{0}")]
+    Usage(String),
+
     /// A 5xx server error, carrying the HTTP status so retry logic can
     /// branch on the code structurally instead of string-matching message
     /// text (which breaks silently if error formatting ever changes).
@@ -104,6 +115,7 @@ impl BitbucketError {
             BitbucketError::RateLimit(_) => ExitCode::RateLimit,
             BitbucketError::PipelineFailed { .. } => ExitCode::PipelineFailed,
             BitbucketError::DeployFailed { .. } => ExitCode::PipelineFailed,
+            BitbucketError::Usage(_) => ExitCode::Usage,
             BitbucketError::Server { source, .. } => source.exit_code(),
             _ => ExitCode::Generic,
         }
@@ -124,6 +136,7 @@ impl BitbucketError {
             BitbucketError::DeployFailed { .. } => "deploy_failed",
             BitbucketError::Other(_) => "generic",
             BitbucketError::BadRequest(_) => "bad_request",
+            BitbucketError::Usage(_) => "usage",
             BitbucketError::Server { .. } => "server",
         }
     }
@@ -156,6 +169,10 @@ fn hints(e: &BitbucketError) -> Vec<String> {
         }
         BitbucketError::NotFound(_) => {
             out.push("double-check the ID / name, or the workspace and repo slug.".into());
+            out.push(
+                "if you are sure it exists, your token may be missing a scope — run `bbr doctor`."
+                    .into(),
+            );
         }
         BitbucketError::Git(msg) => {
             if msg.contains("no git remote") {
@@ -194,10 +211,32 @@ fn hints(e: &BitbucketError) -> Vec<String> {
         BitbucketError::BadRequest(_) => {
             out.push("check the arguments you passed — the API rejected the request.".into());
         }
+        BitbucketError::DeployFailed {
+            deployment,
+            state,
+            environment,
+        } => {
+            out.push(format!("deployment {deployment} ended in state {state}."));
+            if let Some(env) = environment {
+                out.push(format!("environment: {env}"));
+            }
+            out.push("run `bbr deploy list` to see recent deployments.".into());
+            out.push("run `bbr deploy view <uuid>` for the deployment detail.".into());
+        }
+        BitbucketError::Usage(_) => {
+            out.push("run `bbr --help`, or `bbr <command> --help`, for valid usage.".into());
+        }
         BitbucketError::Server { .. } => {
             out.push("the Bitbucket API had a server-side error; retrying usually helps.".into());
         }
-        _ => {}
+        BitbucketError::Json(_) => {
+            out.push("the API returned an unexpected payload.".into());
+            out.push("run `bbr doctor`, and upgrade bbr if the problem persists.".into());
+        }
+        BitbucketError::Io(_) | BitbucketError::Other(_) => {
+            out.push("run `bbr doctor` to check your environment.".into());
+            out.push("re-run with -v for more detail.".into());
+        }
     }
     out
 }
@@ -335,7 +374,18 @@ mod tests {
         assert!(!hints(&BitbucketError::BadRequest("x".into())).is_empty());
         assert!(!hints(&BitbucketError::Git("no git remote found".into())).is_empty());
         assert!(!hints(&BitbucketError::Git("HEAD is detached".into())).is_empty());
-        assert!(hints(&BitbucketError::Other("x".into())).is_empty());
+        assert!(!hints(&BitbucketError::Other("x".into())).is_empty());
+        assert!(!hints(&BitbucketError::Json(
+            serde_json::from_str::<serde_json::Value>("{").unwrap_err()
+        ))
+        .is_empty());
+        assert!(!hints(&BitbucketError::Usage("x".into())).is_empty());
+        assert!(!hints(&BitbucketError::DeployFailed {
+            deployment: "d".into(),
+            state: "FAILED".into(),
+            environment: Some("prod".into()),
+        })
+        .is_empty());
     }
 
     #[test]

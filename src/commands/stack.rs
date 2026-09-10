@@ -3,7 +3,8 @@
 use crate::api::pr::{CreateBranchRef, CreateNamed, CreatePrRequest, MergePrRequest};
 use crate::cli::GlobalArgs;
 use crate::commands::{
-    client, confirm, current_head, make_formatter, make_spinner, resolve_repo, SpinnerGuard,
+    aborted, client, confirm_destructive, current_head, make_formatter, make_spinner, resolve_repo,
+    SpinnerGuard,
 };
 use crate::error::{BitbucketError, Result};
 use crate::output::theme::Theme;
@@ -345,14 +346,17 @@ pub async fn land(g: &GlobalArgs, strategy: Option<&str>, yes: bool) -> Result<(
     let client = client(g)?;
     let repo = resolve_repo(g)?;
 
-    if !yes
-        && !confirm(&format!(
+    if !confirm_destructive(
+        g,
+        yes,
+        &format!(
             "Merge and land {} stacked pull requests bottom-up? (y/n): ",
             stack.prs.len()
-        ))
-        .await?
+        ),
+    )
+    .await?
     {
-        return Ok(());
+        return aborted();
     }
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
@@ -410,14 +414,17 @@ pub async fn abort(g: &GlobalArgs, yes: bool) -> Result<()> {
     let config = StackConfig::load()?;
     let stack = config.active_stack()?.clone();
 
-    if !yes
-        && !confirm(&format!(
+    if !confirm_destructive(
+        g,
+        yes,
+        &format!(
             "Decline all PRs and delete branches for stack '{}'? (y/n): ",
             stack.name
-        ))
-        .await?
+        ),
+    )
+    .await?
     {
-        return Ok(());
+        return aborted();
     }
 
     let client = client(g)?;

@@ -186,50 +186,36 @@ pub fn save_credentials(creds: &CredentialsFile) -> Result<PathBuf> {
 
 /// Write `contents` to `path` with mode 0600 on Unix, atomically.
 ///
-/// The content lands in a temp file in the same directory (created 0600 so
-/// it is never readable by others, even transiently) and is then renamed
-/// over the target. A crash or SIGKILL mid-write therefore leaves either
-/// the old file or the new file intact — never a truncated credential file.
+/// The content lands in a temp file in the same directory (created 0600 and
+/// with `O_EXCL`, so it is never readable by others and a pre-planted symlink
+/// at the temp path cannot redirect the write) and is then renamed over the
+/// target. A crash or SIGKILL mid-write therefore leaves either the old file
+/// or the new file intact — never a truncated credential file.
 fn write_private(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
     use std::io::Write;
 
-    let mut tmp_path = path.to_path_buf();
-    let mut tmp_name = path
-        .file_name()
-        .map(|n| n.to_os_string())
-        .unwrap_or_default();
-    tmp_name.push(format!(".tmp.{}", std::process::id()));
-    tmp_path.set_file_name(tmp_name);
+    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    // `NamedTempFile` opens with `O_CREAT|O_EXCL` (via `O_TMPFILE`/mkstemp) and
+    // randomizes the name, which is strictly safer than a predictable
+    // `credentials.toml.tmp.<pid>`.
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
 
     #[cfg(unix)]
     {
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&tmp_path)?;
-        file.write_all(contents.as_bytes())?;
-        file.sync_all()?;
+        use std::os::unix::fs::PermissionsExt;
+        // Narrow the mode before any secret bytes are written, so the token is
+        // never briefly world-readable.
+        tmp.as_file()
+            .set_permissions(fs::Permissions::from_mode(0o600))?;
     }
-    #[cfg(not(unix))]
-    {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&tmp_path)?;
-        file.write_all(contents.as_bytes())?;
-        file.sync_all()?;
-    }
+
+    tmp.write_all(contents.as_bytes())?;
+    tmp.flush()?;
+    tmp.as_file().sync_all()?;
 
     // Rename is atomic on POSIX and on Windows when source/dest are on the
     // same volume (guaranteed: same directory).
-    if let Err(e) = fs::rename(&tmp_path, path) {
-        let _ = fs::remove_file(&tmp_path);
-        return Err(e);
-    }
+    tmp.persist(path).map_err(|e| e.error)?;
     Ok(())
 }
 
@@ -281,20 +267,50 @@ pub struct ContextEntry {
     pub slug: Option<String>,
 }
 
+/// Cache for the parsed `config.toml`.
+///
+/// A single invocation used to re-read and re-parse the file up to four times
+/// (theme init, `resolve_from_context`, `context_workspace`,
+/// `context_slug`). The file is small but the syscalls and TOML parse are pure
+/// overhead on every command.
+///
+/// The entry is cleared by [`save_config`], which is the only writer in the
+/// process, so within a run the cache can never serve data that the same
+/// process just replaced. `bbr context use` therefore observes its own write.
+static CONFIG_CACHE: std::sync::RwLock<Option<(PathBuf, ConfigFile)>> =
+    std::sync::RwLock::new(None);
+
 /// Load `config.toml`. Returns a default (empty) config if the file does not exist.
 pub fn load_config() -> Result<ConfigFile> {
     let path = match config_path() {
         Some(p) => p,
         None => return Ok(ConfigFile::default()),
     };
-    if !path.exists() {
-        return Ok(ConfigFile::default());
+
+    if let Ok(guard) = CONFIG_CACHE.read() {
+        if let Some((cached_path, cfg)) = guard.as_ref() {
+            if cached_path == &path {
+                return Ok(cfg.clone());
+            }
+        }
     }
-    let raw = fs::read_to_string(&path)
-        .map_err(|e| BitbucketError::Config(format!("reading {}: {e}", path.display())))?;
-    let parsed: ConfigFile = toml::from_str(&raw)
-        .map_err(|e| BitbucketError::Config(format!("parsing {}: {e}", path.display())))?;
-    Ok(parsed)
+
+    let cfg = if !path.exists() {
+        ConfigFile::default()
+    } else {
+        let raw = fs::read_to_string(&path)
+            .map_err(|e| BitbucketError::Config(format!("reading {}: {e}", path.display())))?;
+        toml::from_str(&raw)
+            .map_err(|e| BitbucketError::Config(format!("parsing {}: {e}", path.display())))?
+    };
+
+    // A poisoned lock means another thread panicked while holding it; the
+    // value is still structurally valid, so recover rather than propagate.
+    match CONFIG_CACHE.write() {
+        Ok(mut guard) => *guard = Some((path, cfg.clone())),
+        Err(poisoned) => *poisoned.into_inner() = Some((path, cfg.clone())),
+    }
+    Ok(cfg)
 }
 
 /// Write `config.toml`. Creates the parent directory if needed.
@@ -309,6 +325,12 @@ pub fn save_config(cfg: &ConfigFile) -> Result<PathBuf> {
         .map_err(|e| BitbucketError::Config(format!("serializing config: {e}")))?;
     fs::write(&path, serialized)
         .map_err(|e| BitbucketError::Config(format!("writing {}: {e}", path.display())))?;
+    // Invalidate the read cache so later loads in this same process see the
+    // value just written.
+    match CONFIG_CACHE.write() {
+        Ok(mut guard) => *guard = None,
+        Err(poisoned) => *poisoned.into_inner() = None,
+    }
     Ok(path)
 }
 

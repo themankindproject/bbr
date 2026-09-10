@@ -1,0 +1,70 @@
+# cargo-deny policy for bbr.
+#
+# Complements `cargo audit` (which only covers known CVEs) with license,
+# duplicate-version, and registry policy. Run locally with:
+#     cargo deny check
+
+[graph]
+# Only the host platform's dependency tree matters for a per-platform CLI; the
+# cross-platform `test` matrix in CI covers the others.
+all-features = false
+no-default-features = false
+
+[advisories]
+version = 2
+# Deny unmaintained/unsound advisories, but do not fail on "unmaintained"
+# notices alone — they are a judgement call, and CI should not go red because
+# an upstream crate stopped tagging releases.
+unmaintained = "workspace"
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+# Every license in the current tree, verified by `cargo deny check licenses`.
+# Permissive only: no GPL/AGPL/SSPL, so the binary stays redistributable.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+# Licenses that are only reachable through a dependency's optional feature or
+# that we have reviewed manually. Keep this list empty and short.
+exceptions = []
+confidence-threshold = 0.9
+# Some allowances are only ever reached as one arm of a crate's `OR`
+# expression, so no crate resolves to them on their own (BSD-2-Clause is
+# currently in this position). Allow that rather than making CI noisy, while
+# still failing if a crate resolves to a license *not* in the list.
+unused-allowed-license = "allow"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# A duplicated crate is not automatically a bug, but a *duplicated* major
+# version of a security-relevant crate is worth failing on.
+deny = [
+    # One TLS stack only: mixing rustls and native-tls would double the
+    # attack surface and the binary size.
+    { name = "native-tls" },
+    { name = "openssl-sys" },
+    { name = "openssl" },
+]
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

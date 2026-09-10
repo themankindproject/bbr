@@ -1,11 +1,9 @@
 //! Clap command definition and CLI entry point.
 
-use std::io::{self, IsTerminal};
 use std::process::ExitCode;
 
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
-use tracing_subscriber::EnvFilter;
 
 use crate::error::{report, report_json, ExitCode as AppExitCode, Result};
 
@@ -88,7 +86,6 @@ pub struct GlobalArgs {
     about = "BitBucket Remote — a Bitbucket Cloud CLI for coding agents and humans",
     long_about = None,
     propagate_version = true,
-    disable_help_subcommand = true,
     after_help = "Common workflows:\n  bbr                        overview: PR + CI for the current branch\n  bbr ci watch --logs        stream build logs live\n  bbr pr create --title \"..\" && bbr open pr\n  bbr doctor                 environment self-check"
 )]
 pub struct Cli {
@@ -101,7 +98,7 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// PR + CI for the current branch (the killer feature).
+    /// Show PR and CI status for the current branch.
     Status {
         #[command(flatten)]
         g: GlobalArgs,
@@ -157,7 +154,7 @@ pub enum Command {
     },
     /// Emit shell completions to stdout or install them.
     Completion {
-        /// Target shell (auto-detected from $SHELL if omitted with --install).
+        /// Target shell (auto-detected from `$SHELL` when omitted).
         shell: Option<Shell>,
         /// Install the completion script for the detected shell.
         #[arg(long)]
@@ -186,7 +183,7 @@ pub enum Command {
         #[arg(long)]
         paginate: bool,
         /// Max items to fetch with --paginate (guards memory on huge repos).
-        #[arg(long, default_value_t = 10000)]
+        #[arg(long, default_value_t = 10000, value_parser = parse_limit)]
         limit: u32,
         #[command(flatten)]
         g: GlobalArgs,
@@ -219,7 +216,7 @@ pub enum Command {
         #[arg(long)]
         repo: Option<String>,
         /// Max results.
-        #[arg(long, default_value_t = 20)]
+        #[arg(long, default_value_t = 20, value_parser = parse_limit)]
         limit: u32,
         #[command(flatten)]
         g: GlobalArgs,
@@ -273,7 +270,7 @@ pub enum WorkspaceAction {
         #[arg(long, value_parser = ["member", "contributor", "admin"])]
         role: Option<String>,
         /// Max results.
-        #[arg(long, default_value_t = 25)]
+        #[arg(long, default_value_t = 25, value_parser = parse_limit)]
         limit: u32,
         #[command(flatten)]
         g: GlobalArgs,
@@ -362,11 +359,12 @@ pub enum PrAction {
     List {
         #[arg(
             long,
+            value_parser = ["open", "merged", "declined", "all"],
             help = "filter by state (open|merged|declined|all)",
             default_value = "open"
         )]
         state: String,
-        #[arg(long, help = "max results to return", default_value_t = 25)]
+        #[arg(long, help = "max results to return", default_value_t = 25, value_parser = parse_limit)]
         limit: u32,
         #[arg(long, help = "filter by author display name")]
         author: Option<String>,
@@ -423,11 +421,14 @@ pub enum PrAction {
     Create {
         #[arg(long, help = "PR title (required)")]
         title: String,
-        #[arg(long, help = "PR description body")]
+        /// PR description body. Mutually exclusive with `--body-file`/`--body-stdin`.
+        #[arg(long, group = "pr_create_body")]
         body: Option<String>,
-        #[arg(long, help = "read body from file")]
+        /// Read the body from a file. Mutually exclusive with `--body`/`--body-stdin`.
+        #[arg(long, group = "pr_create_body")]
         body_file: Option<String>,
-        #[arg(long, help = "read body from stdin")]
+        /// Read the body from stdin. Mutually exclusive with `--body`/`--body-file`.
+        #[arg(long, group = "pr_create_body")]
         body_stdin: bool,
         #[arg(long, help = "source branch (default: current branch)")]
         src: Option<String>,
@@ -458,11 +459,14 @@ pub enum PrAction {
     Comment {
         /// Pull request ID.
         id: u64,
-        #[arg(long, help = "comment body")]
+        /// Comment body. Mutually exclusive with `--body-file`/`--body-stdin`.
+        #[arg(long, group = "pr_comment_body")]
         body: Option<String>,
-        #[arg(long, help = "read body from file")]
+        /// Read the body from a file. Mutually exclusive with `--body`/`--body-stdin`.
+        #[arg(long, group = "pr_comment_body")]
         body_file: Option<String>,
-        #[arg(long, help = "read body from stdin")]
+        /// Read the body from stdin. Mutually exclusive with `--body`/`--body-file`.
+        #[arg(long, group = "pr_comment_body")]
         body_stdin: bool,
         #[arg(long, help = "reply to a specific comment ID")]
         reply_to: Option<u64>,
@@ -473,7 +477,7 @@ pub enum PrAction {
     Comments {
         /// Pull request ID (defaults to current branch's open PR).
         id: Option<u64>,
-        #[arg(long, help = "max results to return", default_value_t = 50)]
+        #[arg(long, help = "max results to return", default_value_t = 50, value_parser = parse_limit)]
         limit: u32,
         #[command(flatten)]
         g: GlobalArgs,
@@ -494,7 +498,7 @@ pub enum PrAction {
     Tasks {
         /// Pull request ID (defaults to current branch's open PR).
         id: Option<u64>,
-        #[arg(long, help = "max results to return", default_value_t = 50)]
+        #[arg(long, help = "max results to return", default_value_t = 50, value_parser = parse_limit)]
         limit: u32,
         #[command(flatten)]
         g: GlobalArgs,
@@ -503,7 +507,7 @@ pub enum PrAction {
     Commits {
         /// Pull request ID (defaults to current branch's open PR).
         id: Option<u64>,
-        #[arg(long, help = "max results to return", default_value_t = 50)]
+        #[arg(long, help = "max results to return", default_value_t = 50, value_parser = parse_limit)]
         limit: u32,
         #[command(flatten)]
         g: GlobalArgs,
@@ -512,7 +516,7 @@ pub enum PrAction {
     Statuses {
         /// Pull request ID (defaults to current branch's open PR).
         id: Option<u64>,
-        #[arg(long, help = "max results to return", default_value_t = 50)]
+        #[arg(long, help = "max results to return", default_value_t = 50, value_parser = parse_limit)]
         limit: u32,
         #[command(flatten)]
         g: GlobalArgs,
@@ -521,7 +525,7 @@ pub enum PrAction {
     Conflicts {
         /// Pull request ID (defaults to current branch's open PR).
         id: Option<u64>,
-        #[arg(long, help = "max results to return", default_value_t = 50)]
+        #[arg(long, help = "max results to return", default_value_t = 50, value_parser = parse_limit)]
         limit: u32,
         #[command(flatten)]
         g: GlobalArgs,
@@ -568,7 +572,11 @@ pub enum PrAction {
         id: u64,
         #[arg(long, help = "close source branch after merge")]
         close_source_branch: bool,
-        #[arg(long, help = "merge strategy (merge_commit|squash|fast_forward)")]
+        #[arg(
+            long,
+            value_parser = ["merge_commit", "squash", "fast_forward"],
+            help = "merge strategy (merge_commit|squash|fast_forward)"
+        )]
         strategy: Option<String>,
         #[arg(long, help = "custom merge commit message")]
         message: Option<String>,
@@ -595,7 +603,11 @@ pub enum PrAction {
     },
     /// Decline a pull request.
     Decline {
+        /// Pull request ID.
         id: u64,
+        /// Skip the interactive confirmation prompt.
+        #[arg(long, short)]
+        yes: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -727,7 +739,7 @@ pub enum StackAction {
     /// Merge all PRs in the stack bottom-up.
     Land {
         /// Merge strategy (merge_commit|squash|fast_forward).
-        #[arg(long)]
+        #[arg(long, value_parser = ["merge_commit", "squash", "fast_forward"])]
         strategy: Option<String>,
         /// Skip confirmation prompt.
         #[arg(long, short)]
@@ -750,7 +762,7 @@ pub enum CiAction {
     List {
         #[arg(long, help = "branch name (default: current branch)")]
         branch: Option<String>,
-        #[arg(long, help = "max results to return", default_value_t = 10)]
+        #[arg(long, help = "max results to return", default_value_t = 10, value_parser = parse_limit)]
         limit: u32,
         /// Skip fetching per-pipeline steps (faster listing).
         #[arg(long)]
@@ -822,11 +834,14 @@ pub enum CiAction {
     Logs {
         /// Pipeline UUID (with or without braces). Defaults to latest pipeline on current branch.
         uuid: Option<String>,
-        #[arg(long, help = "specific step UUID or step name")]
+        /// Specific step UUID or step name. Conflicts with `--failed`/`--latest`.
+        #[arg(long, conflicts_with_all = ["failed", "latest"])]
         step: Option<String>,
-        #[arg(long, help = "select the failing step automatically")]
+        /// Select the failing step automatically. Conflicts with `--step`/`--latest`.
+        #[arg(long, conflicts_with_all = ["step", "latest"])]
         failed: bool,
-        #[arg(long, help = "select the latest step automatically")]
+        /// Select the latest step automatically. Conflicts with `--step`/`--failed`.
+        #[arg(long, conflicts_with_all = ["step", "failed"])]
         latest: bool,
         #[arg(long, help = "write log to file instead of stdout")]
         output: Option<String>,
@@ -848,7 +863,7 @@ pub enum CiAction {
         /// Select the latest step automatically.
         #[arg(long)]
         latest: bool,
-        #[arg(long, help = "max test cases to show", default_value_t = 50)]
+        #[arg(long, help = "max test cases to show", default_value_t = 50, value_parser = parse_limit)]
         limit: u32,
         #[command(flatten)]
         g: GlobalArgs,
@@ -862,8 +877,12 @@ pub enum CiAction {
     },
     /// Rerun the latest pipeline for a branch.
     Rerun {
+        /// Branch name (default: current branch).
         #[arg(long)]
         branch: Option<String>,
+        /// Skip the interactive confirmation prompt.
+        #[arg(long, short)]
+        yes: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -871,8 +890,12 @@ pub enum CiAction {
     Stop {
         /// Pipeline UUID (defaults to latest pipeline on current branch).
         uuid: Option<String>,
+        /// Branch name (default: current branch).
         #[arg(long)]
         branch: Option<String>,
+        /// Skip the interactive confirmation prompt.
+        #[arg(long, short)]
+        yes: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -925,14 +948,14 @@ pub enum RepoAction {
     },
     /// List remote branches.
     Branches {
-        #[arg(long, help = "max results", default_value_t = 20)]
+        #[arg(long, help = "max results", default_value_t = 20, value_parser = parse_limit)]
         limit: u32,
         #[command(flatten)]
         g: GlobalArgs,
     },
     /// List remote tags.
     Tags {
-        #[arg(long, help = "max results", default_value_t = 20)]
+        #[arg(long, help = "max results", default_value_t = 20, value_parser = parse_limit)]
         limit: u32,
         #[command(flatten)]
         g: GlobalArgs,
@@ -941,7 +964,7 @@ pub enum RepoAction {
     Commits {
         #[arg(long, help = "branch name (default: current branch)")]
         branch: Option<String>,
-        #[arg(long, help = "max results", default_value_t = 20)]
+        #[arg(long, help = "max results", default_value_t = 20, value_parser = parse_limit)]
         limit: u32,
         #[command(flatten)]
         g: GlobalArgs,
@@ -1065,7 +1088,7 @@ pub enum BatchAction {
         #[arg(long)]
         dry_run: bool,
         /// Merge strategy (merge_commit|squash|fast_forward).
-        #[arg(long)]
+        #[arg(long, value_parser = ["merge_commit", "squash", "fast_forward"])]
         strategy: Option<String>,
         /// Close the source branch after merging (off by default).
         #[arg(long)]
@@ -1283,8 +1306,9 @@ pub enum WebhookAction {
         /// Human-readable description.
         #[arg(long)]
         description: Option<String>,
-        /// Activate the webhook immediately (default: true).
-        #[arg(long, default_value_t = true)]
+        /// Activate the webhook immediately. Pass `--active=false` to create
+        /// it disabled (default: true).
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         active: bool,
         /// Shared secret for payload signing.
         #[arg(long, conflicts_with = "secret_stdin")]
@@ -1356,7 +1380,7 @@ pub enum DeployAction {
     /// List deployments in the current repository.
     List {
         /// Limit the number of results.
-        #[arg(long, default_value_t = 25)]
+        #[arg(long, default_value_t = 25, value_parser = parse_limit)]
         limit: u32,
         #[command(flatten)]
         g: GlobalArgs,
@@ -1437,7 +1461,7 @@ pub enum DeployEnvAction {
         /// Environment name.
         name: String,
         /// Environment type (test|staging|production).
-        #[arg(long, default_value = "test")]
+        #[arg(long, value_parser = ["test", "staging", "production"], default_value = "test")]
         env_type: String,
         #[command(flatten)]
         g: GlobalArgs,
@@ -1462,8 +1486,14 @@ pub enum DeployEnvVarsAction {
     Set {
         /// The environment UUID.
         env_uuid: String,
+        /// Variable key name.
         key: String,
-        value: String,
+        /// Variable value (omit when using `--stdin`).
+        value: Option<String>,
+        /// Read the value from stdin instead of the command line (keeps it
+        /// out of `ps` output and shell history).
+        #[arg(long, conflicts_with = "value")]
+        stdin: bool,
         /// Mark variable as secured/encrypted.
         #[arg(long)]
         secured: bool,
@@ -1474,6 +1504,7 @@ pub enum DeployEnvVarsAction {
     Delete {
         /// The environment UUID.
         env_uuid: String,
+        /// Variable key name.
         key: String,
         #[command(flatten)]
         g: GlobalArgs,
@@ -1489,7 +1520,9 @@ pub enum CiVarsAction {
     },
     /// Set a pipeline variable (creates or updates).
     Set {
+        /// Variable key name.
         key: String,
+        /// Variable value. Conflicts with `--stdin`.
         #[arg(long, conflicts_with = "stdin")]
         value: Option<String>,
         /// Read the value from stdin instead of the command line (keeps it
@@ -1528,8 +1561,9 @@ pub enum CiSchedulesAction {
         /// Pipeline selector name (optional).
         #[arg(long)]
         pipeline: Option<String>,
-        /// Whether the schedule is enabled (default: true).
-        #[arg(long, default_value_t = true)]
+        /// Whether the schedule is enabled. Pass `--enabled=false` to create
+        /// it disabled (default: true).
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         enabled: bool,
         #[command(flatten)]
         g: GlobalArgs,
@@ -1569,7 +1603,7 @@ pub enum CiSchedulesAction {
         /// Schedule UUID.
         uuid: String,
         /// Max results to return.
-        #[arg(long, default_value_t = 25)]
+        #[arg(long, default_value_t = 25, value_parser = parse_limit)]
         limit: u32,
         #[command(flatten)]
         g: GlobalArgs,
@@ -1581,16 +1615,16 @@ pub enum IssueAction {
     /// List issues in the repository.
     List {
         /// Limit the number of results.
-        #[arg(long, default_value_t = 25)]
+        #[arg(long, default_value_t = 25, value_parser = parse_limit)]
         limit: u32,
         /// Filter by state (new|open|resolved|on hold|invalid|duplicate|wontfix|closed).
         #[arg(long)]
         status: Option<String>,
         /// Filter by kind (bug|enhancement|proposal|task).
-        #[arg(long)]
+        #[arg(long, value_parser = ["bug", "enhancement", "proposal", "task"])]
         kind: Option<String>,
         /// Filter by priority (trivial|minor|major|critical|blocker).
-        #[arg(long)]
+        #[arg(long, value_parser = ["trivial", "minor", "major", "critical", "blocker"])]
         priority: Option<String>,
         /// Filter by assignee nickname.
         #[arg(long)]
@@ -1620,10 +1654,18 @@ pub enum IssueAction {
         #[arg(long)]
         body: String,
         /// Issue kind (bug|enhancement|proposal|task).
-        #[arg(long, default_value = "bug")]
+        #[arg(
+            long,
+            value_parser = ["bug", "enhancement", "proposal", "task"],
+            default_value = "bug"
+        )]
         kind: String,
         /// Issue priority (trivial|minor|major|critical|blocker).
-        #[arg(long, default_value = "major")]
+        #[arg(
+            long,
+            value_parser = ["trivial", "minor", "major", "critical", "blocker"],
+            default_value = "major"
+        )]
         priority: String,
         /// Assignee nickname.
         #[arg(long)]
@@ -1645,10 +1687,10 @@ pub enum IssueAction {
         #[arg(long)]
         status: Option<String>,
         /// New kind.
-        #[arg(long)]
+        #[arg(long, value_parser = ["bug", "enhancement", "proposal", "task"])]
         kind: Option<String>,
         /// New priority.
-        #[arg(long)]
+        #[arg(long, value_parser = ["trivial", "minor", "major", "critical", "blocker"])]
         priority: Option<String>,
         /// New assignee nickname.
         #[arg(long)]
@@ -1671,7 +1713,7 @@ pub enum IssueAction {
         /// Issue ID.
         id: u64,
         /// Limit the number of results.
-        #[arg(long, default_value_t = 25)]
+        #[arg(long, default_value_t = 25, value_parser = parse_limit)]
         limit: u32,
         #[command(flatten)]
         g: GlobalArgs,
@@ -1683,10 +1725,36 @@ pub fn resolve_api_base(g: &GlobalArgs) -> &str {
     g.api_base.as_deref().unwrap_or(DEFAULT_API_BASE)
 }
 
-/// Entry point invoked by `main`. Returns a process exit code.
-pub async fn run() -> ExitCode {
-    let cli = match Cli::try_parse() {
-        Ok(c) => c,
+/// Largest value accepted for any `--limit` flag.
+///
+/// Unbounded `u32` limits let a typo (or a malicious script) turn
+/// `bbr api --paginate` into billions of requests and unbounded memory.
+pub const MAX_LIMIT: u32 = 10_000;
+
+/// clap `value_parser` for every `--limit` flag: `1..=MAX_LIMIT`.
+pub fn parse_limit(s: &str) -> std::result::Result<u32, String> {
+    let n: u32 = s
+        .trim()
+        .parse()
+        .map_err(|_| format!("'{s}' is not a whole number"))?;
+    if n == 0 {
+        return Err("must be at least 1".to_string());
+    }
+    if n > MAX_LIMIT {
+        return Err(format!("must be <= {MAX_LIMIT}"));
+    }
+    Ok(n)
+}
+
+/// Parse the command line, without touching the async runtime.
+///
+/// Returns `Err(exit_code)` when clap handled the invocation itself (help,
+/// version, or a usage error) and `main` should exit with that code. Doing
+/// this before building a Tokio runtime keeps `bbr --help` and `bbr --version`
+/// free of thread setup.
+pub fn parse_args() -> std::result::Result<Cli, ExitCode> {
+    match Cli::try_parse() {
+        Ok(c) => Ok(c),
         Err(e) => {
             use clap::error::ErrorKind as K;
             match e.kind() {
@@ -1696,18 +1764,23 @@ pub async fn run() -> ExitCode {
                     if matches!(e.kind(), K::DisplayHelp) {
                         println!();
                     }
-                    return ExitCode::SUCCESS;
+                    Err(ExitCode::SUCCESS)
                 }
                 // Everything else is a usage error. Use a distinct code so
                 // scripts can tell bad input from operation failure.
                 _ => {
                     let _ = e.print();
-                    return ExitCode::from(USAGE_ERROR_EXIT);
+                    Err(ExitCode::from(USAGE_ERROR_EXIT))
                 }
             }
         }
-    };
+    }
+}
 
+/// Run the parsed command. `rt` is the runtime `main` built (also used by the
+/// few call sites that need to block on an async helper).
+pub fn run(cli: Cli, rt: &tokio::runtime::Runtime) -> ExitCode {
+    let _guard = rt.enter();
     init_tracing(cli.global.verbose);
 
     // Set color override before any Theme access.
@@ -1726,7 +1799,7 @@ pub async fn run() -> ExitCode {
 
     // Remember the JSON flag before `cli` is moved into dispatch().
     let json = cli.global.json;
-    let result: Result<()> = crate::dispatch::dispatch(cli).await;
+    let result: Result<()> = rt.block_on(crate::dispatch::dispatch(cli));
 
     match result {
         Ok(()) => AppExitCode::Success.as_process(),
@@ -1741,17 +1814,7 @@ pub async fn run() -> ExitCode {
 }
 
 fn init_tracing(verbose: u8) {
-    let level = match verbose {
-        0 => "info",
-        1 => "debug",
-        _ => "trace",
-    };
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr)
-        .with_ansi(io::stderr().is_terminal())
-        .init();
+    crate::logging::init(verbose);
 }
 
 #[cfg(test)]

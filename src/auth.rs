@@ -51,14 +51,14 @@ fn from_env() -> Option<Credentials> {
     let username = username.trim().to_string();
     let token_trimmed = token.trim().to_string();
     if token_trimmed.is_empty() {
-        tracing::warn!(
+        crate::log_warn!(
             "{ENV_TOKEN} is set but empty or whitespace-only; ignoring environment credentials. \
              Set a valid Atlassian API token from https://id.atlassian.com/manage-profile/security/api-tokens"
         );
         return None;
     }
     if username.is_empty() {
-        tracing::warn!(
+        crate::log_warn!(
             "{ENV_USERNAME} is set but empty or whitespace-only; ignoring environment credentials. \
              Set both {ENV_USERNAME} and {ENV_TOKEN} for env-based auth."
         );
@@ -83,7 +83,7 @@ fn from_config() -> Result<Option<Credentials>> {
         // A token is present but unusable without a username. Warn instead
         // of failing silently with "no credentials" — the env path already
         // warns for the same condition.
-        tracing::warn!(
+        crate::log_warn!(
             "credentials file has a token but an empty username; ignoring it. \
              Re-run `bbr auth setup` to fix."
         );
