@@ -389,7 +389,7 @@ pub async fn land(g: &GlobalArgs, strategy: Option<&str>, yes: bool) -> Result<(
 
     for (index, (pr, id)) in entries.into_iter().enumerate() {
         let result: Result<()> = async {
-            ensure_land_state_unchanged(&config)?;
+            ensure_stack_state_unchanged(&config)?;
             spinner.set_message(format!("Checking PR #{id} (branch {})...", pr.branch));
             let current = client.get_pr(&repo.workspace, &repo.slug, id).await?;
             if current.id != id {
@@ -401,7 +401,7 @@ pub async fn land(g: &GlobalArgs, strategy: Option<&str>, yes: bool) -> Result<(
                         "PR #{id} is {}, not OPEN or MERGED; inspect it before retrying", current.state
                     )));
                 }
-                ensure_land_state_unchanged(&config)?;
+                ensure_stack_state_unchanged(&config)?;
                 spinner.set_message(format!("Merging PR #{id} (branch {})...", pr.branch));
                 let merge_req = MergePrRequest {
                     close_source_branch: Some(true),
@@ -417,7 +417,7 @@ pub async fn land(g: &GlobalArgs, strategy: Option<&str>, yes: bool) -> Result<(
             }
             merged.push(id);
             let checkpoint = (|| -> Result<()> {
-                ensure_land_state_unchanged(&config)?;
+                ensure_stack_state_unchanged(&config)?;
                 let mut next = config.clone();
                 // Keep only unmerged work until the last checkpoint; then remove
                 // just this stack, retaining siblings and a valid empty file.
@@ -457,10 +457,10 @@ pub async fn land(g: &GlobalArgs, strategy: Option<&str>, yes: bool) -> Result<(
 
 /// Detect intervening edits without silently reloading an empty/default config.
 /// This is an optimistic guard, not a cross-process transaction or file lock.
-fn ensure_land_state_unchanged(expected: &StackConfig) -> Result<()> {
+fn ensure_stack_state_unchanged(expected: &StackConfig) -> Result<()> {
     if StackConfig::load()? != *expected {
         return Err(BitbucketError::Other(
-            "Stack configuration changed during landing; inspect .bbr/stack.toml before retrying"
+            "Stack configuration changed during the operation; inspect .bbr/stack.toml before retrying"
                 .into(),
         ));
     }
@@ -468,14 +468,57 @@ fn ensure_land_state_unchanged(expected: &StackConfig) -> Result<()> {
 }
 
 pub async fn abort(g: &GlobalArgs, yes: bool) -> Result<()> {
-    let config = StackConfig::load()?;
+    let mut config = StackConfig::load()?;
+    let mut names = std::collections::HashSet::new();
+    if config.stacks.iter().any(|s| !names.insert(&s.name)) {
+        return Err(BitbucketError::Other(
+            "Duplicate stack names make cleanup ambiguous; repair .bbr/stack.toml before aborting"
+                .into(),
+        ));
+    }
     let stack = config.active_stack()?.clone();
+    let current_branch = if stack.prs.is_empty() {
+        None
+    } else {
+        Some(crate::git::current_branch()?)
+    };
+    let mut ids = std::collections::HashSet::new();
+    let mut branches = std::collections::HashSet::new();
+    let mut entries = Vec::with_capacity(stack.prs.len());
+    for pr in &stack.prs {
+        crate::git::validate_branch_name(&pr.branch)?;
+        if current_branch.as_deref() == Some(&pr.branch)
+            || config.stacks.iter().any(|s| {
+                s.base_branch == pr.branch
+                    || (s.name != stack.name
+                        && s.prs
+                            .iter()
+                            .any(|p| p.branch == pr.branch || p.parent_branch == pr.branch))
+            })
+        {
+            return Err(BitbucketError::Other(format!(
+                "Refusing to abort protected branch {:?}: it is checked out, a stack base, or shared by another stack", pr.branch
+            )));
+        }
+        let id = pr.pr_id.filter(|id| *id > 0).ok_or_else(|| {
+            BitbucketError::Other(format!(
+                "Stack branch {:?} has no valid PR ID; repair .bbr/stack.toml before aborting",
+                pr.branch
+            ))
+        })?;
+        if !ids.insert(id) || !branches.insert(&pr.branch) {
+            return Err(BitbucketError::Other(
+                "Stack contains duplicate PR IDs or branches; repair .bbr/stack.toml before aborting".into(),
+            ));
+        }
+        entries.push((pr, id));
+    }
 
     if !confirm_destructive(
         g,
         yes,
         &format!(
-            "Decline all PRs and delete branches for stack '{}'? (y/n): ",
+            "Decline all PRs and safely delete branches for stack '{}'? (y/n): ",
             stack.name
         ),
     )
@@ -486,59 +529,121 @@ pub async fn abort(g: &GlobalArgs, yes: bool) -> Result<()> {
 
     let client = client(g)?;
     let repo = resolve_repo(g)?;
-
+    let full_name = format!("{}/{}", repo.workspace, repo.slug);
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     let mut declined = Vec::new();
     let mut branches_deleted = Vec::new();
+    let mut failure = None;
 
-    for pr in &stack.prs {
-        if let Some(id) = pr.pr_id {
-            spinner.set_message(format!("Declining PR #{}...", id));
-            if client
-                .decline_pr(&repo.workspace, &repo.slug, id)
-                .await
-                .is_ok()
-            {
-                declined.push(id);
+    for (pr, id) in entries {
+        let result: Result<()> = async {
+            ensure_stack_state_unchanged(&config)?;
+            spinner.set_message(format!("Checking PR #{id}..."));
+            let current = client.get_pr(&repo.workspace, &repo.slug, id).await?;
+            validate_abort_pr(&current, id, &pr.branch, &full_name)?;
+            if !current.state.eq_ignore_ascii_case("DECLINED") {
+                if !current.state.eq_ignore_ascii_case("OPEN") {
+                    return Err(BitbucketError::Other(format!(
+                        "PR #{id} is {}, not OPEN or DECLINED; no branches were deleted for this entry", current.state
+                    )));
+                }
+                ensure_stack_state_unchanged(&config)?;
+                spinner.set_message(format!("Declining PR #{id}..."));
+                let response = client.decline_pr(&repo.workspace, &repo.slug, id).await?;
+                validate_abort_pr(&response, id, &pr.branch, &full_name)?;
+                if !response.state.eq_ignore_ascii_case("DECLINED") {
+                    return Err(BitbucketError::Other(format!(
+                        "PR #{id} decline was not confirmed; inspect Bitbucket before retrying"
+                    )));
+                }
             }
-        }
-        spinner.set_message(format!("Deleting branch {}...", pr.branch));
-        if crate::git::delete_branch_local_async(&pr.branch)
-            .await
-            .is_ok()
-        {
-            branches_deleted.push(format!("local/{}", pr.branch));
-        }
-        if crate::git::delete_branch_remote_async(&pr.branch)
-            .await
-            .is_ok()
-        {
-            branches_deleted.push(format!("remote/{}", pr.branch));
+            declined.push(id);
+            ensure_stack_state_unchanged(&config)?;
+            spinner.set_message(format!("Deleting remote branch {}...", pr.branch));
+            // Use the resolved API repository, never an unrelated Git origin.
+            match client.delete_branch(&repo.workspace, &repo.slug, &pr.branch).await {
+                Ok(()) => branches_deleted.push(format!("remote/{}", pr.branch)),
+                Err(BitbucketError::NotFound(_)) => {} // Already absent on retry.
+                Err(error) => return Err(error),
+            }
+            ensure_stack_state_unchanged(&config)?;
+            spinner.set_message(format!("Safely deleting local branch {}...", pr.branch));
+            if crate::git::delete_local_branch_if_exists(&pr.branch).await? {
+                branches_deleted.push(format!("local/{}", pr.branch));
+            }
+            checkpoint_abort(&mut config, &stack.name, Some(id))?;
+            Ok(())
+        }.await;
+        if let Err(error) = result {
+            failure = Some(error);
+            break;
         }
     }
-
+    if stack.prs.is_empty() {
+        failure = checkpoint_abort(&mut config, &stack.name, None).err();
+    }
     spinner.finish();
-
-    // Remove stack from configuration
-    let mut new_config = StackConfig::load().unwrap_or_default();
-    new_config.stacks.retain(|s| s.name != stack.name);
-    if new_config.active.as_deref() == Some(stack.name.as_str()) {
-        new_config.active = new_config.stacks.first().map(|s| s.name.clone());
-    }
-    new_config.save()?;
-
     let out = StackAbortOut {
         declined,
         branches_deleted,
     };
-
+    let status = if failure.is_some() {
+        "incomplete; inspect the remaining stack before retrying"
+    } else {
+        "aborted"
+    };
     let human = format!(
-        "Stack '{}' aborted.\nDeclined {} pull requests.\nCleaned up {} branch references.",
-        stack.name,
-        out.declined.len(),
-        out.branches_deleted.len()
+        "Stack '{}' {status}.\nConfirmed declined: {} pull requests.\nDeleted {} branch references.",
+        stack.name, out.declined.len(), out.branches_deleted.len()
     );
-    make_formatter(g).print(&out, &human)
+    make_formatter(g).print(&out, &human)?;
+    match failure {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+fn validate_abort_pr(
+    pr: &crate::api::pr::PullRequest,
+    id: u64,
+    branch: &str,
+    repository: &str,
+) -> Result<()> {
+    if pr.id != id
+        || pr.source_branch() != branch
+        || pr.source.repository.as_ref().map(|r| r.full_name.as_str()) != Some(repository)
+    {
+        return Err(BitbucketError::Other(format!(
+            "PR #{id} source identity does not match the stack branch and repository; refusing cleanup"
+        )));
+    }
+    Ok(())
+}
+
+/// Remove only a fully cleaned entry, keeping failed/unstarted work recoverable.
+fn checkpoint_abort(config: &mut StackConfig, name: &str, id: Option<u64>) -> Result<()> {
+    let checkpoint = (|| -> Result<()> {
+        ensure_stack_state_unchanged(config)?;
+        let mut next = config.clone();
+        let stack = next
+            .find_stack_mut(name)
+            .ok_or_else(|| BitbucketError::Other("Stack disappeared during abort".into()))?;
+        if let Some(id) = id {
+            stack.prs.retain(|pr| pr.pr_id != Some(id));
+        }
+        if stack.prs.is_empty() {
+            next.stacks.retain(|s| s.name != name);
+            if next.active.as_deref() == Some(name) {
+                next.active = next.stacks.first().map(|s| s.name.clone());
+            }
+        }
+        next.save()?;
+        *config = next;
+        Ok(())
+    })();
+    checkpoint.map_err(|error| BitbucketError::Other(format!(
+        "Abort checkpoint failed for stack {name:?}: {error}. Remote/local cleanup may already have happened; inspect Bitbucket and .bbr/stack.toml before retrying"
+    )))
 }
 
 fn render_stack_list(out: &StackListOut) -> String {

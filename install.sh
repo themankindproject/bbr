@@ -234,6 +234,8 @@ echo "Installed ${APP} to ${DEST}/${APP}"
 # Tell the user if the destination is not on their PATH — otherwise the very
 # next command they type is "bbr: command not found".
 if [[ ":${PATH}:" != *":${DEST}:"* ]]; then
+  # RC is display-only shell guidance, not a path used for file access.
+  # shellcheck disable=SC2088
   case "$(basename "${SHELL:-bash}")" in
     zsh)  RC="~/.zshrc" ;;
     fish) RC="~/.config/fish/config.fish" ;;

@@ -585,18 +585,17 @@ pub async fn tail(
 ) -> Result<()> {
     let notify = parse_notify_arg(notify.as_deref())?;
     let repo = resolve_repo(g)?;
-    let branch: String = if let Some(b) = branch {
-        b.to_string()
-    } else {
-        current_head()?.branch
-    };
     let client = client(g)?;
     let theme = Theme::current();
 
-    // Resolve the pipeline UUID.
+    // Resolve the pipeline UUID. An explicit UUID needs no local Git branch.
     let pipeline_uuid = match pipeline {
         Some(u) => ensure_uuid_braces(u),
         None => {
+            let branch = match branch {
+                Some(branch) => branch.to_string(),
+                None => current_head()?.branch,
+            };
             let p = client
                 .latest_pipeline(&repo.workspace, &repo.slug, Some(&branch))
                 .await?

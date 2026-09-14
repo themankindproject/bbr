@@ -118,6 +118,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Stack abort fails closed and checkpoints completed cleanup.** PR state/source
+  identity is verified before decline or deletion, remote deletion targets the
+  resolved Bitbucket repository rather than Git origin, and local deletion never
+  forces away unmerged commits. Failures preserve unfinished entries and return
+  nonzero with partial receipts. Retry reconciles already-declined PRs and absent
+  branches; protected/shared branches and invalid IDs are rejected up front.
+  Rebase and force-push failures also return nonzero with their step receipt.
+- **CI tail with an explicit pipeline no longer requires a Git branch.** UUID
+  mode works on detached checkouts and outside Git with explicit repo identity.
+- **TLS advisory addressed:** update locked rustls to 0.23.45 (and rustls-webpki
+  to 0.103.15) for RUSTSEC-2026-0285, without broad dependency upgrades.
+- **CI portability fixes:** use native Windows path construction in the auth
+  receipt test; document the installer's intentional display-only literal tildes
+  with a scoped ShellCheck SC2088 suppression.
 - **Stack landing reports failures and checkpoints each confirmed merge.** Missing,
   zero, or duplicate PR IDs fail before remote work. Landing checks current PR
   state, reconciles already-MERGED PRs on retry, and never treats an unconfirmed

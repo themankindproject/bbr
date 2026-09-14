@@ -261,6 +261,67 @@ async fn unmerged_local_commits_are_not_force_deleted_and_retry_can_finish() {
 }
 
 #[tokio::test]
+async fn tracked_unmerged_branch_is_retained_even_when_upstream_contains_commits() {
+    let s = MockServer::start().await;
+    let f = Fixture::new(1);
+    f.git(&["switch", "feature-0"]);
+    f.commit("unmerged-but-pushed");
+    f.git(&["switch", "main"]);
+    f.git(&[
+        "config",
+        "remote.origin.url",
+        "https://bitbucket.org/ws/repo.git",
+    ]);
+    f.git(&[
+        "config",
+        "remote.origin.fetch",
+        "+refs/heads/*:refs/remotes/origin/*",
+    ]);
+    f.git(&[
+        "update-ref",
+        "refs/remotes/origin/feature-0",
+        "refs/heads/feature-0",
+    ]);
+    f.git(&["branch", "--set-upstream-to=origin/feature-0", "feature-0"]);
+    get(&s, 101, "DECLINED").await;
+    delete(&s, "feature-0", 204).await;
+    let out = f.abort(&s);
+    assert_eq!(out.status.code(), Some(1));
+    f.assert_branch("feature-0");
+    assert_eq!(f.config().find_stack("work").unwrap().prs.len(), 1);
+}
+
+#[tokio::test]
+async fn ambiguous_stack_names_cannot_drop_unfinished_entries() {
+    let s = MockServer::start().await;
+    let f = Fixture::new(1);
+    let mut cfg = f.config();
+    cfg.stacks[1].name = "work".into();
+    f.save(&cfg);
+    let out = f.abort(&s);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(s.received_requests().await.unwrap().is_empty());
+    assert_eq!(f.config(), cfg);
+}
+
+#[tokio::test]
+async fn sibling_parent_branch_is_protected() {
+    let s = MockServer::start().await;
+    let f = Fixture::new(1);
+    let mut cfg = f.config();
+    cfg.stacks[1].prs.push(StackPr {
+        branch: "child".into(),
+        parent_branch: "feature-0".into(),
+        pr_id: Some(102),
+    });
+    f.save(&cfg);
+    let out = f.abort(&s);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(s.received_requests().await.unwrap().is_empty());
+    assert_eq!(f.config(), cfg);
+}
+
+#[tokio::test]
 async fn unconfirmed_or_mismatched_prs_never_delete_branches() {
     for response in [
         pr(101, "MERGED"),
@@ -310,7 +371,15 @@ async fn successful_http_status_without_declined_state_does_not_trigger_deletion
 
 #[tokio::test]
 async fn unsafe_stack_entries_are_rejected_before_any_remote_work() {
-    for case in ["base", "current", "invalid", "missing-id", "duplicate"] {
+    for case in [
+        "base",
+        "current",
+        "invalid",
+        "missing-id",
+        "duplicate",
+        "shared",
+        "zero-id",
+    ] {
         let s = MockServer::start().await;
         let f = Fixture::new(1);
         let mut cfg = f.config();
@@ -319,6 +388,11 @@ async fn unsafe_stack_entries_are_rejected_before_any_remote_work() {
             "current" => f.git(&["switch", "feature-0"]),
             "invalid" => cfg.stacks[0].prs[0].branch = "../bad".into(),
             "missing-id" => cfg.stacks[0].prs[0].pr_id = None,
+            "zero-id" => cfg.stacks[0].prs[0].pr_id = Some(0),
+            "shared" => {
+                let entry = cfg.stacks[0].prs[0].clone();
+                cfg.stacks[1].prs.push(entry);
+            }
             _ => {
                 let p = cfg.stacks[0].prs[0].clone();
                 cfg.stacks[0].prs.push(p);
@@ -358,7 +432,7 @@ async fn state_changed_after_decline_stops_before_branch_deletion() {
 }
 
 #[tokio::test]
-async fn checkpoint_failure_preserves_unfinished_state_and_stops_next_pr() {
+async fn unreadable_state_after_remote_delete_stops_next_pr() {
     let s = MockServer::start().await;
     let f = Fixture::new(2);
     get(&s, 101, "DECLINED").await;
@@ -382,6 +456,82 @@ async fn checkpoint_failure_preserves_unfinished_state_and_stops_next_pr() {
     assert_eq!(
         fs::read_to_string(f.path().join("keep")).unwrap(),
         "preserved"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn actual_checkpoint_write_failure_stops_after_completed_cleanup() {
+    use std::os::unix::fs::PermissionsExt;
+    // root bypasses directory permission bits; do not pretend to test denial.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let s = MockServer::start().await;
+    let f = Fixture::new(2);
+    let original = f.config();
+    let parent = f.repo.join(".bbr");
+    struct Restore(std::path::PathBuf);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o700));
+        }
+    }
+    let _restore = Restore(parent.clone());
+    get(&s, 101, "DECLINED").await;
+    Mock::given(method("DELETE"))
+        .and(path("/repositories/ws/repo/refs/branches/feature-0"))
+        .respond_with(move |_: &Request| {
+            fs::set_permissions(&parent, fs::Permissions::from_mode(0o500)).unwrap();
+            ResponseTemplate::new(204)
+        })
+        .expect(1)
+        .mount(&s)
+        .await;
+    let out = f.abort(&s);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Abort checkpoint failed"));
+    let receipt: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        receipt["branches_deleted"],
+        json!(["remote/feature-0", "local/feature-0"])
+    );
+    assert_eq!(f.config(), original);
+    assert_eq!(s.received_requests().await.unwrap().len(), 2);
+    f.assert_branch("feature-1");
+}
+
+#[tokio::test]
+async fn empty_stack_abort_preserves_siblings_without_remote_calls() {
+    let server = MockServer::start().await;
+    let f = Fixture::new(0);
+    let out = f.abort(&server);
+    assert!(out.status.success());
+    assert!(f.config().find_stack("work").is_none());
+    assert_eq!(f.config().active.as_deref(), Some("sibling"));
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn successful_abort_removes_only_completed_stack() {
+    let server = MockServer::start().await;
+    let f = Fixture::new(1);
+    get(&server, 101, "OPEN").await;
+    decline(&server, 101, 200).await;
+    delete(&server, "feature-0", 204).await;
+    let out = f.abort(&server);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(f.config().find_stack("work").is_none());
+    assert!(f.config().find_stack("sibling").is_some());
+    let receipt: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(receipt["declined"], json!([101]));
+    assert_eq!(
+        receipt["branches_deleted"],
+        json!(["remote/feature-0", "local/feature-0"])
     );
 }
 

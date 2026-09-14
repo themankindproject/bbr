@@ -425,13 +425,29 @@ nonzero (API failures retain their normal exit codes). Checkpoint failures exit
 `1`, name the already-merged PR, and stop before local cleanup or another merge.
 Detected intervening config edits also stop the run without overwriting that edit.
 
+`abort` validates branch names and positive, unique PR IDs before remote work.
+It refuses the current branch, stack base branches, duplicate stack names, and
+branches shared by or used as a parent in another stack. Each PR must match the recorded source branch and resolved repository;
+only OPEN/DECLINED states are accepted. A failed or unconfirmed decline stops
+before any branch deletion. Remote branches are deleted through the resolved
+Bitbucket repository API, not an inferred Git `origin`. Local deletion is
+non-forced and requires ancestry to HEAD even if a cached upstream ref contains
+the branch: unmerged commits or other Git errors leave the entry pending.
+
+Each fully cleaned entry is checkpointed before the next entry starts. Retry
+reconciles already-declined PRs and absent branches. Partial aborts preserve the
+`{ "declined": [...], "branches_deleted": [...] }` receipt and exit nonzero;
+consult stderr and the remaining stack before retrying. `rebase` also returns a
+nonzero exit on a rebase or push failure while preserving its step receipt.
+
 > **Note:** `rebase` and `land` require a clean working tree. Stack operations are
 > **not transactional** across Bitbucket, Git, and the state file. Inspect remote
 > state and `.bbr/stack.toml` before retrying after interruption: a remote merge can
 > succeed before its local checkpoint. The retry checks MERGED state to avoid
 > resubmitting that merge. Config-change checks are optimistic, not file locks;
-> avoid concurrent stack writers. Abort/rebase partial-failure handling remains
-> under review.
+> avoid concurrent stack writers. Remote deletion or decline can complete before
+> a local failure; failed operations are not automatically rolled back. Branch
+> recreation and concurrent local/remote edits remain races requiring review.
 
 ---
 

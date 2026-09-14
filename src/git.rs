@@ -264,8 +264,15 @@ pub fn delete_branch_local(branch: &str) -> Result<()> {
     Ok(())
 }
 
-/// Delete a branch locally, checking if it is fully merged (safe delete).
+/// Delete only branches whose commits are retained by HEAD, regardless of a
+/// configured upstream. An HTTP remote deletion does not prune tracking refs,
+/// and Git's `branch -d` alone can use that stale upstream to permit data loss.
 pub fn delete_branch_local_safe(branch: &str) -> Result<()> {
+    validate_branch_name(branch)?;
+    git(&["merge-base", "--is-ancestor", &format!("refs/heads/{branch}"), "HEAD"])
+        .map_err(|_| BitbucketError::Git(format!(
+            "branch {branch:?} is not confirmed merged into HEAD; retain its commits before deleting it"
+        )))?;
     git(&["branch", "-d", "--", branch])?;
     Ok(())
 }

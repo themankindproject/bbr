@@ -427,6 +427,26 @@ without a repeated merge request. Validation errors before landing starts emit
 only the error on stderr. Local branch cleanup is best-effort with warnings and
 does not change the confirmed remote merge outcome.
 
+## `bbr pr stack abort --json`
+
+```json
+{
+  "declined": [101],
+  "branches_deleted": ["remote/feature-1", "local/feature-1"]
+}
+```
+
+A partial abort emits this receipt on stdout, exits nonzero, and reports the error
+on stderr. `declined` includes previously-declined PRs reconciled during retry;
+`branches_deleted` includes only branches deleted in this invocation (already
+absent branches are not repeated). Entries remain pending until cleanup and the
+local checkpoint succeed. API errors preserve their mapped exit codes, while
+local Git/checkpoint failures use exit `1`. Validation failures before execution
+emit only an error. The receipt alone does not imply the whole abort completed.
+
+`pr stack rebase --json` likewise preserves its `{ "steps": [...] }` receipt
+but now exits nonzero when a rebase or subsequent push fails.
+
 ## Exit codes
 
 | Code | Meaning |

@@ -268,7 +268,9 @@ Verification: **639 tests passed**, zero failed, one ignored doctest; full tests
 Clippy with warnings denied, formatting, diff checks, and Rust 1.88 check passed
 on Linux. No real PRs or user branches were modified.
 
-## Draft PR snapshot (round 14 interrupted for review)
+## Historical draft PR snapshot (commit 1c2851d)
+
+The following is the original draft state, superseded by the continuation below.
 
 This snapshot includes unfinished abort/rebase hardening, at the user's request to
 open a PR containing all accumulated repository changes. It is **not merge-ready**.
@@ -291,6 +293,49 @@ The preceding **639-passing** snapshot refers to completed round-13 work, not th
 current all-changes draft. Do not disable the ten regression tests to make CI green.
 Complete the implementation or split the unfinished slice before merging.
 
+## PR #54 continuation: abort completion and CI failures
+
+Abort now validates IDs and literal branch names, protects the current/base/shared
+branches, verifies the PR source branch/repository and state, and stops after any
+unconfirmed decline. It deletes remote branches through the resolved API repository,
+then safely deletes a local exact ref if present. Completed entries are checkpointed
+one at a time; unfinished entries survive failures. Retries reconcile DECLINED PRs
+and missing branches. Receipts retain their existing shape and errors propagate
+with nonzero exits. State comparisons remain optimistic rather than locked.
+
+All twelve existing abort/rebase regressions passed after implementation. Added
+success/empty-stack coverage plus shared-branch/zero-ID cases. Independent review
+then found three additional hazards, reproduced and fixed: tracked upstream refs
+allowing `branch -d` to delete commits absent from HEAD, sibling parent dependencies,
+and duplicate stack names. Safe deletion now explicitly checks ancestry to HEAD,
+independent of cached upstream refs. A nonroot Unix test also verifies an actual
+checkpoint-write denial after remote/local cleanup, separately from unreadable
+state failures. All eighteen abort/rebase tests pass. Local cleanup may
+fail after remote deletion (e.g. unmerged local commits); there is no transactional
+rollback, and recreated remote branches still present a race. Review these limits
+before claiming production readiness.
+
+CI run 34887721080 identified four non-abort failures, now addressed locally:
+- rustls 0.23.41 was affected by RUSTSEC-2026-0285. A focused lockfile update selects
+  rustls 0.23.45 and rustls-webpki 0.103.15; cargo audit now passes, retaining two
+  allowed unmaintained-crate warnings (bincode and number_prefix).
+- Installer ShellCheck SC2088 flagged intentional display-only tilde RC hints.
+  A scoped explanatory suppression preserves the displayed command. ShellCheck
+  v0.10.0 runs successfully in an isolated, no-network container against installer
+  and packaging scripts; shell syntax checks also pass.
+- `ci tail --pipeline` eagerly resolved Git HEAD even though UUID mode does not
+  need it, failing all CI checkout platforms. A temporary non-Git cwd reproduces
+  the failure; resolution is now deferred until pipeline inference is needed.
+- A Windows test expected a mixed-separator credentials path; it now joins each
+  path component natively. Windows runtime confirmation awaits the updated CI run.
+
+Final local verification: **657 passing tests**, zero failures, one ignored doctest;
+Clippy warnings-denied, formatting, diff checks, Rust 1.88 check, and release build
+passed. Cargo audit passes with the two maintenance warnings above. Cargo deny
+licenses/bans/sources passes with duplicate-version warnings. Rebuilt release-binary
+installer smoke: **7 passed, 0 failed** against localhost; synthetic Homebrew/Scoop/
+winget generation passed Ruby syntax and JSON/YAML/digest checks. Nothing published.
+
 ## Review coverage and next actions
 
 Core architecture: `cli.rs` parses; `dispatch.rs` routes; `commands/` resolves
@@ -312,11 +357,10 @@ Prioritized remaining items (source-inspected, not yet regression-verified):
    parsing are fixed above. Assess path-segment validation for explicit/configured
    identity fields. Local SSH aliases remain trusted. Commands that infer API
    identity from an upstream remote but push/fetch `origin` need consistency review.
-3. **Stack remote-operation safety (high priority)** — local persistence and
-   land checkpoints/exit status are fixed above. Fix exit-0 partial rebase results
-   and abort removing state/deleting branches after failed declines. Review
-   stack destination retargeting/rebase order when parent branches are closed,
-   PR source identity verification, and stack-add recovery on save failure.
+3. **Stack remote-operation safety (high priority)** — local persistence,
+   landing/abort checkpoints, rebase exits, and abort source validation are fixed.
+   Review destination retargeting/rebase order when parent branches are closed,
+   landing source validation, branch recreation races, and stack-add save failure.
    Concurrent writers still need a locking strategy (optimistic checks are not locks).
 4. **Pagination follow-ups** — shared traversal, search, step consumers, and
    full branch lookup are fixed above. Review remaining low-level page-returning

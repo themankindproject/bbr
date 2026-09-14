@@ -95,7 +95,8 @@ fn setup_json_reports_saved_not_authenticated_and_never_echoes_token() {
         assert_eq!(
             value["path"],
             home.path()
-                .join("bbr/credentials.toml")
+                .join("bbr")
+                .join("credentials.toml")
                 .display()
                 .to_string()
         );
