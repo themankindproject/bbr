@@ -203,6 +203,14 @@ pub fn ensure_uuid_braces(s: &str) -> String {
     }
 }
 
+fn steps_path(workspace: &str, slug: &str, uuid: &str) -> String {
+    format!(
+        "/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/?\
+         fields=values.uuid,values.name,values.state,values.duration_in_seconds,\
+         next,size,page,pagelen&pagelen=100"
+    )
+}
+
 impl BitbucketClient {
     /// `GET /repositories/{ws}/{slug}/pipelines/` with optional branch filter.
     pub async fn list_pipelines(
@@ -216,7 +224,8 @@ impl BitbucketClient {
         let mut path = format!(
             "/repositories/{workspace}/{slug}/pipelines/?\
              fields=values.uuid,values.build_number,values.state,values.result,\
-             values.duration_in_seconds,values.target.ref_name,values.target.commit.hash&\
+             values.duration_in_seconds,values.target.ref_name,values.target.commit.hash,\
+             next,size,page,pagelen&\
              pagelen={pagelen}&sort=-created_on"
         );
         if let Some(b) = branch {
@@ -278,17 +287,26 @@ impl BitbucketClient {
         Ok(page.values.into_iter().next())
     }
 
+    /// Fetch one step page with continuation metadata intact.
     pub async fn list_steps(
         &self,
         workspace: &str,
         slug: &str,
         uuid: &str,
     ) -> Result<super::Paginated<PipelineStep>> {
-        let path = format!(
-            "/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/?\
-             fields=values.uuid,values.name,values.state,values.duration_in_seconds"
-        );
+        let path = steps_path(workspace, slug, uuid);
         self.send(reqwest::Method::GET, &path, None).await
+    }
+
+    /// Fetch every step for CLI selectors, summaries, and watch loops.
+    pub async fn list_all_steps(
+        &self,
+        workspace: &str,
+        slug: &str,
+        uuid: &str,
+    ) -> Result<Vec<PipelineStep>> {
+        self.fetch_all_pages(&steps_path(workspace, slug, uuid), usize::MAX)
+            .await
     }
 
     pub async fn step_log(
@@ -414,9 +432,7 @@ impl BitbucketClient {
     ) -> Result<Vec<PipelineVariable>> {
         let path =
             format!("/repositories/{workspace}/{slug}/pipelines_config/variables/?pagelen=100");
-        let page: super::Paginated<PipelineVariable> =
-            self.send(reqwest::Method::GET, &path, None).await?;
-        Ok(page.values)
+        self.fetch_all_pages(&path, usize::MAX).await
     }
 
     pub async fn create_pipeline_variable(
@@ -467,9 +483,7 @@ impl BitbucketClient {
     ) -> Result<Vec<PipelineSchedule>> {
         let path =
             format!("/repositories/{workspace}/{slug}/pipelines_config/schedules/?pagelen=100");
-        let page: super::Paginated<PipelineSchedule> =
-            self.send(reqwest::Method::GET, &path, None).await?;
-        Ok(page.values)
+        self.fetch_all_pages(&path, usize::MAX).await
     }
 
     /// `POST /repositories/{ws}/{slug}/pipelines_config/schedules`
@@ -554,9 +568,7 @@ impl BitbucketClient {
             "/repositories/{workspace}/{slug}/pipelines_config/schedules/{uuid}/executions?\
              pagelen={pagelen}"
         );
-        let page: super::Paginated<ScheduleExecution> =
-            self.send(reqwest::Method::GET, &path, None).await?;
-        Ok(page.values)
+        self.fetch_paginated(&path, limit as usize).await
     }
 }
 

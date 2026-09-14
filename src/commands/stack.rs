@@ -74,7 +74,7 @@ pub struct StackAbortOut {
 }
 
 pub fn init(g: &GlobalArgs, name: &str, base: Option<&str>) -> Result<()> {
-    let mut config = StackConfig::load().unwrap_or_default();
+    let mut config = StackConfig::load()?;
 
     // Check if stack already exists
     if config.find_stack(name).is_some() {
@@ -277,6 +277,7 @@ pub async fn rebase(g: &GlobalArgs, push: bool) -> Result<()> {
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     let mut steps = Vec::new();
+    let mut failure = None;
 
     for pr in &stack.prs {
         spinner.set_message(format!(
@@ -299,6 +300,7 @@ pub async fn rebase(g: &GlobalArgs, push: bool) -> Result<()> {
                                 status: "error".to_string(),
                                 message: format!("Rebase succeeded but force-push failed: {}", e),
                             });
+                            failure = Some(e);
                             break;
                         }
                     }
@@ -315,6 +317,7 @@ pub async fn rebase(g: &GlobalArgs, push: bool) -> Result<()> {
                     status: "conflict".to_string(),
                     message: format!("Rebase failed (conflicts?): {}", e),
                 });
+                failure = Some(e);
                 break; // Stop rebase chain on conflict
             }
         }
@@ -324,7 +327,11 @@ pub async fn rebase(g: &GlobalArgs, push: bool) -> Result<()> {
 
     let out = StackRebaseOut { steps };
     let human = render_rebase(&out);
-    make_formatter(g).print(&out, &human)
+    make_formatter(g).print(&out, &human)?;
+    match failure {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 pub async fn land(g: &GlobalArgs, strategy: Option<&str>, yes: bool) -> Result<()> {
@@ -334,7 +341,7 @@ pub async fn land(g: &GlobalArgs, strategy: Option<&str>, yes: bool) -> Result<(
         ));
     }
 
-    let config = StackConfig::load()?;
+    let mut config = StackConfig::load()?;
     let stack = config.active_stack()?.clone();
 
     if stack.prs.is_empty() {
@@ -343,6 +350,22 @@ pub async fn land(g: &GlobalArgs, strategy: Option<&str>, yes: bool) -> Result<(
         ));
     }
 
+    let mut ids = std::collections::HashSet::new();
+    let mut entries = Vec::with_capacity(stack.prs.len());
+    for pr in &stack.prs {
+        let id = pr.pr_id.filter(|id| *id > 0).ok_or_else(|| {
+            BitbucketError::Other(format!(
+                "Stack branch {:?} has no valid PR ID; repair .bbr/stack.toml before landing",
+                pr.branch
+            ))
+        })?;
+        if !ids.insert(id) {
+            return Err(BitbucketError::Other(format!(
+                "Stack contains duplicate PR #{id}; repair .bbr/stack.toml before landing"
+            )));
+        }
+        entries.push((pr, id));
+    }
     let client = client(g)?;
     let repo = resolve_repo(g)?;
 
@@ -362,52 +385,86 @@ pub async fn land(g: &GlobalArgs, strategy: Option<&str>, yes: bool) -> Result<(
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     let mut merged = Vec::new();
     let mut failed = Vec::new();
+    let mut failure = None;
 
-    for pr in &stack.prs {
-        if let Some(id) = pr.pr_id {
-            spinner.set_message(format!("Merging PR #{} (branch {})...", id, pr.branch));
-            let merge_req = MergePrRequest {
-                close_source_branch: Some(true),
-                merge_strategy: strategy.map(|s| s.to_string()),
-                message: None,
-            };
-            match client
-                .merge_pr(&repo.workspace, &repo.slug, id, Some(&merge_req))
-                .await
-            {
-                Ok(_) => {
-                    merged.push(id);
-                    // Also clean up local branch
-                    let _ = crate::git::delete_branch_local_async(&pr.branch).await;
+    for (index, (pr, id)) in entries.into_iter().enumerate() {
+        let result: Result<()> = async {
+            ensure_land_state_unchanged(&config)?;
+            spinner.set_message(format!("Checking PR #{id} (branch {})...", pr.branch));
+            let current = client.get_pr(&repo.workspace, &repo.slug, id).await?;
+            if current.id != id {
+                return Err(BitbucketError::Other(format!("API returned a different PR for #{id}; stopping landing")));
+            }
+            if !current.state.eq_ignore_ascii_case("MERGED") {
+                if !current.state.eq_ignore_ascii_case("OPEN") {
+                    return Err(BitbucketError::Other(format!(
+                        "PR #{id} is {}, not OPEN or MERGED; inspect it before retrying", current.state
+                    )));
                 }
-                Err(e) => {
-                    failed.push(StackLandFailure {
-                        pr_id: id,
-                        branch: pr.branch.clone(),
-                        reason: e.to_string(),
-                    });
-                    break; // Stop landing chain on failure
+                ensure_land_state_unchanged(&config)?;
+                spinner.set_message(format!("Merging PR #{id} (branch {})...", pr.branch));
+                let merge_req = MergePrRequest {
+                    close_source_branch: Some(true),
+                    merge_strategy: strategy.map(str::to_string),
+                    message: None,
+                };
+                let response = client.merge_pr(&repo.workspace, &repo.slug, id, Some(&merge_req)).await?;
+                if response.id != id || !response.state.eq_ignore_ascii_case("MERGED") {
+                    return Err(BitbucketError::Other(format!(
+                        "PR #{id} merge was not confirmed as MERGED; inspect Bitbucket before retrying"
+                    )));
                 }
             }
+            merged.push(id);
+            let checkpoint = (|| -> Result<()> {
+                ensure_land_state_unchanged(&config)?;
+                let mut next = config.clone();
+                // Keep only unmerged work until the last checkpoint; then remove
+                // just this stack, retaining siblings and a valid empty file.
+                crate::stack::apply_land_result(&mut next, &stack.name, &[id], index + 1 < stack.prs.len());
+                next.save()?;
+                config = next;
+                Ok(())
+            })();
+            checkpoint.map_err(|e| BitbucketError::Other(format!(
+                "PR #{id} is merged, but its local checkpoint failed: {e}. No further PRs were processed; inspect Bitbucket and .bbr/stack.toml before retrying"
+            )))?;
+            // Local cleanup is best-effort only after progress is safely saved.
+            if let Err(e) = crate::git::delete_branch_local_safe_async(&pr.branch).await {
+                crate::log_warn!("PR #{id} is merged; local branch {:?} was retained: {e}", pr.branch);
+            }
+            Ok(())
+        }.await;
+        if let Err(e) = result {
+            failed.push(StackLandFailure {
+                pr_id: id,
+                branch: pr.branch.clone(),
+                reason: e.to_string(),
+            });
+            failure = Some(e);
+            break;
         }
     }
-
     spinner.finish();
 
-    // Update the stack config. On full success remove only the landed stack —
-    // other stacks defined in the same file must survive. On partial failure
-    // keep the stack with its remaining unmerged PRs.
-    let mut new_config = StackConfig::load().unwrap_or_default();
-    crate::stack::apply_land_result(&mut new_config, &stack.name, &merged, !failed.is_empty());
-    if new_config.stacks.is_empty() {
-        let _ = std::fs::remove_file(StackConfig::config_path());
-    } else {
-        let _ = new_config.save();
-    }
-
     let out = StackLandOut { merged, failed };
-    let human = render_land(&out);
-    make_formatter(g).print(&out, &human)
+    make_formatter(g).print(&out, &render_land(&out))?;
+    match failure {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+/// Detect intervening edits without silently reloading an empty/default config.
+/// This is an optimistic guard, not a cross-process transaction or file lock.
+fn ensure_land_state_unchanged(expected: &StackConfig) -> Result<()> {
+    if StackConfig::load()? != *expected {
+        return Err(BitbucketError::Other(
+            "Stack configuration changed during landing; inspect .bbr/stack.toml before retrying"
+                .into(),
+        ));
+    }
+    Ok(())
 }
 
 pub async fn abort(g: &GlobalArgs, yes: bool) -> Result<()> {

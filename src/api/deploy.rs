@@ -168,9 +168,7 @@ impl BitbucketClient {
         env_uuid: &str,
     ) -> Result<Vec<EnvVariable>> {
         let path = format!("/repositories/{workspace}/{slug}/deployments_config/environments/{env_uuid}/variables?pagelen=100");
-        let page: super::Paginated<EnvVariable> =
-            self.send(reqwest::Method::GET, &path, None).await?;
-        Ok(page.values)
+        self.fetch_all_pages(&path, usize::MAX).await
     }
 
     pub async fn create_env_variable(

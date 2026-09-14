@@ -54,6 +54,9 @@ export BITBUCKET_TOKEN="<api-token>"
 
 # Or interactive file (~/.config/bbr/credentials.toml, mode 0600)
 bbr auth setup && bbr auth test
+
+# Store a token from a protected file without putting it in process arguments
+bbr auth setup --username you@example.com --token-stdin < /secure/path/token.txt
 ```
 
 Required scopes: `account:read`, `repository:read`, `repository:write`, `pullrequest:read`, `pullrequest:write`, `pipeline:read`, `pipeline:write`. Env vars take precedence over the credentials file.

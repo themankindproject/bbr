@@ -1193,14 +1193,19 @@ pub enum OpenAction {
 
 #[derive(Debug, Subcommand)]
 pub enum AuthAction {
-    /// Interactive credential setup.
+    /// Store credentials interactively or from explicit inputs (use auth test to verify).
     Setup {
         /// Username (email) for non-interactive setup.
         #[arg(long)]
         username: Option<String>,
-        /// API token for non-interactive setup.
-        #[arg(long)]
+        /// API token (visible in shell history/process arguments; prefer --token-stdin).
+        #[arg(long, conflicts_with = "token_stdin")]
         token: Option<String>,
+        /// Read the API token from piped stdin (up to 64 KiB); requires --username.
+        #[arg(long, requires = "username")]
+        token_stdin: bool,
+        #[command(flatten)]
+        g: GlobalArgs,
     },
     /// Show current credential status.
     Status {

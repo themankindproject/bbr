@@ -201,9 +201,8 @@ async fn fetch_branch_status(
         async {
             match &pipeline {
                 Some(p) => client
-                    .list_steps(&repo_id.workspace, &repo_id.slug, &p.uuid)
+                    .list_all_steps(&repo_id.workspace, &repo_id.slug, &p.uuid)
                     .await
-                    .map(|page| page.values)
                     .unwrap_or_default(),
                 None => Vec::new(),
             }

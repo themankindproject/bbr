@@ -407,7 +407,31 @@ bbr pr stack abort --yes              # skip confirmation
 
 With multiple stacks, the list also shows all names with `*` on the active one, and a hint for `bbr pr stack use <name>`. New stacks from `init` become active automatically; aborting the active stack falls back to the first remaining stack.
 
-> **Note:** `rebase` and `land` require a clean working tree. Rebase stops at the first conflict and reports which branch failed. `land` stops at the first merge failure and preserves remaining stack config for retry.
+Stack saves replace `.bbr/stack.toml` atomically rather than truncating it.
+`init` refuses unreadable or malformed existing state; repair the file rather than
+reinitializing over it. Legacy files without `active` use the first stack, but an
+explicit active name that no longer exists is an error. Recover with
+`bbr pr stack use <existing-name>` (inspect `.bbr/stack.toml` for names if needed).
+
+`land` requires positive, unique PR IDs for every entry before it starts. It
+checks each PR's current state: OPEN can be merged, MERGED is reconciled without
+another merge request, and other states stop the run. After each confirmed merge,
+it saves the remaining entries before processing the next PR. The last checkpoint
+removes only the completed stack; an empty `.bbr/stack.toml` is retained when no
+stacks remain. Local cleanup uses safe deletion and warns if a branch is retained.
+
+Partial failures emit the `{ "merged": [...], "failed": [...] }` result and exit
+nonzero (API failures retain their normal exit codes). Checkpoint failures exit
+`1`, name the already-merged PR, and stop before local cleanup or another merge.
+Detected intervening config edits also stop the run without overwriting that edit.
+
+> **Note:** `rebase` and `land` require a clean working tree. Stack operations are
+> **not transactional** across Bitbucket, Git, and the state file. Inspect remote
+> state and `.bbr/stack.toml` before retrying after interruption: a remote merge can
+> succeed before its local checkpoint. The retry checks MERGED state to avoid
+> resubmitting that merge. Config-change checks are optimistic, not file locks;
+> avoid concurrent stack writers. Abort/rebase partial-failure handling remains
+> under review.
 
 ---
 
@@ -494,6 +518,10 @@ bbr ci status --json
 ```
 
 #### `bbr ci steps`
+
+Lists steps across every API page. Log/test selectors also search the complete
+step list, so a failed or named step on a later page can be selected. The JSON
+shape stays `{ "uuid": "...", "steps": [...] }`; pagination metadata is internal.
 
 ```bash
 bbr ci steps                         # steps for latest pipeline (current branch)
@@ -703,6 +731,10 @@ bbr deploy-keys delete <key_id> [--yes]
 ### `bbr search`
 
 Search code across all repos in the workspace via the Bitbucket code search API.
+Results follow pagination links up to `--limit`, including limits above 100.
+The JSON `total` (and human headline) preserves the first page's server-reported
+match count, which may exceed the number of returned results. It is not recalculated
+from the limited result list. A later-page failure aborts without partial output.
 
 ```bash
 bbr search "TODO:"                     # search for TODOs
@@ -963,11 +995,28 @@ Credential management.
 
 ```bash
 bbr auth setup                     # interactive credential setup
-bbr auth setup --username u --token t  # non-interactive (for CI scripts)
+bbr auth setup --username you@example.com --token-stdin < /secure/path/token.txt
+bbr auth setup --username you@example.com --token-stdin --json < /secure/path/token.txt
 bbr auth test                      # validate credentials against /user
 bbr auth status                    # show auth method + rate-limit remaining
 bbr auth logout                    # remove stored credentials
 ```
+
+For CI, environment authentication avoids writing a credentials file. When a
+stored credential is needed, prefer `--token-stdin` over `--token`: command-line
+tokens may be visible in process listings and shell history. Stdin is limited to
+64 KiB of UTF-8 text and surrounding whitespace is trimmed. Empty usernames or
+tokens fail with exit `64` without replacing existing credentials.
+
+Bare setup prompts only when stdin and stderr are terminals, `--json` is absent,
+and `BBR_NO_INTERACTIVE` is unset. Otherwise, provide `--username` and a token
+source. `--token-stdin` requires piped/file input and conflicts with `--token`.
+Setup stores credentials; it does not validate them against Bitbucket. JSON mode
+returns `{ "saved": true, "username": "...", "path": "..." }`, never the token.
+Run `bbr auth test` to verify access afterward.
+
+`auth status` still succeeds with `authenticated: false` when credentials are
+missing, but now exits nonzero for corrupt or unreadable credential files.
 
 `bbr auth status` output:
 ```
@@ -1018,10 +1067,22 @@ bbr context delete personal
 bbr context list --json
 ```
 
-**Resolution priority** for workspace/slug:
+**Resolution priority** for each workspace/slug field:
 1. `--workspace` / `--slug` CLI flags (highest)
-2. Active context from `~/.config/bbr/config.toml`
-3. Git remote detection (lowest)
+2. `BB_WORKSPACE` / `BB_SLUG` environment overrides
+3. Active context from `~/.config/bbr/config.toml`
+4. Git remote detection (lowest)
+
+If both fields are explicit (flags and/or environment), the context file is not
+needed. Otherwise, malformed/unreadable configuration, a missing active-context
+entry, or an empty active workspace/slug fails with a config error (exit `1`)
+before repository-scoped API calls. It never silently selects the Git repository
+instead. Use `bbr context list` and `bbr context use <name>` to repair a stale
+selection; fix invalid TOML directly, or supply both explicit overrides.
+
+A missing config file or no active context still allows Git fallback. An omitted
+context slug also allows Git fallback for that field; an explicitly empty slug
+is an error, not an omission.
 
 Config file format (`~/.config/bbr/config.toml`):
 ```toml
@@ -1037,6 +1098,18 @@ workspace = "myuser"
 
 The `slug` field is optional — when omitted, slug is still inferred from the git remote.
 
+Git detection prefers a supported `origin`, then scans other remotes. HTTP(S)
+remotes must use `bitbucket.org`; SSH supports `git@bitbucket.org:workspace/repo.git`,
+`ssh://git@bitbucket.org/workspace/repo.git`, and `altssh.bitbucket.org:443`.
+Unrelated hosts such as `github.com` and `gitlab.com` are not Bitbucket identities.
+Paths must contain exactly two nonempty ASCII slug segments (letters, digits,
+`-`, `_`, `.`), without dot segments, percent escapes, queries, or fragments.
+
+Single-label SSH aliases such as `git@work-bitbucket:workspace/repo.git` remain
+supported. bbr trusts that local alias; it does **not** inspect SSH configuration
+to verify its destination. For dotted aliases or custom hosting, supply an explicit
+workspace/slug or context pointing to the intended Bitbucket Cloud repository.
+
 ---
 
 ### `bbr api`
@@ -1047,8 +1120,26 @@ Raw authenticated passthrough to any Bitbucket REST API endpoint. Always outputs
 bbr api GET /user
 bbr api GET /repositories/myws/myrepo
 bbr api POST /repositories/myws/myrepo/issues --data '{"title":"Bug","kind":"bug"}'
-bbr api GET /repositories/myws/myrepo/pullrequests --paginate   # follow all pages
+bbr api GET /repositories/myws/myrepo/pullrequests --paginate   # up to --limit (default 10000)
 ```
+
+`--paginate` follows the API's absolute `next` links sequentially, preserving
+opaque cursors, filters, and server order. It stops at `--limit` or when there is
+no next link, not when a page is short/empty or `size` metadata appears exhausted.
+The shared paginator uses this behavior for list commands too, including limits
+of 100 or fewer. This replaces speculative numeric-page parallel fetching;
+large listings may take more round trips, but bbr no longer guesses page URLs.
+
+Next links must stay on the same origin and under the configured API base path.
+Repeated links and traversal beyond 10,000 pages fail explicitly instead of
+returning a silently partial list. Each page retains the normal HTTP retry policy.
+
+Issue/comment lists, schedule execution lists, and workspace lists now honor the
+requested item limit across multiple pages. Directory listings, pipeline and
+environment variable lists, and schedule lists (which have no item-limit flag)
+follow next links until the end, subject to the page safety cap. Variable updates
+use the complete list to distinguish create from update; a later-page failure
+aborts rather than treating an unseen key as absent.
 
 Pairs well with `jq` for exploration:
 

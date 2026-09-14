@@ -14,11 +14,6 @@ pub struct WorkspaceOut {
 }
 
 #[derive(Debug, Deserialize)]
-struct WorkspaceResponse {
-    values: Vec<WorkspaceMembership>,
-}
-
-#[derive(Debug, Deserialize)]
 struct WorkspaceMembership {
     workspace: Workspace,
 }
@@ -36,17 +31,17 @@ pub async fn list(g: &GlobalArgs, role: Option<&str>, limit: u32) -> Result<()> 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching workspaces...");
 
-    let mut path = format!("/user/workspaces?pagelen={limit}");
+    let mut path = format!("/user/workspaces?pagelen={}", limit.min(100));
     if let Some(r) = role {
         path.push_str(&format!("&q=permission%3D%22{r}%22"));
     }
 
-    let page: WorkspaceResponse = client.send(reqwest::Method::GET, &path, None).await?;
+    let memberships: Vec<WorkspaceMembership> =
+        client.fetch_paginated(&path, limit as usize).await?;
 
     spinner.finish();
 
-    let workspaces: Vec<WorkspaceOut> = page
-        .values
+    let workspaces: Vec<WorkspaceOut> = memberships
         .into_iter()
         .map(|m| WorkspaceOut {
             slug: m.workspace.slug.clone(),

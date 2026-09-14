@@ -11,8 +11,8 @@ pub mod webhook;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use futures::{StreamExt, TryStreamExt};
-use reqwest::header::{ACCEPT, AUTHORIZATION, ETAG, IF_NONE_MATCH};
+use futures::StreamExt;
+use reqwest::header::{ACCEPT, AUTHORIZATION, CACHE_CONTROL, ETAG, IF_NONE_MATCH, VARY};
 use reqwest::{Client, Method, StatusCode};
 use secrecy::{ExposeSecret, SecretString};
 use serde::de::DeserializeOwned;
@@ -29,6 +29,9 @@ const RATE_LIMIT_WARN_THRESHOLD: u64 = 50;
 /// misbehaving proxy could otherwise stall the CLI for hours mid-command.
 const MAX_RETRY_AFTER_SECS: u64 = 60;
 
+/// Bound traversal even when an endpoint emits endless unique, empty pages.
+const MAX_PAGINATION_PAGES: usize = 10_000;
+
 /// Upper bound on the in-process ETag cache. Long-running watch loops can
 /// touch many paths; when the cap is hit the cache is dropped wholesale
 /// (worst case: one extra full fetch per path).
@@ -40,7 +43,13 @@ const MAX_ETAG_CACHE_BYTES: usize = 8 * 1024 * 1024;
 #[derive(Clone)]
 struct CachedResponse {
     etag: String,
-    body: String,
+    body: std::sync::Arc<str>,
+}
+
+#[derive(Default)]
+struct EtagCache {
+    generation: u64,
+    entries: std::collections::HashMap<(String, String), CachedResponse>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -173,8 +182,8 @@ pub struct BitbucketClient {
     creds: Credentials,
     /// `Basic base64(username:token)` — zeroized on drop via `SecretString`.
     auth_header: SecretString,
-    /// In-process ETag + body cache keyed by request path, for conditional GETs.
-    etag_cache: std::sync::Arc<Mutex<std::collections::HashMap<String, CachedResponse>>>,
+    /// Conditional GET cache keyed by request path and Accept representation.
+    etag_cache: std::sync::Arc<Mutex<EtagCache>>,
     /// Last known rate-limit remaining (from `X-RateLimit-Remaining`).
     rate_limit_remaining: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
@@ -228,7 +237,7 @@ impl BitbucketClient {
             inner,
             creds,
             auth_header,
-            etag_cache: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
+            etag_cache: std::sync::Arc::new(Mutex::new(EtagCache::default())),
             rate_limit_remaining: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX)),
         })
     }
@@ -275,53 +284,80 @@ impl BitbucketClient {
         }
     }
 
-    /// Look up a cached ETag for the given path (for conditional GETs).
-    fn get_etag(&self, path: &str) -> Option<String> {
-        self.etag_cache
-            .lock()
-            .ok()
-            .and_then(|cache| cache.get(path).map(|c| c.etag.clone()))
+    /// Snapshot the validator and its exact body together. The request retains
+    /// the body even if another request replaces/evicts the cache entry.
+    fn cached_response(&self, path: &str, accept: &str) -> (u64, Option<CachedResponse>) {
+        self.etag_cache.lock().map_or((0, None), |cache| {
+            (
+                cache.generation,
+                cache
+                    .entries
+                    .get(&(path.to_string(), accept.to_string()))
+                    .cloned(),
+            )
+        })
     }
 
-    /// Look up a cached response body for a 304 Not Modified hit.
-    fn get_cached_body(&self, path: &str) -> Option<String> {
-        self.etag_cache
-            .lock()
-            .ok()
-            .and_then(|cache| cache.get(path).map(|c| c.body.clone()))
+    fn invalidate_cache(&self) {
+        if let Ok(mut cache) = self.etag_cache.lock() {
+            cache.generation = cache.generation.wrapping_add(1);
+            cache.entries.clear();
+        }
     }
 
-    /// Store an ETag and body from a response for future conditional GETs.
-    ///
-    /// The cache is bounded both by entry count and by total body bytes, so a
-    /// handful of very large responses cannot pin memory the way an
-    /// entry-count-only cap would allow.
-    fn store_etag(&self, path: &str, headers: &reqwest::header::HeaderMap, body: &str) {
-        let Some(etag) = headers.get(ETAG).and_then(|v| v.to_str().ok()) else {
-            return;
-        };
-        if etag.is_empty() {
-            return;
-        }
-        // A single body larger than the whole budget is not worth caching.
-        if body.len() > MAX_ETAG_CACHE_BYTES {
-            return;
-        }
+    fn store_etag(
+        &self,
+        path: &str,
+        accept: &str,
+        generation: u64,
+        headers: &reqwest::header::HeaderMap,
+        body: &str,
+    ) {
         let Ok(mut cache) = self.etag_cache.lock() else {
             return;
         };
-        if !cache.contains_key(path) {
-            let would_be = cache.len() + 1;
-            let bytes: usize = cache.values().map(|c| c.body.len()).sum();
-            if would_be > MAX_ETAG_CACHE_ENTRIES || bytes + body.len() > MAX_ETAG_CACHE_BYTES {
-                cache.clear();
-            }
+        // A GET started before a mutation must not repopulate its old cache.
+        if cache.generation != generation {
+            return;
         }
-        cache.insert(
-            path.to_string(),
+        let key = (path.to_string(), accept.to_string());
+        cache.entries.remove(&key);
+        let prohibited = headers
+            .get_all(CACHE_CONTROL)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|value| value.split(','))
+            .any(|directive| {
+                directive
+                    .trim()
+                    .split('=')
+                    .next()
+                    .is_some_and(|name| name.trim().eq_ignore_ascii_case("no-store"))
+            })
+            || headers
+                .get_all(VARY)
+                .iter()
+                .filter_map(|value| value.to_str().ok())
+                .flat_map(|value| value.split(','))
+                // We only model Accept variance; other variants are not cached.
+                .any(|name| !name.trim().is_empty() && !name.trim().eq_ignore_ascii_case("accept"));
+        let Some(etag) = headers.get(ETAG).and_then(|v| v.to_str().ok()) else {
+            return;
+        };
+        if prohibited || etag.is_empty() || body.len() > MAX_ETAG_CACHE_BYTES {
+            return;
+        }
+        let bytes: usize = cache.entries.values().map(|entry| entry.body.len()).sum();
+        if cache.entries.len() >= MAX_ETAG_CACHE_ENTRIES
+            || bytes + body.len() > MAX_ETAG_CACHE_BYTES
+        {
+            cache.entries.clear();
+        }
+        cache.entries.insert(
+            key,
             CachedResponse {
                 etag: etag.to_string(),
-                body: body.to_string(),
+                body: body.into(),
             },
         );
     }
@@ -418,20 +454,23 @@ impl BitbucketClient {
                     .request(method.clone(), &url)
                     .header(AUTHORIZATION, self.auth_header_value())
                     .header(ACCEPT, "application/json");
-                if method == Method::GET {
-                    if let Some(etag) = self.get_etag(&path) {
-                        req = req.header(IF_NONE_MATCH, etag);
-                    }
+                let cache = if method == Method::GET && body.is_none() {
+                    Some(self.cached_response(&path, "application/json"))
+                } else {
+                    None
+                };
+                if let Some((_, Some(cached))) = &cache {
+                    req = req.header(IF_NONE_MATCH, &cached.etag);
                 }
                 if let Some(b) = body {
                     req = req
                         .header(reqwest::header::CONTENT_TYPE, "application/json")
                         .body(b);
                 }
-                let resp = req.send().await.map_err(BitbucketError::Http)?;
+                let resp = self.send_request(req, &method).await?;
                 self.update_rate_limit(resp.headers());
                 let retry_after = Self::retry_after_secs(resp.headers());
-                match self.decode(resp, &path).await {
+                match self.decode(resp, &path, cache).await {
                     Ok(v) => Ok(RetryOutcome::Done(Ok(v))),
                     Err(e) if Self::is_retryable_error(&e, &method) => Ok(RetryOutcome::Retry {
                         err: e,
@@ -466,22 +505,27 @@ impl BitbucketClient {
                     .request(method.clone(), &url)
                     .header(AUTHORIZATION, self.auth_header_value())
                     .header(ACCEPT, "application/json");
-                if method == Method::GET {
-                    if let Some(etag) = self.get_etag(&path) {
-                        req = req.header(IF_NONE_MATCH, etag);
-                    }
+                let cache = if method == Method::GET && body.is_none() {
+                    Some(self.cached_response(&path, "application/json"))
+                } else {
+                    None
+                };
+                if let Some((_, Some(cached))) = &cache {
+                    req = req.header(IF_NONE_MATCH, &cached.etag);
                 }
                 if let Some(b) = body {
                     req = req
                         .header(reqwest::header::CONTENT_TYPE, "application/json")
                         .body(b);
                 }
-                let resp = req.send().await.map_err(BitbucketError::Http)?;
+                let resp = self.send_request(req, &method).await?;
                 let status = resp.status();
                 self.update_rate_limit(resp.headers());
                 let retry_after = Self::retry_after_secs(resp.headers());
 
-                if status.is_success() || status == StatusCode::NOT_MODIFIED {
+                if status.is_success()
+                    || (status == StatusCode::NOT_MODIFIED && matches!(cache, Some((_, Some(_)))))
+                {
                     return Ok(RetryOutcome::Done(Ok(())));
                 }
 
@@ -506,23 +550,13 @@ impl BitbucketClient {
         self.send(Method::POST, path, Some(&raw)).await
     }
 
-    /// Fetch a paginated list, automatically following pages when `limit > 100`.
+    /// Fetch up to `limit` values, following `next` even if the server caps page size.
     pub async fn fetch_paginated<T: DeserializeOwned>(
         &self,
         path: &str,
         limit: usize,
     ) -> Result<Vec<T>> {
-        if limit == 0 {
-            return Ok(Vec::new());
-        }
-        if limit > 100 {
-            self.fetch_all_pages(path, limit).await
-        } else {
-            let page: Paginated<T> = self.send(Method::GET, path, None).await?;
-            // Truncate for parity with the all-pages path: servers may return
-            // more than requested (stale pagelen, ignored params).
-            Ok(page.values.into_iter().take(limit).collect())
-        }
+        self.fetch_all_pages(path, limit).await
     }
 
     pub async fn fetch_all_pages<T: DeserializeOwned>(
@@ -545,97 +579,37 @@ impl BitbucketClient {
         limit: usize,
     ) -> Result<Vec<T>> {
         let mut all = first_page.values;
-
-        if all.len() >= limit || first_page.next.is_none() {
-            all.truncate(limit);
-            return Ok(all);
-        }
-
-        // Determine if this endpoint supports numeric `page=N` pagination by
-        // inspecting the `next` URL. If it contains `page=`, we can safely
-        // fetch remaining pages in parallel. Otherwise, follow `next` links
-        // sequentially (cursor-based pagination — safer for all endpoints).
-        let next_url = first_page.next.as_deref().unwrap_or("");
-        let supports_numeric_paging = next_url.contains("page=");
-        // Parallel `page=N` needs a known total (`size`). Without it, following
-        // `next` sequentially is the only safe strategy.
-        let size = first_page.size as usize;
-
-        if !supports_numeric_paging || size == 0 {
-            let mut next_path = strip_base(next_url, &self.base_url)?;
-            loop {
-                let page: Paginated<T> = self.send(Method::GET, &next_path, None).await?;
-
-                if page.values.is_empty() {
-                    break;
-                }
-
-                let remaining = limit.saturating_sub(all.len());
-                all.extend(page.values.into_iter().take(remaining));
-                if all.len() >= limit {
-                    break;
-                }
-                match page.next {
-                    Some(next_url) => {
-                        next_path = strip_base(&next_url, &self.base_url)?;
-                    }
-                    None => break,
-                }
-            }
-            all.truncate(limit);
-            return Ok(all);
-        }
-
-        // Numeric paging: use the actual page-1 value count as the effective
-        // page size (not the reported `pagelen`, which may be 0 or stale).
-        let effective_pagelen = all.len().max(1);
-        let total_needed = limit.min(size);
-
-        if total_needed <= all.len() {
-            all.truncate(total_needed);
-            return Ok(all);
-        }
-
-        let num_pages = total_needed.div_ceil(effective_pagelen);
-
-        // Fetch remaining pages concurrently but reassemble them in page
-        // order: `buffer_unordered` yields results in *completion* order,
-        // which would scramble the row ordering. Tag each future with its
-        // page index and sort before flattening.
-        //
-        // Concurrency is throttled when the last observed rate-limit
-        // remainder is low, so a large `limit` doesn't burst past the quota.
-        let fanout = match self.rate_limit_remaining() {
-            Some(remaining) if remaining < 100 => 2,
-            Some(remaining) if remaining < 300 => 5,
-            _ => 10,
-        };
-        let mut futures = Vec::new();
-        for p in 2..=num_pages {
-            let p_path = if path.contains('?') {
-                format!("{path}&page={p}")
-            } else {
-                format!("{path}?page={p}")
-            };
-            futures.push(async move {
-                let page = self
-                    .send::<Paginated<T>>(Method::GET, &p_path, None)
-                    .await?;
-                Ok::<_, BitbucketError>((p, page))
-            });
-        }
-
-        let mut results: Vec<(usize, Paginated<T>)> = futures::stream::iter(futures)
-            .buffer_unordered(fanout)
-            .try_collect()
-            .await?;
-        results.sort_by_key(|(p, _)| *p);
-
-        for (_, page) in results {
-            all.extend(page.values);
-        }
-
         all.truncate(limit);
+        if all.len() >= limit || first_page.next.is_none() {
+            return Ok(all);
+        }
+
+        // `next` is opaque: even page=N can be a cursor, and size/pagelen may
+        // be absent or stale. Do not invent URLs or stop on an empty page.
+        let mut seen = std::collections::HashSet::new();
+        seen.insert(strip_base(&self.url(path), &self.base_url)?);
+        let mut next = first_page.next;
+        let mut pages = 1;
+        while let Some(next_url) = next {
+            if pages >= MAX_PAGINATION_PAGES {
+                return Err(BitbucketError::Other(format!(
+                    "pagination exceeded the {MAX_PAGINATION_PAGES}-page safety limit; narrow the query or lower --limit"
+                )));
+            }
+            let next_path = strip_base(&next_url, &self.base_url)?;
+            if !seen.insert(next_path.clone()) {
+                return Err(BitbucketError::Other(
+                    "pagination cycle detected; the API repeated a next link".into(),
+                ));
+            }
+            let page: Paginated<T> = self.send(Method::GET, &next_path, None).await?;
+            pages += 1;
+            all.extend(page.values.into_iter().take(limit - all.len()));
+            if all.len() >= limit {
+                break;
+            }
+            next = page.next;
+        }
         Ok(all)
     }
 
@@ -728,20 +702,23 @@ impl BitbucketClient {
                     .request(method.clone(), &url)
                     .header(AUTHORIZATION, self.auth_header_value())
                     .header(ACCEPT, accept.as_str());
-                if method == Method::GET {
-                    if let Some(etag) = self.get_etag(&path) {
-                        req = req.header(IF_NONE_MATCH, etag);
-                    }
+                let cache = if method == Method::GET {
+                    Some(self.cached_response(&path, &accept))
+                } else {
+                    None
+                };
+                if let Some((_, Some(cached))) = &cache {
+                    req = req.header(IF_NONE_MATCH, &cached.etag);
                 }
-                let resp = req.send().await.map_err(BitbucketError::Http)?;
+                let resp = self.send_request(req, &method).await?;
                 let status = resp.status();
                 let headers = resp.headers().clone();
                 self.update_rate_limit(&headers);
                 let retry_after = Self::retry_after_secs(&headers);
 
                 if status == StatusCode::NOT_MODIFIED {
-                    if let Some(cached) = self.get_cached_body(&path) {
-                        return Ok(RetryOutcome::Done(Ok(cached)));
+                    if let Some((_, Some(cached))) = &cache {
+                        return Ok(RetryOutcome::Done(Ok(cached.body.to_string())));
                     }
                     return Ok(RetryOutcome::Done(Err(BitbucketError::Other(format!(
                         "HTTP 304 Not Modified with empty cache [{path}]"
@@ -750,8 +727,8 @@ impl BitbucketClient {
 
                 let body = read_body_capped(resp, &path).await?;
                 if status.is_success() {
-                    if method == Method::GET {
-                        self.store_etag(&path, &headers, &body);
+                    if let Some((generation, _)) = cache {
+                        self.store_etag(&path, &accept, generation, &headers, &body);
                     }
                     return Ok(RetryOutcome::Done(Ok(body)));
                 }
@@ -769,13 +746,36 @@ impl BitbucketClient {
         .await
     }
 
-    async fn decode<T: DeserializeOwned>(&self, resp: reqwest::Response, path: &str) -> Result<T> {
+    /// Conservatively invalidate around every mutation, even transport failures:
+    /// the server may have applied a write before the connection failed.
+    async fn send_request(
+        &self,
+        request: reqwest::RequestBuilder,
+        method: &Method,
+    ) -> Result<reqwest::Response> {
+        let mutation = !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS);
+        if mutation {
+            self.invalidate_cache();
+        }
+        let response = request.send().await;
+        if mutation {
+            self.invalidate_cache();
+        }
+        response.map_err(BitbucketError::Http)
+    }
+
+    async fn decode<T: DeserializeOwned>(
+        &self,
+        resp: reqwest::Response,
+        path: &str,
+        cache: Option<(u64, Option<CachedResponse>)>,
+    ) -> Result<T> {
         let status = resp.status();
         let headers = resp.headers().clone();
 
         if status == StatusCode::NOT_MODIFIED {
-            if let Some(cached) = self.get_cached_body(path) {
-                return deserialize_body(&cached, path);
+            if let Some((_, Some(cached))) = &cache {
+                return deserialize_body(&cached.body, path);
             }
             return Err(BitbucketError::Other(format!(
                 "HTTP 304 Not Modified with empty cache [{path}]"
@@ -785,7 +785,9 @@ impl BitbucketClient {
         let text = read_body_capped(resp, path).await?;
 
         if status.is_success() {
-            self.store_etag(path, &headers, &text);
+            if let Some((generation, _)) = cache {
+                self.store_etag(path, "application/json", generation, &headers, &text);
+            }
             return deserialize_body(&text, path);
         }
 
@@ -803,17 +805,23 @@ enum RetryOutcome<T> {
 
 /// Deserialize a JSON body, treating empty success bodies as `null` then `{}`.
 fn deserialize_body<T: DeserializeOwned>(text: &str, path: &str) -> Result<T> {
+    let diagnostic_path = path.split(['?', '#']).next().unwrap_or(path);
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return serde_json::from_str("null")
             .or_else(|_| serde_json::from_str("{}"))
             .map_err(|e| {
-                crate::log_debug!("JSON decode failed for empty body ({path}): {e}");
+                crate::log_debug!("JSON decode failed for empty body ({diagnostic_path})");
                 BitbucketError::Json(e)
             });
     }
     serde_json::from_str(trimmed).map_err(|e| {
-        crate::log_debug!("JSON decode failed ({path}): {trimmed:.200}");
+        crate::log_debug!(
+            "JSON decode failed ({diagnostic_path}): {} bytes, line {}, column {}",
+            text.len(),
+            e.line(),
+            e.column()
+        );
         BitbucketError::Json(e)
     })
 }
@@ -980,11 +988,33 @@ pub fn map_error(status: StatusCode, body: &str, path: &str) -> BitbucketError {
     }
 }
 
-/// Strip the API base URL from an absolute `next` URL to get a relative path.
+/// Validate an absolute next URL, then produce the path expected by `url()`.
+/// Never include the remote URL in errors: its query/userinfo may hold secrets.
 fn strip_base(url: &str, base: &str) -> Result<String> {
-    url.strip_prefix(base)
-        .map(|s| s.to_string())
-        .ok_or_else(|| BitbucketError::Other(format!("next URL does not match base: {url}")))
+    let invalid =
+        || BitbucketError::Other("pagination next URL is invalid or outside the API base".into());
+    if url.chars().any(|ch| ch.is_control() || ch.is_whitespace()) || url.contains('\\') {
+        return Err(invalid());
+    }
+    let base = reqwest::Url::parse(base).map_err(|_| invalid())?;
+    let next = reqwest::Url::parse(url).map_err(|_| invalid())?;
+    if base.origin() != next.origin()
+        || !next.username().is_empty()
+        || next.password().is_some()
+        || next.fragment().is_some()
+    {
+        return Err(invalid());
+    }
+    let base_path = base.path().trim_end_matches('/');
+    let relative = next.path().strip_prefix(base_path).ok_or_else(invalid)?;
+    if !relative.starts_with('/') || relative.starts_with("//") {
+        return Err(invalid());
+    }
+    // Use the parsed query unchanged; decoding/re-encoding can alter opaque cursors.
+    Ok(match next.query() {
+        Some(query) => format!("{relative}?{query}"),
+        None => relative.to_string(),
+    })
 }
 
 fn one_line(s: &str) -> String {
@@ -1031,6 +1061,97 @@ mod tests {
     use super::*;
     use reqwest::StatusCode;
 
+    fn cache_test_client() -> BitbucketClient {
+        BitbucketClient::new(
+            "https://api.bitbucket.org/2.0",
+            Credentials {
+                username: "test".into(),
+                secret: "fake-token".into(),
+            },
+        )
+        .unwrap()
+    }
+
+    fn cache_test_headers() -> reqwest::header::HeaderMap {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(ETAG, "\"cached\"".parse().unwrap());
+        headers
+    }
+
+    #[test]
+    fn cache_budget_applies_when_replacing_an_existing_entry() {
+        let c = cache_test_client();
+        let headers = cache_test_headers();
+        let medium = "x".repeat(3 * 1024 * 1024);
+        c.store_etag("/a", "text/plain", 0, &headers, &medium);
+        c.store_etag("/b", "text/plain", 0, &headers, &medium);
+        c.store_etag(
+            "/a",
+            "text/plain",
+            0,
+            &headers,
+            &"x".repeat(6 * 1024 * 1024),
+        );
+        let cache = c.etag_cache.lock().unwrap();
+        assert!(
+            cache
+                .entries
+                .values()
+                .map(|entry| entry.body.len())
+                .sum::<usize>()
+                <= MAX_ETAG_CACHE_BYTES
+        );
+    }
+
+    #[test]
+    fn in_flight_snapshot_survives_eviction_with_its_exact_body() {
+        let c = cache_test_client();
+        let headers = cache_test_headers();
+        c.store_etag("/a", "text/plain", 0, &headers, "original");
+        let (_, snapshot) = c.cached_response("/a", "text/plain");
+        for n in 0..MAX_ETAG_CACHE_ENTRIES {
+            c.store_etag(&format!("/{n}"), "text/plain", 0, &headers, "other");
+        }
+        assert!(c.cached_response("/a", "text/plain").1.is_none());
+        assert_eq!(&*snapshot.unwrap().body, "original");
+    }
+
+    #[test]
+    fn pre_mutation_get_cannot_repopulate_invalidated_cache() {
+        let c = cache_test_client();
+        let (generation, _) = c.cached_response("/a", "text/plain");
+        c.clone().invalidate_cache();
+        c.store_etag(
+            "/a",
+            "text/plain",
+            generation,
+            &cache_test_headers(),
+            "stale",
+        );
+        assert!(c.cached_response("/a", "text/plain").1.is_none());
+        let (current, _) = c.cached_response("/a", "text/plain");
+        c.store_etag("/a", "text/plain", current, &cache_test_headers(), "fresh");
+        assert_eq!(
+            &*c.cached_response("/a", "text/plain").1.unwrap().body,
+            "fresh"
+        );
+    }
+
+    #[test]
+    fn oversized_replacement_removes_the_previous_validator() {
+        let c = cache_test_client();
+        let headers = cache_test_headers();
+        c.store_etag("/a", "text/plain", 0, &headers, "old");
+        c.store_etag(
+            "/a",
+            "text/plain",
+            0,
+            &headers,
+            &"x".repeat(MAX_ETAG_CACHE_BYTES + 1),
+        );
+        assert!(c.cached_response("/a", "text/plain").1.is_none());
+    }
+
     #[test]
     fn base64_roundtrip_basic() {
         assert_eq!(base64_encode(b"foo"), "Zm9v");
@@ -1048,7 +1169,7 @@ mod tests {
                 secret: "s".into(),
             },
             auth_header: SecretString::from("Basic dTpz".to_string()),
-            etag_cache: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
+            etag_cache: std::sync::Arc::new(Mutex::new(EtagCache::default())),
             rate_limit_remaining: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX)),
         };
         assert_eq!(

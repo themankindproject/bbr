@@ -234,6 +234,23 @@ is used when the server does not support ranges).
 }
 ```
 
+## `bbr auth setup --json`
+
+Provide `--username` and either `--token-stdin` (recommended) or `--token`.
+JSON mode never opens an interactive prompt. The success receipt contains no
+secret and confirms only local storage, not successful authentication:
+
+```json
+{
+  "saved": true,
+  "username": "you@example.com",
+  "path": "/home/user/.config/bbr/credentials.toml"
+}
+```
+
+The path is platform-dependent. Use `bbr auth test` to validate the token.
+Machine-readable schema: `bbr schema auth-setup`.
+
 ## `bbr auth status --json`
 
 ```json
@@ -388,6 +405,27 @@ The setting lives in `config.toml` under `[ui]` and applies to the next run.
 when `--json` is set the structured shape above is always emitted (never the
 legacy flat `{ "id", "diff" }` shape, which was ambiguous and produced
 corrupted stdout when combined with `--json`).
+
+## `bbr pr stack land --json`
+
+Emits a result after landing starts, including partial failures:
+
+```json
+{
+  "merged": [101],
+  "failed": [
+    { "pr_id": 102, "branch": "feature-2", "reason": "authentication failed: ..." }
+  ]
+}
+```
+
+A nonempty `failed` list produces a nonzero exit and the normal error object on
+stderr. API failures preserve their mapped exit code; checkpoint failures exit
+`1`. An ID can appear in both arrays if its remote merge succeeded but saving its
+local checkpoint failed. Already-MERGED PRs reconciled on retry appear in `merged`
+without a repeated merge request. Validation errors before landing starts emit
+only the error on stderr. Local branch cleanup is best-effort with warnings and
+does not change the confirmed remote merge outcome.
 
 ## Exit codes
 

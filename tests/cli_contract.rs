@@ -28,6 +28,9 @@ fn bbr() -> Command {
         .env("APPDATA", &home)
         .env("BITBUCKET_USERNAME", "test@example.com")
         .env("BITBUCKET_TOKEN", "not-a-real-token")
+        // These test consent/transport, not identity inference from this checkout.
+        .env("BB_WORKSPACE", "test-workspace")
+        .env("BB_SLUG", "test-repository")
         // Port 9 (discard) refuses instantly, so any command that gets past
         // validation fails fast instead of hanging.
         .env("BITBUCKET_API_BASE", "http://127.0.0.1:9");

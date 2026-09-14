@@ -128,37 +128,63 @@ pub fn head() -> Result<Head> {
 
 /// Parse a Bitbucket Cloud remote URL into a [`RepoIdentity`].
 ///
-/// Accepts HTTPS (`https://bitbucket.org/<ws>/<slug>.git`), SSH
-/// (`git@bitbucket.org:<ws>/<slug>.git`), and SSH host alias
-/// (`git@alias:<ws>/<slug>.git`) forms.
+/// Accepts HTTP(S) on bitbucket.org, SCP-style SSH, and ssh:// URLs.
+/// SSH also supports altssh.bitbucket.org and single-label host aliases.
+/// Aliases are trusted local configuration; they are not resolved over the network.
 pub fn parse_remote_url(url: &str) -> Option<RepoIdentity> {
-    let url = url.trim().trim_end_matches(".git");
-    // strip credentials embedded in https url: https://user:pass@host/ws/slug
-    let no_scheme = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .map(|rest| {
-            // drop credentials embedded before the host: user:pass@host/...
-            rest.split('@').next_back().unwrap_or(rest)
-        });
-
-    let path: &str = if let Some(rest) = no_scheme {
-        rest.split_once('/').map(|(_, tail)| tail)?
+    let url = url.trim();
+    if url.chars().any(|ch| ch.is_control() || ch.is_whitespace()) || url.contains('\\') {
+        return None;
+    }
+    let path = if let Some((_, rest)) = url.split_once("://") {
+        let parsed = reqwest::Url::parse(url).ok()?;
+        let host = parsed.host_str()?;
+        match parsed.scheme() {
+            "https" | "http" if host.eq_ignore_ascii_case("bitbucket.org") => {}
+            "ssh" if is_bitbucket_ssh_host(host) => {}
+            _ => return None,
+        }
+        if parsed.query().is_some() || parsed.fragment().is_some() {
+            return None;
+        }
+        // Inspect the original path: URL parsers normalize away dot segments,
+        // which would disguise a malformed identity as a different repository.
+        rest.split_once('/')?.1
     } else {
-        url.strip_prefix("git@")
-            .and_then(|rest| rest.split_once(':').map(|(_, path)| path))?
+        let (host, path) = url.strip_prefix("git@")?.split_once(':')?;
+        if !is_bitbucket_ssh_host(host) {
+            return None;
+        }
+        path
     };
 
-    let mut parts = path.splitn(2, '/');
-    let workspace = parts.next()?.trim();
-    let slug = parts.next()?.trim();
-    if workspace.is_empty() || slug.is_empty() {
+    let (workspace, slug) = path.split_once('/')?;
+    let slug = slug.strip_suffix(".git").unwrap_or(slug);
+    if !is_remote_segment(workspace) || !is_remote_segment(slug) {
         return None;
     }
     Some(RepoIdentity {
         workspace: workspace.to_string(),
         slug: slug.to_string(),
     })
+}
+
+fn is_remote_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment != "."
+        && segment != ".."
+        && segment
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
+
+fn is_bitbucket_ssh_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("bitbucket.org")
+        || host.eq_ignore_ascii_case("altssh.bitbucket.org")
+        // Support local aliases without mistaking unrelated DNS domains or IP
+        // addresses for Bitbucket. Dotted aliases require explicit repo overrides.
+        || (host.starts_with(|ch: char| ch.is_ascii_alphanumeric())
+            && host.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_')))
 }
 
 /// Detect the Bitbucket repo identity from the `origin` remote (falling back
@@ -182,7 +208,7 @@ pub fn detect_repo() -> Result<RepoIdentity> {
         }
     }
     Err(BitbucketError::Git(
-        "no git remote found in this repository".into(),
+        "no git remote for Bitbucket Cloud found; pass --workspace and --slug explicitly, or configure a Bitbucket remote".into(),
     ))
 }
 
@@ -242,6 +268,33 @@ pub fn delete_branch_local(branch: &str) -> Result<()> {
 pub fn delete_branch_local_safe(branch: &str) -> Result<()> {
     git(&["branch", "-d", "--", branch])?;
     Ok(())
+}
+
+/// Validate a literal branch name without DWIM expansion (e.g. @{-1}).
+pub fn validate_branch_name(branch: &str) -> Result<()> {
+    if branch.is_empty() || branch.starts_with('-') || branch == "HEAD" {
+        return Err(BitbucketError::Git("invalid branch name".into()));
+    }
+    git(&["check-ref-format", &format!("refs/heads/{branch}")])?;
+    Ok(())
+}
+
+/// Delete a local branch safely, treating only an absent exact ref as complete.
+/// Ref enumeration errors propagate rather than masquerading as absence.
+pub async fn delete_local_branch_if_exists(branch: &str) -> Result<bool> {
+    let branch = branch.to_string();
+    tokio::task::spawn_blocking(move || {
+        validate_branch_name(&branch)?;
+        let reference = format!("refs/heads/{branch}");
+        let refs = git(&["for-each-ref", "--format=%(refname)", "--", &reference])?;
+        if !refs.lines().any(|line| line == reference) {
+            return Ok(false);
+        }
+        delete_branch_local_safe(&branch)?;
+        Ok(true)
+    })
+    .await
+    .map_err(|e| BitbucketError::Git(format!("branch cleanup task failed: {e}")))?
 }
 
 /// Delete a remote branch on origin.
@@ -367,8 +420,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_ssh_url_with_any_host() {
-        let id = parse_remote_url("git@github.com:foo/bar.git").unwrap();
+    fn parses_ssh_url_with_local_alias() {
+        let id = parse_remote_url("git@work-bitbucket:foo/bar.git").unwrap();
         assert_eq!(id.workspace, "foo");
         assert_eq!(id.slug, "bar");
     }

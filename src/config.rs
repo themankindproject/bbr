@@ -140,8 +140,22 @@ pub fn load_credentials() -> Result<Option<CredentialsFile>> {
 fn read_credentials_file(path: &Path) -> Result<CredentialsFile> {
     let raw = fs::read_to_string(path)
         .map_err(|e| BitbucketError::Config(format!("reading {}: {e}", path.display())))?;
-    let parsed: CredentialsFile = toml::from_str(&raw)
-        .map_err(|e| BitbucketError::Config(format!("parsing {}: {e}", path.display())))?;
+    let parsed: CredentialsFile = toml::from_str(&raw).map_err(|e: toml::de::Error| {
+        // Both Display and message() may contain credential values or keys.
+        // Report only a numeric location; never attach the parser error as a source.
+        let location = e.span().map_or_else(String::new, |span| {
+            let line = raw.as_bytes()[..span.start.min(raw.len())]
+                .iter()
+                .filter(|&&byte| byte == b'\n')
+                .count()
+                + 1;
+            format!(" at line {line}")
+        });
+        BitbucketError::Config(format!(
+            "parsing {}: invalid credentials TOML{location}; check the file format or run `bbr auth setup` to replace it",
+            path.display()
+        ))
+    })?;
     Ok(parsed)
 }
 
@@ -191,7 +205,7 @@ pub fn save_credentials(creds: &CredentialsFile) -> Result<PathBuf> {
 /// at the temp path cannot redirect the write) and is then renamed over the
 /// target. A crash or SIGKILL mid-write therefore leaves either the old file
 /// or the new file intact — never a truncated credential file.
-fn write_private(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+pub(crate) fn write_private(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
     use std::io::Write;
 
     let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
@@ -269,10 +283,9 @@ pub struct ContextEntry {
 
 /// Cache for the parsed `config.toml`.
 ///
-/// A single invocation used to re-read and re-parse the file up to four times
-/// (theme init, `resolve_from_context`, `context_workspace`,
-/// `context_slug`). The file is small but the syscalls and TOML parse are pure
-/// overhead on every command.
+/// Theme initialization and repository/context resolution can load configuration
+/// repeatedly in one invocation. Reuse the parsed document to avoid redundant
+/// filesystem reads and TOML parsing.
 ///
 /// The entry is cleared by [`save_config`], which is the only writer in the
 /// process, so within a run the cache can never serve data that the same
@@ -313,7 +326,8 @@ pub fn load_config() -> Result<ConfigFile> {
     Ok(cfg)
 }
 
-/// Write `config.toml`. Creates the parent directory if needed.
+/// Atomically replace `config.toml` with a private file, creating its parent if needed.
+/// Existing readers keep the old complete file; later readers see the new one.
 pub fn save_config(cfg: &ConfigFile) -> Result<PathBuf> {
     let path = config_path()
         .ok_or_else(|| BitbucketError::Config("no writable config directory".into()))?;
@@ -323,7 +337,7 @@ pub fn save_config(cfg: &ConfigFile) -> Result<PathBuf> {
     }
     let serialized = toml::to_string_pretty(cfg)
         .map_err(|e| BitbucketError::Config(format!("serializing config: {e}")))?;
-    fs::write(&path, serialized)
+    write_private(&path, &serialized)
         .map_err(|e| BitbucketError::Config(format!("writing {}: {e}", path.display())))?;
     // Invalidate the read cache so later loads in this same process see the
     // value just written.
@@ -340,6 +354,33 @@ mod tests {
     use crate::test_support::env_lock;
     use std::io::Write;
     use tempfile::tempdir;
+
+    #[test]
+    fn private_write_failure_removes_temporary_file() {
+        let dir = tempdir().unwrap();
+        let destination = dir.path().join("config.toml");
+        fs::create_dir(&destination).unwrap();
+        fs::write(destination.join("keep"), "unchanged").unwrap();
+
+        assert!(write_private(&destination, "replacement").is_err());
+        assert_eq!(
+            fs::read_to_string(destination.join("keep")).unwrap(),
+            "unchanged"
+        );
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn private_write_replaces_existing_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "old contents").unwrap();
+
+        write_private(&path, "new contents").unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new contents");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
 
     #[cfg(unix)]
     #[test]
@@ -414,6 +455,14 @@ mod tests {
         assert_eq!(loaded.contexts["work"].slug, Some("main-repo".into()));
         assert_eq!(loaded.contexts["personal"].workspace, "myuser");
         assert_eq!(loaded.contexts["personal"].slug, None);
+
+        // A later save must invalidate the cached value in this process too.
+        cfg.active_context = Some("personal".into());
+        save_config(&cfg).unwrap();
+        assert_eq!(
+            load_config().unwrap().active_context.as_deref(),
+            Some("personal")
+        );
 
         std::env::remove_var("XDG_CONFIG_HOME");
     }

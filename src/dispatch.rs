@@ -634,7 +634,12 @@ async fn dispatch_batch(g: &GlobalArgs, action: BatchAction) -> Result<()> {
 
 async fn dispatch_auth(action: AuthAction) -> Result<()> {
     match action {
-        AuthAction::Setup { username, token } => commands::auth::setup(username, token),
+        AuthAction::Setup {
+            username,
+            token,
+            token_stdin,
+            g,
+        } => commands::auth::setup(&g, username, token, token_stdin),
         AuthAction::Status { g } => commands::auth::status(&g).await,
         AuthAction::Logout { g } => commands::auth::logout(&g),
         AuthAction::Test { g } => commands::auth::test(&g).await,

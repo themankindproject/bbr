@@ -69,8 +69,6 @@ impl BitbucketClient {
                 "/repositories/{workspace}/{slug}/src/{ref_encoded}/{path_encoded}/?pagelen=100"
             )
         };
-        let page: super::Paginated<SourceEntry> =
-            self.send(reqwest::Method::GET, &endpoint, None).await?;
-        Ok(page.values)
+        self.fetch_all_pages(&endpoint, usize::MAX).await
     }
 }

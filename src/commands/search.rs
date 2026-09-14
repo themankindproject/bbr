@@ -20,11 +20,9 @@ pub struct SearchResult {
     pub content_matches: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 pub(crate) struct SearchApiResponse {
-    #[serde(default)]
     pub(crate) values: Vec<SearchApiHit>,
-    #[serde(default)]
     pub(crate) size: u64,
 }
 
@@ -74,7 +72,17 @@ impl BitbucketClient {
             crate::api::url_encode(&q),
             limit.min(100),
         );
-        self.send(reqwest::Method::GET, &path, None).await
+        if limit == 0 {
+            return Ok(SearchApiResponse {
+                values: Vec::new(),
+                size: 0,
+            });
+        }
+        let page: crate::api::Paginated<SearchApiHit> =
+            self.send(reqwest::Method::GET, &path, None).await?;
+        let size = page.size;
+        let values = self.paginate_from(page, &path, limit as usize).await?;
+        Ok(SearchApiResponse { values, size })
     }
 }
 

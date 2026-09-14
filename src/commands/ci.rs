@@ -288,9 +288,8 @@ pub async fn watch(
 
         if include_logs {
             let steps = client
-                .list_steps(&repo.workspace, &repo.slug, &uuid)
+                .list_all_steps(&repo.workspace, &repo.slug, &uuid)
                 .await
-                .map(|s| s.values)
                 .unwrap_or_default();
 
             // When parallel steps stream at once, tag each line with its step
@@ -610,14 +609,13 @@ pub async fn tail(
 
     // Resolve which step to tail.
     let steps = client
-        .list_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
+        .list_all_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
         .await?;
 
     let selected = match step {
         Some(selector) => {
             let selector_uuid = normalize_uuid(selector);
             steps
-                .values
                 .iter()
                 .find(|s| {
                     normalize_uuid(&s.uuid) == selector_uuid
@@ -627,10 +625,9 @@ pub async fn tail(
                 .clone()
         }
         None => steps
-            .values
             .iter()
             .find(|s| !s.is_terminal())
-            .or_else(|| steps.values.last())
+            .or_else(|| steps.last())
             .ok_or_else(|| BitbucketError::NotFound("no steps for pipeline".into()))?
             .clone(),
     };
@@ -752,9 +749,8 @@ pub async fn tail(
 
             time::sleep(Duration::from_secs(interval.max(1))).await;
             let fresh_steps = client
-                .list_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
+                .list_all_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
                 .await
-                .map(|s| s.values)
                 .unwrap_or_default();
             if let Some(fresh) = fresh_steps.iter().find(|s| s.uuid == current_step_uuid) {
                 let new_state = fresh.state_name().to_string();
@@ -787,9 +783,8 @@ pub async fn tail(
                 .unwrap_or(true);
             if !pipeline_done {
                 let fresh_steps = client
-                    .list_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
+                    .list_all_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
                     .await
-                    .map(|s| s.values)
                     .unwrap_or_default();
                 let next = fresh_steps
                     .iter()
@@ -992,7 +987,7 @@ pub async fn steps(g: &GlobalArgs, uuid: Option<&str>) -> Result<()> {
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching steps...");
     let raw = client
-        .list_steps(&repo.workspace, &repo.slug, &uuid)
+        .list_all_steps(&repo.workspace, &repo.slug, &uuid)
         .await?;
     spinner.finish();
 
@@ -1004,13 +999,13 @@ pub async fn steps(g: &GlobalArgs, uuid: Option<&str>) -> Result<()> {
 
     let out = CiStepsOut {
         uuid: uuid.clone(),
-        steps: raw.values.iter().map(step_out).collect(),
+        steps: raw.iter().map(step_out).collect(),
     };
 
     let fmt = make_formatter(g);
     let theme = Theme::current();
     let mut table = Table::new().headers(["Step", "State", "Duration"]);
-    for (i, s) in raw.values.iter().enumerate() {
+    for (i, s) in raw.iter().enumerate() {
         table = table.add_row([
             format!("{}. {}", i + 1, s.name),
             theme.status_glyph(s.state_name()),
@@ -1047,11 +1042,11 @@ pub async fn tests(
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching steps...");
     let steps = client
-        .list_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
+        .list_all_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
         .await?;
     spinner.finish();
 
-    let selected = select_step(&steps.values, step, failed, latest, step.is_none())?;
+    let selected = select_step(&steps, step, failed, latest, step.is_none())?;
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching test report...");
@@ -1323,10 +1318,7 @@ async fn steps_for_pipeline(
     slug: &str,
     uuid: &str,
 ) -> Result<Vec<PipelineStep>> {
-    client
-        .list_steps(workspace, slug, uuid)
-        .await
-        .map(|page| page.values)
+    client.list_all_steps(workspace, slug, uuid).await
 }
 
 /// Return the portion of a log response that has not yet been emitted.

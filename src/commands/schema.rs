@@ -5,6 +5,21 @@ use crate::error::{BitbucketError, Result};
 
 const SCHEMAS: &[(&str, &str, &str)] = &[
     (
+        "auth-setup",
+        "JSON schema for `bbr auth setup --json` output (saved, not verified)",
+        r#"{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AuthSetupOut",
+  "type": "object",
+  "required": ["saved", "username", "path"],
+  "properties": {
+    "saved": { "type": "boolean" },
+    "username": { "type": "string" },
+    "path": { "type": "string" }
+  }
+}"#,
+    ),
+    (
         "auth",
         "JSON schema for `bbr auth status --json` output",
         r#"{

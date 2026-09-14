@@ -4,7 +4,7 @@ use crate::error::{BitbucketError, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct StackConfig {
     /// Name of the active stack (used by add/list/rebase/land/abort).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -13,7 +13,7 @@ pub struct StackConfig {
     pub stacks: Vec<StackDef>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StackDef {
     pub name: String,
     pub base_branch: String,
@@ -21,7 +21,7 @@ pub struct StackDef {
     pub prs: Vec<StackPr>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StackPr {
     pub branch: String,
     pub pr_id: Option<u64>,
@@ -49,26 +49,44 @@ impl StackConfig {
 
     pub fn load() -> Result<Self> {
         let path = Self::config_path();
-        if !path.exists() {
-            return Ok(StackConfig::default());
-        }
-        let content = std::fs::read_to_string(&path)
-            .map_err(|e| BitbucketError::Other(format!("failed to read stack config: {}", e)))?;
+        let content = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(StackConfig::default()),
+            Err(e) => {
+                return Err(BitbucketError::Other(format!(
+                    "failed to read stack config {}: {e}",
+                    path.display()
+                )))
+            }
+        };
         let config: StackConfig = toml::from_str(&content)
             .map_err(|e| BitbucketError::Other(format!("failed to parse stack config: {}", e)))?;
         Ok(config)
     }
 
+    /// Replace the complete file atomically; never truncate live stack state.
     pub fn save(&self) -> Result<()> {
-        let path = Self::config_path();
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
+        self.save_to(&Self::config_path())
+    }
+
+    fn save_to(&self, path: &std::path::Path) -> Result<()> {
         let content = toml::to_string_pretty(self).map_err(|e| {
             BitbucketError::Other(format!("failed to serialize stack config: {}", e))
         })?;
-        std::fs::write(&path, content)
-            .map_err(|e| BitbucketError::Other(format!("failed to write stack config: {}", e)))?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                BitbucketError::Other(format!(
+                    "failed to create stack config directory {}: {e}",
+                    parent.display()
+                ))
+            })?;
+        }
+        crate::config::write_private(path, &content).map_err(|e| {
+            BitbucketError::Other(format!(
+                "failed to write stack config {}: {e}",
+                path.display()
+            ))
+        })?;
         Ok(())
     }
 
@@ -87,11 +105,13 @@ impl StackConfig {
             ));
         }
         if let Some(name) = self.active.as_deref() {
-            if let Some(i) = self.stacks.iter().position(|s| s.name == name) {
-                return Ok(i);
-            }
+            return self.stacks.iter().position(|s| s.name == name).ok_or_else(|| {
+                BitbucketError::Other(format!(
+                    "Active stack {name:?} does not exist. Run `bbr pr stack use <name>` to select an existing stack, or inspect .bbr/stack.toml."
+                ))
+            });
         }
-        // Missing/stale `active` → first stack (legacy configs).
+        // Missing `active` preserves compatibility with legacy stack files.
         Ok(0)
     }
 
@@ -157,6 +177,44 @@ mod tests {
     }
 
     #[test]
+    fn failed_save_preserves_destination_and_cleans_temporary_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stack.toml");
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("keep"), "unchanged").unwrap();
+        let error = cfg(&["a"], Some("a")).save_to(&path).unwrap_err();
+        assert!(error.to_string().contains("write stack config"));
+        assert_eq!(
+            std::fs::read_to_string(path.join("keep")).unwrap(),
+            "unchanged"
+        );
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn failed_parent_creation_is_reported_directly() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("not-a-directory");
+        std::fs::write(&parent, "unchanged").unwrap();
+        let error = cfg(&["a"], Some("a"))
+            .save_to(&parent.join("stack.toml"))
+            .unwrap_err();
+        assert!(error.to_string().contains("create stack config directory"));
+        assert_eq!(std::fs::read_to_string(parent).unwrap(), "unchanged");
+    }
+
+    #[test]
+    fn private_stack_save_roundtrips_and_replaces_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested/stack.toml");
+        cfg(&["a"], Some("a")).save_to(&path).unwrap();
+        cfg(&["a", "b"], Some("b")).save_to(&path).unwrap();
+        let saved: StackConfig = toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(saved.stacks.len(), 2);
+        assert_eq!(saved.active.as_deref(), Some("b"));
+    }
+
+    #[test]
     fn active_stack_uses_named_selection() {
         let c = cfg(&["a", "b"], Some("b"));
         assert_eq!(c.active_stack().unwrap().name, "b");
@@ -169,9 +227,13 @@ mod tests {
     }
 
     #[test]
-    fn active_stack_falls_back_when_name_stale() {
+    fn active_stack_rejects_stale_selection() {
         let c = cfg(&["a", "b"], Some("gone"));
-        assert_eq!(c.active_stack().unwrap().name, "a");
+        assert!(c
+            .active_stack()
+            .unwrap_err()
+            .to_string()
+            .contains("bbr pr stack use"));
     }
 
     #[test]

@@ -462,7 +462,7 @@ impl BitbucketClient {
         let path = format!(
             "/repositories/{workspace}/{slug}/pullrequests/{id}?\
              fields=id,state,title,description,\
-             source.branch.name,destination.branch.name,\
+             source.branch.name,source.repository.full_name,source.repository.type,destination.branch.name,\
              author.display_name,author.uuid,links.html.href,\
              comment_count,task_count,close_source_branch,\
              participants.display_name,participants.uuid,participants.role,participants.approved,participants.state,\
@@ -494,7 +494,7 @@ impl BitbucketClient {
         slug: &str,
         branch: &str,
     ) -> Result<Vec<PullRequest>> {
-        self.prs_for_branch_inner(workspace, slug, branch, true, 50)
+        self.prs_for_branch_inner(workspace, slug, branch, true, usize::MAX)
             .await
     }
 
@@ -504,8 +504,9 @@ impl BitbucketClient {
         slug: &str,
         branch: &str,
         include_reviewers: bool,
-        pagelen: u32,
+        limit: usize,
     ) -> Result<Vec<PullRequest>> {
+        let pagelen = limit.min(50);
         let reviewer_fields = if include_reviewers {
             ",values.participants.display_name,values.participants.uuid,values.participants.role,\
              values.participants.approved,values.participants.state,\
@@ -526,7 +527,7 @@ impl BitbucketClient {
              q=source.branch.name%3D%22{}%22+AND+state%3D%22OPEN%22",
             super::url_encode(branch),
         );
-        self.fetch_paginated(&path, pagelen as usize).await
+        self.fetch_paginated(&path, limit).await
     }
 
     /// `POST /repositories/{ws}/{slug}/pullrequests`

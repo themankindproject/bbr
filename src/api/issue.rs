@@ -166,8 +166,7 @@ impl BitbucketClient {
                 "/repositories/{workspace}/{slug}/issues?pagelen={pagelen}&sort=-updated_on&q={encoded_q}"
             )
         };
-        let page: super::Paginated<Issue> = self.send(reqwest::Method::GET, &path, None).await?;
-        Ok(page.values)
+        self.fetch_paginated(&path, limit as usize).await
     }
 
     pub async fn get_issue(&self, workspace: &str, slug: &str, id: u64) -> Result<Issue> {
@@ -248,9 +247,7 @@ impl BitbucketClient {
         let pagelen = limit.min(50);
         let path =
             format!("/repositories/{workspace}/{slug}/issues/{id}/comments?pagelen={pagelen}");
-        let page: super::Paginated<IssueComment> =
-            self.send(reqwest::Method::GET, &path, None).await?;
-        Ok(page.values)
+        self.fetch_paginated(&path, limit as usize).await
     }
 
     pub async fn create_issue_comment(

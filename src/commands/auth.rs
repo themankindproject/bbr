@@ -1,6 +1,6 @@
 //! `bbr auth` — setup / status / logout.
 
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Read, Write};
 
 use secrecy::SecretString;
 use serde::Serialize;
@@ -25,11 +25,44 @@ pub struct AuthStatusOut {
     pub rate_limit_remaining: Option<u64>,
 }
 
-/// Credential setup (interactive or non-interactive).
-pub fn setup(username: Option<String>, token: Option<String>) -> Result<()> {
+/// Credential setup (interactive or non-interactive). Does not verify online.
+pub fn setup(
+    g: &GlobalArgs,
+    username: Option<String>,
+    token: Option<String>,
+    token_stdin: bool,
+) -> Result<()> {
+    if token_stdin && (token.is_some() || username.is_none()) {
+        return Err(BitbucketError::Usage(
+            "--token-stdin requires --username and cannot be combined with --token".into(),
+        ));
+    }
+    // Validate before consuming stdin or touching existing credentials.
+    if username.as_ref().is_some_and(|u| u.trim().is_empty()) {
+        return Err(BitbucketError::Usage("username must not be empty".into()));
+    }
+    let token = if token_stdin {
+        if io::stdin().is_terminal() {
+            return Err(BitbucketError::Usage(
+                "--token-stdin expects piped input; use `bbr auth setup` for a hidden terminal prompt".into(),
+            ));
+        }
+        Some(read_setup_token(io::stdin().lock())?)
+    } else {
+        token
+    };
     let (username, secret) = match (username, token) {
         (Some(u), Some(t)) => (u.trim().to_string(), t.trim().to_string()),
         (None, None) => {
+            if g.json
+                || std::env::var_os("BBR_NO_INTERACTIVE").is_some()
+                || !io::stdin().is_terminal()
+                || !io::stderr().is_terminal()
+            {
+                return Err(BitbucketError::Usage(
+                    "interactive auth setup is unavailable; pass --username with --token-stdin, or set BITBUCKET_USERNAME + BITBUCKET_TOKEN".into(),
+                ));
+            }
             println!("bbr auth setup");
             println!("  Need an API token? {API_TOKEN_URL}");
             println!("  Required scopes (select ALL for full CLI access):");
@@ -62,7 +95,7 @@ pub fn setup(username: Option<String>, token: Option<String>) -> Result<()> {
         }
         (Some(_), None) => {
             return Err(BitbucketError::Usage(
-                "--token is required when --username is provided".into(),
+                "--token or --token-stdin is required when --username is provided".into(),
             ));
         }
         (None, Some(_)) => {
@@ -71,6 +104,10 @@ pub fn setup(username: Option<String>, token: Option<String>) -> Result<()> {
             ));
         }
     };
+
+    if secret.is_empty() {
+        return Err(BitbucketError::Usage("API token must not be empty".into()));
+    }
 
     let existing_workspace = if let Ok(Some(file)) = config::load_credentials() {
         file.default.workspace.clone()
@@ -84,13 +121,31 @@ pub fn setup(username: Option<String>, token: Option<String>) -> Result<()> {
         workspace: existing_workspace,
     };
 
-    let creds = CredentialsFile {
-        default: profile.clone(),
-    };
+    let creds = CredentialsFile { default: profile };
     let path = config::save_credentials(&creds)?;
-    println!("  Stored credentials in: {}", path.display());
-    println!("  Run `bbr auth test` to verify.");
-    Ok(())
+    let out = serde_json::json!({
+        "saved": true,
+        "username": creds.default.username,
+        "path": path.display().to_string(),
+    });
+    let human = format!(
+        "  Stored credentials in: {}\n  Run `bbr auth test` to verify.",
+        path.display()
+    );
+    make_formatter(g).print(&out, &human)
+}
+
+/// Bound secret input so a mistakenly piped large file cannot exhaust memory.
+fn read_setup_token(reader: impl Read) -> Result<String> {
+    const MAX_TOKEN_BYTES: u64 = 64 * 1024;
+    let mut bytes = Vec::new();
+    reader.take(MAX_TOKEN_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_TOKEN_BYTES {
+        return Err(BitbucketError::Usage("token input exceeds 64 KiB".into()));
+    }
+    let token = String::from_utf8(bytes)
+        .map_err(|_| BitbucketError::Usage("token input must be UTF-8 text".into()))?;
+    Ok(token.trim().to_string())
 }
 
 /// Verify auth works by calling `GET /user`.
@@ -104,7 +159,8 @@ pub async fn status(g: &GlobalArgs) -> Result<()> {
     let creds = auth::resolve();
     let (username, credential_kind) = match creds {
         Ok(c) => (c.username, Some("atlassian_api_token".to_string())),
-        Err(_) => (String::new(), None),
+        Err(BitbucketError::NoCredentials) => (String::new(), None),
+        Err(e) => return Err(e),
     };
 
     let source = if std::env::var(auth::ENV_TOKEN).is_ok() {
