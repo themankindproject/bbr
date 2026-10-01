@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-01
+
 ### Added
 
 - **`bbr ci watch --wait-timeout <SECS>`** bounds a watch; a timeout exits `1`
@@ -1417,7 +1419,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credentials file opened with mode `0o600` at creation time on Unix, closing TOCTOU window.
 - No system keyring dependency (avoids 671 MB texlive pull).
 
-[Unreleased]: https://github.com/themankindproject/bbr/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/themankindproject/bbr/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/themankindproject/bbr/compare/v0.2.5...v0.3.0
 [0.2.0]: https://github.com/themankindproject/bbr/compare/v0.1.9...v0.2.0
 [0.1.9]: https://github.com/themankindproject/bbr/releases/tag/v0.1.9
 [0.1.8]: https://github.com/themankindproject/bbr/releases/tag/v0.1.8
