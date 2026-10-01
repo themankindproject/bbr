@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Release workflow: package manifests were never generated.** The
+  `checksums.txt` job ran `scripts/gen-packages.sh` without checking out the
+  repository, so the Homebrew/Scoop/winget manifests were not attached and the
+  post-release install verification was skipped. (v0.3.1's manifests were
+  generated with the same script and attached manually.)
+
 ## [0.3.1] - 2026-10-01
 
 Re-release of 0.3.0 with complete Linux artifacts; no CLI changes. The v0.3.0
