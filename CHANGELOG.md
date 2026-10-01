@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-01
+
+Re-release of 0.3.0 with complete Linux artifacts; no CLI changes. The v0.3.0
+GitHub release is marked as a pre-release because its Linux archives and
+`checksums.txt` were never published — install 0.3.1 instead.
+
+### Fixed
+
+- **Release workflow: Linux archives failed verification.** `tar -tzf | grep -q`
+  ran under `pipefail`; when the binary was listed first, `grep` exited early,
+  `tar` hit a broken pipe, and every Linux build was rejected as "has no bbr
+  binary". The listing is now captured before matching.
+- **Release workflow: x86_64 musl binary segfaulted on startup.** Setting the
+  linker to `musl-gcc` linked Ubuntu 22.04's musl 1.2.2 `libc.a` instead of the
+  musl Rust's std is built against; the binary crashed (exit 139) on
+  `--version`. Only the C compiler is now `musl-gcc`; rustc links with its own
+  musl. Reproduced and verified in `ubuntu:22.04` and `alpine:3.20` containers.
+
 ## [0.3.0] - 2026-10-01
 
 ### Added
@@ -1419,7 +1437,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credentials file opened with mode `0o600` at creation time on Unix, closing TOCTOU window.
 - No system keyring dependency (avoids 671 MB texlive pull).
 
-[Unreleased]: https://github.com/themankindproject/bbr/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/themankindproject/bbr/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/themankindproject/bbr/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/themankindproject/bbr/compare/v0.2.5...v0.3.0
 [0.2.0]: https://github.com/themankindproject/bbr/compare/v0.1.9...v0.2.0
 [0.1.9]: https://github.com/themankindproject/bbr/releases/tag/v0.1.9
