@@ -57,20 +57,34 @@ pub fn client(g: &GlobalArgs) -> Result<BitbucketClient> {
 static CACHED_REPO: OnceLock<RepoIdentity> = OnceLock::new();
 static CACHED_HEAD: std::sync::Mutex<Option<Head>> = std::sync::Mutex::new(None);
 
-/// Detect the current repo identity respecting `--workspace` and `--slug` overrides.
+/// Resolve the repo from explicit overrides, then active context, then git.
 ///
-/// A partial override (only workspace or only slug) still requires the other
-/// half to be resolvable — from the active context or the git remote. If it
-/// can't be resolved, we return a clear error instead of a half-empty identity
-/// that would produce confusing API 404s.
+/// A complete explicit target bypasses context loading. With a partial or absent
+/// override, invalid context configuration is an error, not permission to guess
+/// a different repository from git. An omitted context slug may still use git.
 pub fn resolve_repo(g: &GlobalArgs) -> Result<RepoIdentity> {
+    let repo = resolve_repo_unchecked(g)?;
+    // Every source (flags, BB_WORKSPACE/BB_SLUG, contexts, git) is validated
+    // here, before the identity is formatted into any API URL path.
+    git::validate_repo_identity(&repo)?;
+    Ok(repo)
+}
+
+fn resolve_repo_unchecked(g: &GlobalArgs) -> Result<RepoIdentity> {
+    let context = if g.workspace.is_some() && g.repo_slug.is_some() {
+        None
+    } else {
+        active_repo_context()?
+    };
     match (&g.workspace, &g.repo_slug) {
         (Some(ws), Some(slug)) => Ok(RepoIdentity {
             workspace: ws.clone(),
             slug: slug.clone(),
         }),
         (Some(ws), None) => {
-            let slug = context_slug().or_else(|| current_repo().ok().map(|r| r.slug));
+            let slug = context
+                .and_then(|entry| entry.slug)
+                .or_else(|| current_repo().ok().map(|r| r.slug));
             match slug {
                 Some(slug) => Ok(RepoIdentity {
                     workspace: ws.clone(),
@@ -84,7 +98,9 @@ pub fn resolve_repo(g: &GlobalArgs) -> Result<RepoIdentity> {
             }
         }
         (None, Some(slug)) => {
-            let ws = context_workspace().or_else(|| current_repo().ok().map(|r| r.workspace));
+            let ws = context
+                .map(|entry| entry.workspace)
+                .or_else(|| current_repo().ok().map(|r| r.workspace));
             match ws {
                 Some(ws) => Ok(RepoIdentity {
                     workspace: ws,
@@ -97,41 +113,46 @@ pub fn resolve_repo(g: &GlobalArgs) -> Result<RepoIdentity> {
                 )),
             }
         }
-        (None, None) => {
-            if let Some(identity) = resolve_from_context() {
-                return Ok(identity);
-            }
-            current_repo()
-        }
+        (None, None) => match context {
+            Some(entry) => Ok(RepoIdentity {
+                workspace: entry.workspace,
+                slug: match entry.slug {
+                    Some(slug) => slug,
+                    None => current_repo()?.slug,
+                },
+            }),
+            None => current_repo(),
+        },
     }
 }
 
-fn resolve_from_context() -> Option<RepoIdentity> {
-    let cfg = crate::config::load_config().ok()?;
-    let name = cfg.active_context.as_ref()?;
-    let entry = cfg.contexts.get(name)?;
-    let slug = entry
-        .slug
-        .clone()
-        .or_else(|| current_repo().ok().map(|r| r.slug))?;
-    Some(RepoIdentity {
-        workspace: entry.workspace.clone(),
-        slug,
-    })
-}
-
-fn context_workspace() -> Option<String> {
-    let cfg = crate::config::load_config().ok()?;
-    let name = cfg.active_context.as_ref()?;
-    let entry = cfg.contexts.get(name)?;
-    Some(entry.workspace.clone())
-}
-
-fn context_slug() -> Option<String> {
-    let cfg = crate::config::load_config().ok()?;
-    let name = cfg.active_context.as_ref()?;
-    let entry = cfg.contexts.get(name)?;
-    entry.slug.clone()
+/// None means no active context was selected, not that its configuration failed.
+fn active_repo_context() -> Result<Option<crate::config::ContextEntry>> {
+    let cfg = crate::config::load_config()?;
+    let Some(name) = cfg.active_context.as_ref() else {
+        return Ok(None);
+    };
+    if name.trim().is_empty() {
+        return Err(BitbucketError::Config(
+            "active_context is empty; use `bbr context use <name>` or remove active_context from config.toml".into(),
+        ));
+    }
+    let entry = cfg.contexts.get(name).ok_or_else(|| {
+        BitbucketError::Config(format!(
+            "active context {name:?} does not exist; use `bbr context list` and `bbr context use <name>` to select an existing context"
+        ))
+    })?;
+    if entry.workspace.trim().is_empty()
+        || entry
+            .slug
+            .as_ref()
+            .is_some_and(|slug| slug.trim().is_empty())
+    {
+        return Err(BitbucketError::Config(format!(
+            "active context {name:?} has an empty workspace or slug; repair config.toml (omit slug to infer it from git)"
+        )));
+    }
+    Ok(Some(entry.clone()))
 }
 
 /// Detect the current repo identity from git (cached per process).
@@ -281,8 +302,28 @@ impl SpinnerGuard {
     }
 
     /// Print a line above the spinner without disturbing it.
+    ///
+    /// The text is sanitized: callers print remote data (step names, log
+    /// lines) here. Like any spinner output it is dropped while the spinner is
+    /// hidden; use [`SpinnerGuard::println_visible`] for output the user asked for.
     pub fn println(&self, msg: impl AsRef<str>) {
-        self.0.println(msg);
+        self.0
+            .println(crate::output::sanitize_human_output(msg.as_ref()));
+    }
+
+    /// Like [`SpinnerGuard::println`], but written straight to stderr when the
+    /// spinner is hidden (`--quiet`, `BBR_QUIET`, or a non-terminal stderr),
+    /// so requested output such as `ci watch --logs` still reaches pipes and
+    /// CI logs.
+    pub fn println_visible(&self, msg: impl AsRef<str>) {
+        let msg = crate::output::sanitize_human_output(msg.as_ref());
+        if self.0.is_hidden() {
+            use std::io::Write;
+            let mut err = std::io::stderr().lock();
+            let _ = writeln!(err, "{msg}");
+        } else {
+            self.0.println(msg);
+        }
     }
 
     /// Finish and clear immediately (also called on drop).
@@ -427,15 +468,14 @@ pub async fn confirm_destructive(_g: &GlobalArgs, yes: bool, action: &str) -> Re
     confirm(&format!("{action}? [y/N] ")).await
 }
 
-/// Print the standard "nothing happened" notice for a declined action.
+/// The standard result for a declined action.
 ///
 /// Every caller that got `Ok(false)` from [`confirm_destructive`] must return
-/// this, so a cancelled destructive command never exits 0 silently — a script
-/// checking `$?` would otherwise take the success branch for work that was
-/// never done.
+/// this, so a cancelled destructive command never exits 0 — a script checking
+/// `$?` would otherwise take the success branch for work that was never done.
+/// The error prints `Aborted — nothing changed.` and exits 1.
 pub fn aborted() -> Result<()> {
-    eprintln!("Aborted — nothing changed.");
-    Ok(())
+    Err(BitbucketError::Aborted)
 }
 
 #[cfg(test)]

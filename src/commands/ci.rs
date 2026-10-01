@@ -57,6 +57,8 @@ pub struct CiWatchOut {
     pub final_state: String,
     pub duration_seconds: u64,
     pub success: bool,
+    /// Why watching stopped: `completed`, `paused` (manual step), or `timed_out`.
+    pub outcome: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failing_step: Option<StepSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -233,15 +235,45 @@ pub async fn status(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
     fmt.print(&out, &human)
 }
 
-pub async fn watch(
-    g: &GlobalArgs,
-    branch: Option<&str>,
-    interval: u64,
-    include_logs: bool,
-    notify: Option<String>,
-    line_numbers: bool,
-    from_offset: u64,
-) -> Result<()> {
+/// Options for [`watch`].
+#[derive(Debug, Clone, Default)]
+pub struct WatchOptions {
+    pub interval: u64,
+    pub include_logs: bool,
+    pub notify: Option<String>,
+    pub line_numbers: bool,
+    pub from_offset: u64,
+    /// Give up after this many seconds; `0` waits indefinitely.
+    pub timeout_secs: u64,
+}
+
+/// Why [`watch`] stopped polling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WatchOutcome {
+    Completed,
+    Paused,
+    TimedOut,
+}
+
+impl WatchOutcome {
+    fn as_str(self) -> &'static str {
+        match self {
+            WatchOutcome::Completed => "completed",
+            WatchOutcome::Paused => "paused",
+            WatchOutcome::TimedOut => "timed_out",
+        }
+    }
+}
+
+pub async fn watch(g: &GlobalArgs, branch: Option<&str>, opts: WatchOptions) -> Result<()> {
+    let WatchOptions {
+        interval,
+        include_logs,
+        notify,
+        line_numbers,
+        from_offset,
+        timeout_secs,
+    } = opts;
     let notify = parse_notify_arg(notify.as_deref())?;
     let repo = resolve_repo(g)?;
     let branch = match branch {
@@ -259,6 +291,13 @@ pub async fn watch(
     let theme = Theme::current();
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
+    // Requested output (log lines, transitions, warnings) must survive a
+    // hidden spinner (`--quiet`, piped stderr); JSON mode keeps stderr quiet.
+    let emit = |line: String| {
+        if !g.json {
+            spinner.println_visible(line);
+        }
+    };
     spinner.println(format!("Watching pipeline {uuid} on {branch}..."));
 
     // Track per-step byte offsets, last known state for transition detection,
@@ -268,6 +307,10 @@ pub async fn watch(
         prev_state: String,
         header_printed: bool,
         line_no: u64,
+        /// Log fetches made after the step reached a terminal state.
+        terminal_polls: u8,
+        /// Terminal and fully streamed: no further log requests needed.
+        drained: bool,
     }
 
     // Always present: it stays empty unless `include_logs`, and an empty map
@@ -279,19 +322,33 @@ pub async fn watch(
     // --from-offset resumes the first step that streams (the reconnect case);
     // subsequent steps start at byte 0.
     let mut resume_offset_remaining = from_offset;
+    // Last successful step listing, reused when a refresh fails so a transient
+    // error neither stalls streaming silently nor forgets known steps.
+    let mut known_steps: Vec<PipelineStep> = Vec::new();
 
     let mut current = initial;
     let watch_started = Instant::now();
+    let deadline = (timeout_secs > 0).then(|| watch_started + Duration::from_secs(timeout_secs));
     let mut current_step_name: Option<String> = None;
-    loop {
+    let outcome = loop {
         let is_terminal = current.is_terminal();
 
         if include_logs {
-            let steps = client
-                .list_steps(&repo.workspace, &repo.slug, &uuid)
+            match client
+                .list_all_steps(&repo.workspace, &repo.slug, &uuid)
                 .await
-                .map(|s| s.values)
-                .unwrap_or_default();
+            {
+                Ok(steps) => known_steps = steps,
+                Err(e) => {
+                    if matches!(e, BitbucketError::AuthFailed(_)) {
+                        return Err(e);
+                    }
+                    emit(format!(
+                        "warning: failed to list pipeline steps ({e}), retrying next tick"
+                    ));
+                }
+            }
+            let steps = &known_steps;
 
             // When parallel steps stream at once, tag each line with its step
             // name so interleaved output stays readable. Sequential pipelines
@@ -318,13 +375,15 @@ pub async fn watch(
                             prev_state: String::new(),
                             header_printed: false,
                             line_no: 1,
+                            terminal_polls: 0,
+                            drained: false,
                         },
                     );
                     resume_offset_remaining = 0;
                 }
             }
 
-            for step in &steps {
+            for step in steps {
                 let state = log_state
                     .entry(step.uuid.clone())
                     .or_insert_with(|| StepLogState {
@@ -332,7 +391,12 @@ pub async fn watch(
                         prev_state: String::new(),
                         header_printed: false,
                         line_no: 1,
+                        terminal_polls: 0,
+                        drained: false,
                     });
+                if state.drained {
+                    continue;
+                }
 
                 let step_state_name = step.state_name().to_string();
 
@@ -342,7 +406,7 @@ pub async fn watch(
                     && state.header_printed
                 {
                     let prefix = if theme.unicode_enabled() { "│" } else { "|" };
-                    spinner.println(render_step_transition(
+                    emit(render_step_transition(
                         theme,
                         Some(&step.name),
                         prefix,
@@ -351,6 +415,11 @@ pub async fn watch(
                     ));
                 }
                 state.prev_state = step_state_name;
+                // A finished step's log can still be flushing, so it is polled
+                // until a fetch brings nothing new (or one final flush), then
+                // skipped instead of re-requested on every remaining tick.
+                let step_done = step.is_terminal();
+                let flush_all = step_done && state.terminal_polls > 0;
 
                 let (body, range_honored) = match client
                     .step_log_range_checked(
@@ -364,7 +433,7 @@ pub async fn watch(
                 {
                     Ok(response) => response,
                     Err(error) => {
-                        spinner.println(format!(
+                        emit(format!(
                             "warning: failed to stream logs for {}: {error}",
                             step.name
                         ));
@@ -378,7 +447,7 @@ pub async fn watch(
 
                 if !chunk.is_empty() {
                     if !state.header_printed {
-                        spinner.println(render_watch_step_header(
+                        emit(render_watch_step_header(
                             theme,
                             &step.name,
                             step.state_name(),
@@ -390,7 +459,9 @@ pub async fn watch(
                     // If the chunk doesn't end with '\n', the trailing partial
                     // line is held back — we only advance offset to the last
                     // complete newline so the next poll re-fetches it whole.
-                    let printable_end = if chunk.ends_with('\n') {
+                    // On a finished step's second look, nothing more is coming:
+                    // print its final unterminated line too.
+                    let printable_end = if chunk.ends_with('\n') || flush_all {
                         chunk.len()
                     } else {
                         chunk.rfind('\n').map(|i| i + 1).unwrap_or(0)
@@ -400,22 +471,27 @@ pub async fn watch(
                         let label = concurrent.then(|| step_tag(&step.name));
                         for line in chunk[..printable_end].lines() {
                             let num = line_numbers.then_some(state.line_no);
-                            spinner.println(render_watch_log_line(
-                                theme,
-                                label.as_deref(),
-                                num,
-                                line,
-                            ));
+                            emit(render_watch_log_line(theme, label.as_deref(), num, line));
                             state.line_no += 1;
                         }
                     }
                     state.offset += printable_end as u64;
                 }
+                if step_done {
+                    state.terminal_polls = state.terminal_polls.saturating_add(1);
+                    state.drained = chunk.is_empty() || flush_all;
+                }
             }
         }
 
         if is_terminal {
-            break;
+            break WatchOutcome::Completed;
+        }
+        if current.is_paused() {
+            break WatchOutcome::Paused;
+        }
+        if deadline.is_some_and(|d| Instant::now() >= d) {
+            break WatchOutcome::TimedOut;
         }
         // Rich spinner: state · current step · elapsed. Elapsed is derived
         // from the pipeline's created_on so it's correct even when we attach
@@ -431,7 +507,11 @@ pub async fn watch(
             _ => format!("{} · {}", current.state_name(), human_duration(elapsed)),
         };
         spinner.set_message(msg);
-        time::sleep(Duration::from_secs(interval.max(1))).await;
+        let mut pause = Duration::from_secs(interval.max(1));
+        if let Some(d) = deadline {
+            pause = pause.min(d.saturating_duration_since(Instant::now()));
+        }
+        time::sleep(pause).await;
         // Poll errors are transient (network blip, timeout, 5xx): warn and
         // keep watching on the next tick instead of aborting a long-running
         // watch. Only auth failures are fatal — retrying can't fix those.
@@ -444,10 +524,10 @@ pub async fn watch(
                 if matches!(e, BitbucketError::AuthFailed(_)) {
                     return Err(e);
                 }
-                spinner.println(format!("warning: poll failed ({}), retrying next tick", e));
+                emit(format!("warning: poll failed ({}), retrying next tick", e));
             }
         }
-    }
+    };
     spinner.finish();
     if let Some((kind, cmd)) = &notify {
         let msg = format!("pipeline for '{}' reached {}", branch, current.state_name());
@@ -460,9 +540,10 @@ pub async fn watch(
     let steps = raw_steps.iter().map(step_out).collect::<Vec<_>>();
 
     let final_state = current.state_name().to_string();
-    let success = final_state.eq_ignore_ascii_case("SUCCESSFUL");
+    let success =
+        outcome == WatchOutcome::Completed && final_state.eq_ignore_ascii_case("SUCCESSFUL");
     let failing_step = raw_steps.iter().find(|s| s.is_failed());
-    let failure_log = if !success && !include_logs {
+    let failure_log = if outcome == WatchOutcome::Completed && !success && !include_logs {
         // If --logs was on, we already streamed everything — no need to
         // dump the tail again. Only fetch the tail when --logs is off
         // (classic behavior: show last 120 lines of failing step on failure).
@@ -472,35 +553,35 @@ pub async fn watch(
         // in full. Falls back to the complete log when the server (or an
         // intermediary) ignores the Range header.
         const FAILURE_LOG_TAIL_BYTES: u64 = 64 * 1024;
-        let step = failing_step
-            .or_else(|| raw_steps.last())
-            .ok_or_else(|| BitbucketError::NotFound("no steps for pipeline".into()))?;
-        let failure_log_text = client
-            .step_log_range(
-                &repo.workspace,
-                &repo.slug,
-                &uuid,
-                &step.uuid,
-                FAILURE_LOG_TAIL_BYTES.saturating_sub(1),
-            )
-            .await
-            .unwrap_or_else(|_| {
-                // Range rejected (or transport error): fall back to the
-                // full log so the failure excerpt is still produced. The
-                // fallback is synchronous on the already-received error, so
-                // no second network call happens unless we truly need it —
-                // but a full-log fetch is warranted here regardless.
-                String::new()
-            });
-        let failure_log_text = if failure_log_text.is_empty() {
-            client
-                .step_log(&repo.workspace, &repo.slug, &uuid, &step.uuid)
-                .await?
-                .text
-        } else {
-            failure_log_text
-        };
-        Some(failure_log_text)
+        match failing_step.or_else(|| raw_steps.last()) {
+            // An expired or stopped pipeline may never have run a step.
+            None => None,
+            Some(step) => {
+                let failure_log_text = client
+                    .step_log_range(
+                        &repo.workspace,
+                        &repo.slug,
+                        &uuid,
+                        &step.uuid,
+                        FAILURE_LOG_TAIL_BYTES.saturating_sub(1),
+                    )
+                    .await
+                    .unwrap_or_else(|_| {
+                        // Range rejected (or transport error): fall back to the
+                        // full log so the failure excerpt is still produced.
+                        String::new()
+                    });
+                let failure_log_text = if failure_log_text.is_empty() {
+                    client
+                        .step_log(&repo.workspace, &repo.slug, &uuid, &step.uuid)
+                        .await?
+                        .text
+                } else {
+                    failure_log_text
+                };
+                Some(failure_log_text)
+            }
+        }
     } else {
         None
     };
@@ -510,16 +591,30 @@ pub async fn watch(
         final_state: final_state.clone(),
         duration_seconds: current.duration_in_seconds,
         success,
+        outcome: outcome.as_str(),
         failing_step: failing_step.map(step_out),
         failure_log: failure_log.clone(),
     };
 
     let fmt = make_formatter(g);
-    let mut human = format!(
-        "Pipeline {} in {}",
-        theme.status_glyph(&final_state),
-        human_duration(out.duration_seconds)
-    );
+    let mut human = match outcome {
+        WatchOutcome::Completed => format!(
+            "Pipeline {} in {}",
+            theme.status_glyph(&final_state),
+            human_duration(out.duration_seconds)
+        ),
+        WatchOutcome::Paused => format!(
+            "Pipeline {} — paused at a manual step after {}",
+            theme.status_glyph(&final_state),
+            human_duration(watch_started.elapsed().as_secs())
+        ),
+        WatchOutcome::TimedOut => format!(
+            "Pipeline {} — still {} after waiting {}",
+            theme.status_glyph(&final_state),
+            final_state,
+            human_duration(timeout_secs)
+        ),
+    };
     let max_width = steps
         .iter()
         .map(|s| s.name.chars().count())
@@ -557,13 +652,24 @@ pub async fn watch(
     }
     fmt.print(&out, &human)?;
 
-    if !success {
-        return Err(BitbucketError::PipelineFailed {
+    match outcome {
+        WatchOutcome::Completed if success => Ok(()),
+        // Any completed pipeline that did not succeed (FAILED, ERROR, STOPPED,
+        // EXPIRED) keeps the documented exit 5, so `ci watch && deploy` never
+        // proceeds without a green build.
+        WatchOutcome::Completed => Err(BitbucketError::PipelineFailed {
             build_number: Some(current.build_number),
             branch: Some(branch),
-        });
+        }),
+        WatchOutcome::Paused => Err(BitbucketError::Other(format!(
+            "pipeline #{} on {branch} is paused at a manual step; run the step in Bitbucket, then watch again",
+            current.build_number
+        ))),
+        WatchOutcome::TimedOut => Err(BitbucketError::Other(format!(
+            "pipeline #{} on {branch} is still {final_state} after --wait-timeout {timeout_secs}s",
+            current.build_number
+        ))),
     }
-    Ok(())
 }
 
 /// Stream step logs in real time using HTTP Range requests.
@@ -586,18 +692,17 @@ pub async fn tail(
 ) -> Result<()> {
     let notify = parse_notify_arg(notify.as_deref())?;
     let repo = resolve_repo(g)?;
-    let branch: String = if let Some(b) = branch {
-        b.to_string()
-    } else {
-        current_head()?.branch
-    };
     let client = client(g)?;
     let theme = Theme::current();
 
-    // Resolve the pipeline UUID.
+    // Resolve the pipeline UUID. An explicit UUID needs no local Git branch.
     let pipeline_uuid = match pipeline {
         Some(u) => ensure_uuid_braces(u),
         None => {
+            let branch = match branch {
+                Some(branch) => branch.to_string(),
+                None => current_head()?.branch,
+            };
             let p = client
                 .latest_pipeline(&repo.workspace, &repo.slug, Some(&branch))
                 .await?
@@ -610,14 +715,13 @@ pub async fn tail(
 
     // Resolve which step to tail.
     let steps = client
-        .list_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
+        .list_all_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
         .await?;
 
     let selected = match step {
         Some(selector) => {
             let selector_uuid = normalize_uuid(selector);
             steps
-                .values
                 .iter()
                 .find(|s| {
                     normalize_uuid(&s.uuid) == selector_uuid
@@ -627,10 +731,9 @@ pub async fn tail(
                 .clone()
         }
         None => steps
-            .values
             .iter()
             .find(|s| !s.is_terminal())
-            .or_else(|| steps.values.last())
+            .or_else(|| steps.last())
             .ok_or_else(|| BitbucketError::NotFound("no steps for pipeline".into()))?
             .clone(),
     };
@@ -751,11 +854,23 @@ pub async fn tail(
             }
 
             time::sleep(Duration::from_secs(interval.max(1))).await;
-            let fresh_steps = client
-                .list_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
+            let fresh_steps = match client
+                .list_all_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
                 .await
-                .map(|s| s.values)
-                .unwrap_or_default();
+            {
+                Ok(steps) => steps,
+                Err(e) => {
+                    if matches!(e, BitbucketError::AuthFailed(_)) {
+                        return Err(e);
+                    }
+                    if !g.json {
+                        eprintln!(
+                            "warning: failed to refresh pipeline steps ({e}), retrying next tick"
+                        );
+                    }
+                    Vec::new()
+                }
+            };
             if let Some(fresh) = fresh_steps.iter().find(|s| s.uuid == current_step_uuid) {
                 let new_state = fresh.state_name().to_string();
                 if new_state != prev_state {
@@ -780,16 +895,24 @@ pub async fn tail(
         // going. Prefer a step that's already running; fall back to the next
         // pending step so we attach before it starts.
         if all {
-            let pipeline_done = client
+            let pipeline_done = match client
                 .get_pipeline(&repo.workspace, &repo.slug, &pipeline_uuid)
                 .await
-                .map(|p| p.is_terminal())
-                .unwrap_or(true);
+            {
+                Ok(p) => p.is_terminal(),
+                Err(e) => {
+                    if !g.json {
+                        eprintln!(
+                            "warning: could not check pipeline state ({e}); not advancing to further steps"
+                        );
+                    }
+                    true
+                }
+            };
             if !pipeline_done {
                 let fresh_steps = client
-                    .list_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
+                    .list_all_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
                     .await
-                    .map(|s| s.values)
                     .unwrap_or_default();
                 let next = fresh_steps
                     .iter()
@@ -992,7 +1115,7 @@ pub async fn steps(g: &GlobalArgs, uuid: Option<&str>) -> Result<()> {
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching steps...");
     let raw = client
-        .list_steps(&repo.workspace, &repo.slug, &uuid)
+        .list_all_steps(&repo.workspace, &repo.slug, &uuid)
         .await?;
     spinner.finish();
 
@@ -1004,13 +1127,13 @@ pub async fn steps(g: &GlobalArgs, uuid: Option<&str>) -> Result<()> {
 
     let out = CiStepsOut {
         uuid: uuid.clone(),
-        steps: raw.values.iter().map(step_out).collect(),
+        steps: raw.iter().map(step_out).collect(),
     };
 
     let fmt = make_formatter(g);
     let theme = Theme::current();
     let mut table = Table::new().headers(["Step", "State", "Duration"]);
-    for (i, s) in raw.values.iter().enumerate() {
+    for (i, s) in raw.iter().enumerate() {
         table = table.add_row([
             format!("{}. {}", i + 1, s.name),
             theme.status_glyph(s.state_name()),
@@ -1047,11 +1170,11 @@ pub async fn tests(
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching steps...");
     let steps = client
-        .list_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
+        .list_all_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
         .await?;
     spinner.finish();
 
-    let selected = select_step(&steps.values, step, failed, latest, step.is_none())?;
+    let selected = select_step(&steps, step, failed, latest, step.is_none())?;
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching test report...");
@@ -1323,10 +1446,7 @@ async fn steps_for_pipeline(
     slug: &str,
     uuid: &str,
 ) -> Result<Vec<PipelineStep>> {
-    client
-        .list_steps(workspace, slug, uuid)
-        .await
-        .map(|page| page.values)
+    client.list_all_steps(workspace, slug, uuid).await
 }
 
 /// Return the portion of a log response that has not yet been emitted.
@@ -1569,12 +1689,15 @@ fn classify_log_line(line: &str) -> LogLineKind {
 }
 
 /// Apply error/warning coloring to a single log line. Colors are already gated
-/// on TTY / NO_COLOR by the theme, so piped output stays byte-identical.
+/// on TTY / NO_COLOR by the theme. The line is sanitized first: pipeline logs
+/// can echo untrusted text (test names, PR content), so only SGR colors and the
+/// final carriage-return redraw are kept.
 fn highlight_log_line(theme: &Theme, line: &str) -> String {
-    match classify_log_line(line) {
-        LogLineKind::Error => theme.error(line).into_owned(),
-        LogLineKind::Warn => theme.warn(line).into_owned(),
-        LogLineKind::Normal => line.to_string(),
+    let line = crate::output::sanitize_log_line(line);
+    match classify_log_line(&line) {
+        LogLineKind::Error => theme.error(&line).into_owned(),
+        LogLineKind::Warn => theme.warn(&line).into_owned(),
+        LogLineKind::Normal => line.into_owned(),
     }
 }
 
@@ -1772,6 +1895,7 @@ mod tests {
             state: PipelineState {
                 name: state.into(),
                 result: None,
+                stage: None,
             },
             duration_in_seconds: 1,
             started_on: None,

@@ -20,7 +20,7 @@ use crate::error::{BitbucketError, Result};
 use crate::git;
 use crate::output::table::Table;
 use crate::output::theme::Theme;
-use crate::output::{print_block, print_paginated, write_paginated, Formatter};
+use crate::output::{print_block, print_paginated, Formatter};
 
 // ---- JSON output shapes ---------------------------------------------------
 
@@ -337,12 +337,8 @@ pub async fn view(
         Ok(())
     };
 
-    if g.no_pager || !std::io::stdout().is_terminal() {
-        let mut out = std::io::stdout().lock();
-        write_body(&mut out)
-    } else {
-        write_paginated(write_body)
-    }
+    // Sanitized streaming: titles, comments and diff hunk headers are remote text.
+    crate::output::write_human(g.no_pager, write_body)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -384,6 +380,20 @@ pub async fn create(
         None
     };
 
+    // Accept usernames like `pr add-reviewer` does; the API field needs UUIDs,
+    // and a bare name there is rejected or silently dropped.
+    let mut reviewer_refs: Vec<ReviewerRef> = Vec::with_capacity(reviewers.len());
+    for user in reviewers {
+        let uuid = client.resolve_user_uuid(user).await?;
+        let key = crate::api::pipeline::normalize_uuid(&uuid);
+        if !reviewer_refs
+            .iter()
+            .any(|r| crate::api::pipeline::normalize_uuid(&r.uuid) == key)
+        {
+            reviewer_refs.push(ReviewerRef { uuid });
+        }
+    }
+
     let req = CreatePrRequest {
         title: title.to_string(),
         description,
@@ -402,10 +412,7 @@ pub async fn create(
         } else {
             None
         },
-        reviewers: reviewers
-            .iter()
-            .map(|uuid| ReviewerRef { uuid: uuid.clone() })
-            .collect(),
+        reviewers: reviewer_refs,
         draft: if draft { Some(true) } else { None },
     };
 
@@ -1020,6 +1027,7 @@ pub async fn update(
             description: Some(d.to_string()),
             close_source_branch: None,
             reviewers: None,
+            destination: None,
         },
         (title, desc) => {
             let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
@@ -1034,6 +1042,7 @@ pub async fn update(
                     .or_else(|| pr.description.clone()),
                 close_source_branch: None,
                 reviewers: None,
+                destination: None,
             }
         }
     };
@@ -1131,7 +1140,9 @@ pub async fn diff(
             print_paginated(&rendered)
         }
     } else if raw {
-        print_block(&body)
+        // Verbatim when piped (`bbr pr diff --raw | git apply` must keep CRLF
+        // and every byte); sanitized only when shown on a terminal.
+        crate::output::print_raw(&body)
     } else {
         let theme = Theme::current();
         let files = crate::diff::filter_files(crate::diff::parser::parse(&body), paths);
@@ -1152,16 +1163,10 @@ pub async fn diff(
             wrap_long_lines: wrap,
         };
 
-        if g.no_pager || !std::io::stdout().is_terminal() {
-            let mut out = std::io::stdout().lock();
-            crate::diff::renderer::render_to(&files, &options, theme, &mut out)?;
+        crate::output::write_human(g.no_pager, |w| {
+            crate::diff::renderer::render_to(&files, &options, theme, w)?;
             Ok(())
-        } else {
-            write_paginated(|w| {
-                crate::diff::renderer::render_to(&files, &options, theme, w)?;
-                Ok(())
-            })
-        }
+        })
     }
 }
 

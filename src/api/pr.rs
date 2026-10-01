@@ -318,7 +318,7 @@ pub struct CommentContent {
 }
 
 /// Body for `PUT /repositories/{ws}/{slug}/pullrequests/{id}`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 pub struct UpdatePrRequest {
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -327,6 +327,20 @@ pub struct UpdatePrRequest {
     pub close_source_branch: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reviewers: Option<Vec<ReviewerRef>>,
+    /// New destination branch (retargets an open pull request).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination: Option<CreateBranchRef>,
+}
+
+impl CreateBranchRef {
+    /// Reference a branch by name.
+    pub fn named(name: &str) -> Self {
+        CreateBranchRef {
+            branch: CreateNamed {
+                name: name.to_string(),
+            },
+        }
+    }
 }
 
 /// Body for `POST /repositories/{ws}/{slug}/pullrequests/{id}/merge`.
@@ -412,7 +426,7 @@ impl BitbucketClient {
         // Include next/size/pagelen so pagination metadata survives the fields filter.
         // uuid fields are required by the dashboard's identity matching and by
         // reviewer add/remove round-trips.
-        let fields = "values.id,values.state,values.title,\
+        let fields = "values.id,values.state,values.title,values.draft,\
              values.source.branch.name,values.destination.branch.name,\
              values.author.display_name,values.author.uuid,values.links.html.href,\
              values.comment_count,values.task_count,values.close_source_branch,\
@@ -461,8 +475,8 @@ impl BitbucketClient {
     pub async fn get_pr(&self, workspace: &str, slug: &str, id: u64) -> Result<PullRequest> {
         let path = format!(
             "/repositories/{workspace}/{slug}/pullrequests/{id}?\
-             fields=id,state,title,description,\
-             source.branch.name,destination.branch.name,\
+             fields=id,state,title,description,draft,\
+             source.branch.name,source.repository.full_name,source.repository.type,destination.branch.name,\
              author.display_name,author.uuid,links.html.href,\
              comment_count,task_count,close_source_branch,\
              participants.display_name,participants.uuid,participants.role,participants.approved,participants.state,\
@@ -494,7 +508,7 @@ impl BitbucketClient {
         slug: &str,
         branch: &str,
     ) -> Result<Vec<PullRequest>> {
-        self.prs_for_branch_inner(workspace, slug, branch, true, 50)
+        self.prs_for_branch_inner(workspace, slug, branch, true, usize::MAX)
             .await
     }
 
@@ -504,8 +518,9 @@ impl BitbucketClient {
         slug: &str,
         branch: &str,
         include_reviewers: bool,
-        pagelen: u32,
+        limit: usize,
     ) -> Result<Vec<PullRequest>> {
+        let pagelen = limit.min(50);
         let reviewer_fields = if include_reviewers {
             ",values.participants.display_name,values.participants.uuid,values.participants.role,\
              values.participants.approved,values.participants.state,\
@@ -526,7 +541,7 @@ impl BitbucketClient {
              q=source.branch.name%3D%22{}%22+AND+state%3D%22OPEN%22",
             super::url_encode(branch),
         );
-        self.fetch_paginated(&path, pagelen as usize).await
+        self.fetch_paginated(&path, limit).await
     }
 
     /// `POST /repositories/{ws}/{slug}/pullrequests`
@@ -614,6 +629,7 @@ impl BitbucketClient {
             description: None,
             close_source_branch: None,
             reviewers: Some(reviewers),
+            destination: None,
         };
         self.update_pr(workspace, slug, id, &body).await
     }
@@ -645,6 +661,7 @@ impl BitbucketClient {
             description: None,
             close_source_branch: None,
             reviewers: Some(reviewers),
+            destination: None,
         };
         self.update_pr(workspace, slug, id, &body).await
     }
@@ -1013,6 +1030,7 @@ mod tests {
             description: Some("New desc".into()),
             close_source_branch: None,
             reviewers: None,
+            destination: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["title"], "New Title");

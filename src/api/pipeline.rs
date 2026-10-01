@@ -26,15 +26,42 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
+    /// Whether the pipeline has finished. Any `COMPLETED` state counts, so a
+    /// result Bitbucket adds later (like `EXPIRED`) can never make
+    /// `ci watch` poll forever.
     pub fn is_terminal(&self) -> bool {
+        if self.state.name.eq_ignore_ascii_case("COMPLETED") {
+            return true;
+        }
         let name = self.effective_result_name();
-        matches!(name, Some("SUCCESSFUL" | "FAILED" | "STOPPED" | "ERROR"))
+        matches!(
+            name.map(str::to_ascii_uppercase).as_deref(),
+            Some("SUCCESSFUL" | "FAILED" | "STOPPED" | "ERROR" | "EXPIRED")
+        )
+    }
+
+    /// Whether the pipeline is in progress but halted at a manual step
+    /// (`state.name == IN_PROGRESS`, `state.stage.name == PAUSED`).
+    pub fn is_paused(&self) -> bool {
+        !self.is_terminal()
+            && (self
+                .state
+                .stage
+                .as_ref()
+                .is_some_and(|s| s.name.eq_ignore_ascii_case("PAUSED"))
+                || self.state.name.eq_ignore_ascii_case("PAUSED")
+                || self.state.name.eq_ignore_ascii_case("HALTED"))
     }
 
     pub fn state_name(&self) -> &str {
         if let Some(r) = self.effective_result_name() {
             if !r.is_empty() {
                 return r;
+            }
+        }
+        if let Some(stage) = &self.state.stage {
+            if stage.name.eq_ignore_ascii_case("PAUSED") {
+                return &stage.name;
             }
         }
         &self.state.name
@@ -61,6 +88,9 @@ pub struct PipelineState {
     pub name: String,
     #[serde(default)]
     pub result: Option<PipelineResult>,
+    /// Sub-state of `IN_PROGRESS` (`RUNNING` or `PAUSED` at a manual step).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage: Option<PipelineResult>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -119,10 +149,11 @@ impl PipelineStep {
     }
 
     pub fn is_terminal(&self) -> bool {
-        matches!(
-            self.state_name().to_ascii_uppercase().as_str(),
-            "SUCCESSFUL" | "FAILED" | "ERROR" | "STOPPED"
-        )
+        self.state.name.eq_ignore_ascii_case("COMPLETED")
+            || matches!(
+                self.state_name().to_ascii_uppercase().as_str(),
+                "SUCCESSFUL" | "FAILED" | "ERROR" | "STOPPED" | "EXPIRED" | "NOT_RUN"
+            )
     }
 }
 
@@ -203,6 +234,14 @@ pub fn ensure_uuid_braces(s: &str) -> String {
     }
 }
 
+fn steps_path(workspace: &str, slug: &str, uuid: &str) -> String {
+    format!(
+        "/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/?\
+         fields=values.uuid,values.name,values.state,values.duration_in_seconds,\
+         next,size,page,pagelen&pagelen=100"
+    )
+}
+
 impl BitbucketClient {
     /// `GET /repositories/{ws}/{slug}/pipelines/` with optional branch filter.
     pub async fn list_pipelines(
@@ -216,7 +255,8 @@ impl BitbucketClient {
         let mut path = format!(
             "/repositories/{workspace}/{slug}/pipelines/?\
              fields=values.uuid,values.build_number,values.state,values.result,\
-             values.duration_in_seconds,values.target.ref_name,values.target.commit.hash&\
+             values.duration_in_seconds,values.target.ref_name,values.target.commit.hash,\
+             next,size,page,pagelen&\
              pagelen={pagelen}&sort=-created_on"
         );
         if let Some(b) = branch {
@@ -278,17 +318,26 @@ impl BitbucketClient {
         Ok(page.values.into_iter().next())
     }
 
+    /// Fetch one step page with continuation metadata intact.
     pub async fn list_steps(
         &self,
         workspace: &str,
         slug: &str,
         uuid: &str,
     ) -> Result<super::Paginated<PipelineStep>> {
-        let path = format!(
-            "/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/?\
-             fields=values.uuid,values.name,values.state,values.duration_in_seconds"
-        );
+        let path = steps_path(workspace, slug, uuid);
         self.send(reqwest::Method::GET, &path, None).await
+    }
+
+    /// Fetch every step for CLI selectors, summaries, and watch loops.
+    pub async fn list_all_steps(
+        &self,
+        workspace: &str,
+        slug: &str,
+        uuid: &str,
+    ) -> Result<Vec<PipelineStep>> {
+        self.fetch_all_pages(&steps_path(workspace, slug, uuid), usize::MAX)
+            .await
     }
 
     pub async fn step_log(
@@ -414,9 +463,7 @@ impl BitbucketClient {
     ) -> Result<Vec<PipelineVariable>> {
         let path =
             format!("/repositories/{workspace}/{slug}/pipelines_config/variables/?pagelen=100");
-        let page: super::Paginated<PipelineVariable> =
-            self.send(reqwest::Method::GET, &path, None).await?;
-        Ok(page.values)
+        self.fetch_all_pages(&path, usize::MAX).await
     }
 
     pub async fn create_pipeline_variable(
@@ -467,9 +514,7 @@ impl BitbucketClient {
     ) -> Result<Vec<PipelineSchedule>> {
         let path =
             format!("/repositories/{workspace}/{slug}/pipelines_config/schedules/?pagelen=100");
-        let page: super::Paginated<PipelineSchedule> =
-            self.send(reqwest::Method::GET, &path, None).await?;
-        Ok(page.values)
+        self.fetch_all_pages(&path, usize::MAX).await
     }
 
     /// `POST /repositories/{ws}/{slug}/pipelines_config/schedules`
@@ -554,9 +599,7 @@ impl BitbucketClient {
             "/repositories/{workspace}/{slug}/pipelines_config/schedules/{uuid}/executions?\
              pagelen={pagelen}"
         );
-        let page: super::Paginated<ScheduleExecution> =
-            self.send(reqwest::Method::GET, &path, None).await?;
-        Ok(page.values)
+        self.fetch_paginated(&path, limit as usize).await
     }
 }
 
@@ -622,6 +665,7 @@ mod tests {
             state: PipelineState {
                 name: "IN_PROGRESS".into(),
                 result: None,
+                stage: None,
             },
             result: Some(PipelineResult {
                 name: result_name.into(),
@@ -638,6 +682,7 @@ mod tests {
                 result: Some(PipelineResult {
                     name: state_result.into(),
                 }),
+                stage: None,
             },
             result: None,
             ..Default::default()
@@ -658,6 +703,45 @@ mod tests {
     }
 
     #[test]
+    fn expired_and_any_completed_pipeline_is_terminal() {
+        assert!(pipeline_with_state_result("EXPIRED").is_terminal());
+        assert!(pipeline_with_result("expired").is_terminal());
+        // A COMPLETED state with a result name bbr does not know yet.
+        assert!(pipeline_with_state_result("SOMETHING_NEW").is_terminal());
+    }
+
+    #[test]
+    fn paused_stage_is_reported_and_not_terminal() {
+        let p: Pipeline = serde_json::from_value(serde_json::json!({
+            "uuid": "{p}",
+            "state": {"name": "IN_PROGRESS", "stage": {"name": "PAUSED"}}
+        }))
+        .unwrap();
+        assert!(!p.is_terminal());
+        assert!(p.is_paused());
+        assert_eq!(p.state_name(), "PAUSED");
+        let running: Pipeline = serde_json::from_value(serde_json::json!({
+            "state": {"name": "IN_PROGRESS", "stage": {"name": "RUNNING"}}
+        }))
+        .unwrap();
+        assert!(!running.is_paused());
+        assert_eq!(running.state_name(), "IN_PROGRESS");
+    }
+
+    #[test]
+    fn not_run_and_expired_steps_are_terminal_but_not_failed() {
+        for result in ["NOT_RUN", "EXPIRED"] {
+            let step: PipelineStep = serde_json::from_value(serde_json::json!({
+                "uuid": "{s}",
+                "state": {"name": "COMPLETED", "result": {"name": result}}
+            }))
+            .unwrap();
+            assert!(step.is_terminal(), "{result}");
+            assert!(!step.is_failed(), "{result}");
+        }
+    }
+
+    #[test]
     fn pipeline_state_name_returns_result_name_when_present() {
         let p = pipeline_with_result("SUCCESSFUL");
         assert_eq!(p.state_name(), "SUCCESSFUL");
@@ -670,6 +754,7 @@ mod tests {
             state: PipelineState {
                 name: "PENDING".into(),
                 result: None,
+                stage: None,
             },
             result: None,
             ..Default::default()
@@ -692,6 +777,7 @@ mod tests {
                 state: PipelineState {
                     name: state.to_string(),
                     result: None,
+                    stage: None,
                 },
                 ..Default::default()
             };
@@ -707,6 +793,7 @@ mod tests {
             state: PipelineState {
                 name: "SUCCESSFUL".into(),
                 result: None,
+                stage: None,
             },
             ..Default::default()
         };
@@ -723,6 +810,7 @@ mod tests {
                 result: Some(PipelineResult {
                     name: "FAILED".into(),
                 }),
+                stage: None,
             },
             ..Default::default()
         };
@@ -737,6 +825,7 @@ mod tests {
             state: PipelineState {
                 name: "RUNNING".into(),
                 result: None,
+                stage: None,
             },
             ..Default::default()
         };

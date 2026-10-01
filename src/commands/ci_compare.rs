@@ -95,11 +95,11 @@ pub async fn compare(g: &GlobalArgs, a_ref: &str, b_ref: &str) -> Result<()> {
 
     spinner.set_message("Fetching pipeline steps...");
     let (steps_a_res, steps_b_res) = tokio::join!(
-        client.list_steps(&repo.workspace, &repo.slug, &pipe_a.uuid),
-        client.list_steps(&repo.workspace, &repo.slug, &pipe_b.uuid)
+        client.list_all_steps(&repo.workspace, &repo.slug, &pipe_a.uuid),
+        client.list_all_steps(&repo.workspace, &repo.slug, &pipe_b.uuid)
     );
-    let steps_a = steps_a_res?.values;
-    let steps_b = steps_b_res?.values;
+    let steps_a = steps_a_res?;
+    let steps_b = steps_b_res?;
 
     spinner.set_message("Fetching test reports...");
     // Fetch test reports concurrently

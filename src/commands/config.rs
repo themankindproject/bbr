@@ -65,6 +65,9 @@ pub fn run_show(g: &GlobalArgs) -> Result<()> {
 pub fn run_set(g: &GlobalArgs, key: &str, value: &str) -> Result<()> {
     match key {
         "workspace" => {
+            if !value.is_empty() {
+                crate::git::validate_repo_segment("workspace", value)?;
+            }
             let mut creds = config::load_credentials()?.unwrap_or_default();
             creds.default.workspace = if value.is_empty() {
                 None

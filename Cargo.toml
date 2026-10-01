@@ -1,6 +1,6 @@
 [package]
 name = "bbr"
-version = "0.2.5"
+version = "0.3.0"
 edition = "2021"
 description = "BitBucket Remote — a fast, single-binary Bitbucket Cloud CLI for coding agents and humans"
 license = "MIT"
@@ -23,16 +23,21 @@ exclude = [
 name = "bbr"
 path = "src/main.rs"
 
-# `cargo binstall bbr` support. Asset naming must match release.yml exactly:
-#   bbr-<target>.tar.gz  (unix)   bbr-<target>.zip  (windows)
-# plus the per-asset `bbr-<target>.<ext>.sha256` we publish, which binstall
-# picks up automatically for checksum verification.
+# For binstall --manifest-path pointing to this checkout (the crates.io name
+# belongs to a different package). Metadata describes locations, not signatures.
+# Explicit suffixes match release.yml: tgz's default suffix is .tgz, not .tar.gz.
 [package.metadata.binstall]
-pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }{ archive-suffix }"
+# Spell the archive suffix out: `{ archive-suffix }` renders `.tgz` for the
+# `tgz` format, but release.yml publishes `.tar.gz`.
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.tar.gz"
 bin-dir = "{ bin }{ binary-ext }"
 pkg-fmt = "tgz"
+# Never reach the unrelated crates.io `bbr` package or an unverified
+# third-party mirror; only this repo's own release assets are acceptable.
+disabled-strategies = ["quick-install", "compile"]
 
 [package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.zip"
 pkg-fmt = "zip"
 
 [dependencies]
@@ -61,7 +66,7 @@ colored = "2"
 # Config / dirs / misc
 dirs = "5"
 xdg = "2"
-rpassword = "=7.3.1"
+rpassword = "7.5.4"
 
 # Credential safety (zeroize on drop); serde support for loading from TOML
 secrecy = { version = "0.10", features = ["serde"] }

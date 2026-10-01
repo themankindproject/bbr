@@ -128,37 +128,102 @@ pub fn head() -> Result<Head> {
 
 /// Parse a Bitbucket Cloud remote URL into a [`RepoIdentity`].
 ///
-/// Accepts HTTPS (`https://bitbucket.org/<ws>/<slug>.git`), SSH
-/// (`git@bitbucket.org:<ws>/<slug>.git`), and SSH host alias
-/// (`git@alias:<ws>/<slug>.git`) forms.
+/// Accepts HTTP(S) on bitbucket.org, SCP-style SSH, and ssh:// URLs.
+/// SSH also supports altssh.bitbucket.org and single-label host aliases.
+/// Aliases are trusted local configuration; they are not resolved over the network.
 pub fn parse_remote_url(url: &str) -> Option<RepoIdentity> {
-    let url = url.trim().trim_end_matches(".git");
-    // strip credentials embedded in https url: https://user:pass@host/ws/slug
-    let no_scheme = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .map(|rest| {
-            // drop credentials embedded before the host: user:pass@host/...
-            rest.split('@').next_back().unwrap_or(rest)
-        });
-
-    let path: &str = if let Some(rest) = no_scheme {
-        rest.split_once('/').map(|(_, tail)| tail)?
+    let url = url.trim();
+    if url.chars().any(|ch| ch.is_control() || ch.is_whitespace()) || url.contains('\\') {
+        return None;
+    }
+    let path = if let Some((_, rest)) = url.split_once("://") {
+        let parsed = reqwest::Url::parse(url).ok()?;
+        let host = parsed.host_str()?;
+        match parsed.scheme() {
+            "https" | "http" if host.eq_ignore_ascii_case("bitbucket.org") => {}
+            "ssh" if is_bitbucket_ssh_host(host) => {}
+            _ => return None,
+        }
+        if parsed.query().is_some() || parsed.fragment().is_some() {
+            return None;
+        }
+        // Inspect the original path: URL parsers normalize away dot segments,
+        // which would disguise a malformed identity as a different repository.
+        rest.split_once('/')?.1
     } else {
-        url.strip_prefix("git@")
-            .and_then(|rest| rest.split_once(':').map(|(_, path)| path))?
+        let (host, path) = url.strip_prefix("git@")?.split_once(':')?;
+        if !is_bitbucket_ssh_host(host) {
+            return None;
+        }
+        path
     };
 
-    let mut parts = path.splitn(2, '/');
-    let workspace = parts.next()?.trim();
-    let slug = parts.next()?.trim();
-    if workspace.is_empty() || slug.is_empty() {
+    let (workspace, slug) = path.split_once('/')?;
+    let slug = slug.strip_suffix(".git").unwrap_or(slug);
+    if !is_remote_segment(workspace) || !is_remote_segment(slug) {
         return None;
     }
     Some(RepoIdentity {
         workspace: workspace.to_string(),
         slug: slug.to_string(),
     })
+}
+
+fn is_remote_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment != "."
+        && segment != ".."
+        && segment
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
+
+/// Whether `segment` is a braced Bitbucket UUID such as `{0e3a…-…}`.
+fn is_braced_uuid(segment: &str) -> bool {
+    segment
+        .strip_prefix('{')
+        .and_then(|s| s.strip_suffix('}'))
+        .is_some_and(|inner| {
+            !inner.is_empty() && inner.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
+        })
+}
+
+/// Reject a workspace or repository slug that would change the meaning of the
+/// API URL it is interpolated into.
+///
+/// Identities are formatted directly into `/repositories/{workspace}/{slug}`;
+/// a value such as `mine/../victim`, `repo?x=1`, or `repo#x` would otherwise
+/// silently target a different repository (or alter the query) — dangerous for
+/// destructive commands. Bitbucket workspace IDs and repository slugs consist of
+/// ASCII letters, digits, `-`, `_` and `.`; braced UUIDs are also accepted.
+pub fn validate_repo_segment(kind: &str, value: &str) -> Result<()> {
+    if is_remote_segment(value) || is_braced_uuid(value) {
+        return Ok(());
+    }
+    let shown: String = value
+        .chars()
+        .flat_map(char::escape_default)
+        .take(80)
+        .collect();
+    Err(BitbucketError::Usage(format!(
+        "invalid {kind} \"{shown}\": use only ASCII letters, digits, '-', '_' and '.' (or a {{UUID}}); \
+         slashes, '..', '?', '#', '%' and whitespace are not allowed"
+    )))
+}
+
+/// Validate both halves of a repository identity.
+pub fn validate_repo_identity(repo: &RepoIdentity) -> Result<()> {
+    validate_repo_segment("workspace", &repo.workspace)?;
+    validate_repo_segment("repository slug", &repo.slug)
+}
+
+fn is_bitbucket_ssh_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("bitbucket.org")
+        || host.eq_ignore_ascii_case("altssh.bitbucket.org")
+        // Support local aliases without mistaking unrelated DNS domains or IP
+        // addresses for Bitbucket. Dotted aliases require explicit repo overrides.
+        || (host.starts_with(|ch: char| ch.is_ascii_alphanumeric())
+            && host.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_')))
 }
 
 /// Detect the Bitbucket repo identity from the `origin` remote (falling back
@@ -182,7 +247,7 @@ pub fn detect_repo() -> Result<RepoIdentity> {
         }
     }
     Err(BitbucketError::Git(
-        "no git remote found in this repository".into(),
+        "no git remote for Bitbucket Cloud found; pass --workspace and --slug explicitly, or configure a Bitbucket remote".into(),
     ))
 }
 
@@ -238,10 +303,44 @@ pub fn delete_branch_local(branch: &str) -> Result<()> {
     Ok(())
 }
 
-/// Delete a branch locally, checking if it is fully merged (safe delete).
+/// Delete only branches whose commits are retained by HEAD, regardless of a
+/// configured upstream. An HTTP remote deletion does not prune tracking refs,
+/// and Git's `branch -d` alone can use that stale upstream to permit data loss.
 pub fn delete_branch_local_safe(branch: &str) -> Result<()> {
+    validate_branch_name(branch)?;
+    git(&["merge-base", "--is-ancestor", &format!("refs/heads/{branch}"), "HEAD"])
+        .map_err(|_| BitbucketError::Git(format!(
+            "branch {branch:?} is not confirmed merged into HEAD; retain its commits before deleting it"
+        )))?;
     git(&["branch", "-d", "--", branch])?;
     Ok(())
+}
+
+/// Validate a literal branch name without DWIM expansion (e.g. @{-1}).
+pub fn validate_branch_name(branch: &str) -> Result<()> {
+    if branch.is_empty() || branch.starts_with('-') || branch == "HEAD" {
+        return Err(BitbucketError::Git("invalid branch name".into()));
+    }
+    git(&["check-ref-format", &format!("refs/heads/{branch}")])?;
+    Ok(())
+}
+
+/// Delete a local branch safely, treating only an absent exact ref as complete.
+/// Ref enumeration errors propagate rather than masquerading as absence.
+pub async fn delete_local_branch_if_exists(branch: &str) -> Result<bool> {
+    let branch = branch.to_string();
+    tokio::task::spawn_blocking(move || {
+        validate_branch_name(&branch)?;
+        let reference = format!("refs/heads/{branch}");
+        let refs = git(&["for-each-ref", "--format=%(refname)", "--", &reference])?;
+        if !refs.lines().any(|line| line == reference) {
+            return Ok(false);
+        }
+        delete_branch_local_safe(&branch)?;
+        Ok(true)
+    })
+    .await
+    .map_err(|e| BitbucketError::Git(format!("branch cleanup task failed: {e}")))?
 }
 
 /// Delete a remote branch on origin.
@@ -259,6 +358,11 @@ pub fn delete_branch_remote(branch: &str) -> Result<()> {
 /// restored to the branch it was on before the call, so callers never
 /// inherit a half-finished rebase state.
 pub fn rebase_branch(branch: &str, onto: &str) -> Result<()> {
+    // Literal names only: `--` blocks option injection, but `git switch` and
+    // `git rebase` would still DWIM-expand `@{upstream}`/`main@{1}` from a
+    // hand-edited stack file into an unintended revision.
+    validate_branch_name(branch)?;
+    validate_branch_name(onto)?;
     let original = current_branch().ok();
     // switch to the target branch first, then rebase onto the parent
     git(&["switch", "--", branch])?;
@@ -275,6 +379,13 @@ pub fn rebase_branch(branch: &str, onto: &str) -> Result<()> {
             None => Err(e),
         };
     }
+    Ok(())
+}
+
+/// Switch the working tree to an existing local branch.
+pub fn switch_branch(branch: &str) -> Result<()> {
+    validate_branch_name(branch)?;
+    git(&["switch", "--", branch])?;
     Ok(())
 }
 
@@ -347,6 +458,14 @@ pub async fn rebase_branch_async(branch: &str, onto: &str) -> Result<()> {
         .map_err(|e| BitbucketError::Git(format!("spawn_blocking join error: {e}")))?
 }
 
+/// Async version of [`switch_branch`] — runs on the blocking thread pool.
+pub async fn switch_branch_async(branch: &str) -> Result<()> {
+    let branch = branch.to_string();
+    tokio::task::spawn_blocking(move || switch_branch(&branch))
+        .await
+        .map_err(|e| BitbucketError::Git(format!("spawn_blocking join error: {e}")))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,8 +486,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_ssh_url_with_any_host() {
-        let id = parse_remote_url("git@github.com:foo/bar.git").unwrap();
+    fn parses_ssh_url_with_local_alias() {
+        let id = parse_remote_url("git@work-bitbucket:foo/bar.git").unwrap();
         assert_eq!(id.workspace, "foo");
         assert_eq!(id.slug, "bar");
     }
@@ -384,6 +503,48 @@ mod tests {
             "git version with piped stdout must not time out: {big:?}"
         );
         assert!(big.unwrap().contains("git version"));
+    }
+
+    #[test]
+    fn repo_segments_accept_real_identities_and_reject_url_syntax() {
+        for ok in [
+            "sdadev",
+            "bvrm-backend",
+            "my_repo.v2",
+            "A1",
+            "{0e3a9a5c-1f2b-4c3d-9e8f-123456789abc}",
+        ] {
+            assert!(validate_repo_segment("workspace", ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "",
+            ".",
+            "..",
+            "mine/../victim",
+            "a/b",
+            "repo?x=1",
+            "repo#x",
+            "a%2Fb",
+            "a b",
+            "a\tb",
+            "a\\b",
+            "café",
+            "{}",
+            "{not-hex!}",
+            "{abc",
+        ] {
+            let err = validate_repo_segment("workspace", bad).unwrap_err();
+            assert_eq!(err.exit_code(), crate::error::ExitCode::Usage, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn invalid_segment_message_escapes_control_characters() {
+        let msg = validate_repo_segment("repository slug", "x\u{1b}[2J")
+            .unwrap_err()
+            .to_string();
+        assert!(!msg.contains('\u{1b}'));
+        assert!(msg.contains("\\u{1b}"));
     }
 
     #[test]

@@ -167,6 +167,7 @@ fn update_pr_request_includes_reviewers() {
         description: None,
         close_source_branch: None,
         reviewers: Some(vec![ReviewerRef { uuid: "{u}".into() }]),
+        destination: None,
     };
     let json = serde_json::to_value(&req).unwrap();
     assert_eq!(json["reviewers"][0]["uuid"], "{u}");

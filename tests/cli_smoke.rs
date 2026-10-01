@@ -685,7 +685,13 @@ async fn ci_tail_json_emits_ndjson_log_events() {
         .mount(&server)
         .await;
 
+    let home = tempfile::tempdir().unwrap();
     let output = StdCommand::new(assert_cmd::cargo::cargo_bin("bbr"))
+        .current_dir(home.path())
+        .env("XDG_CONFIG_HOME", home.path())
+        .env("APPDATA", home.path())
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
         .args([
             "ci",
             "tail",
@@ -700,7 +706,7 @@ async fn ci_tail_json_emits_ndjson_log_events() {
         .env("BITBUCKET_API_BASE", server.uri())
         .env("BITBUCKET_USERNAME", "u")
         .env("BITBUCKET_TOKEN", "t")
-        .env("HOME", "/tmp")
+        .env("HOME", home.path())
         .output()
         .unwrap();
 

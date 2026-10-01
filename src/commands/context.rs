@@ -49,6 +49,10 @@ pub fn create(
     set_active: bool,
 ) -> Result<()> {
     let mut cfg = config::load_config()?;
+    crate::git::validate_repo_segment("workspace", workspace)?;
+    if let Some(slug) = slug {
+        crate::git::validate_repo_segment("repository slug", slug)?;
+    }
     if cfg.contexts.contains_key(name) {
         return Err(BitbucketError::Other(format!(
             "context \"{name}\" already exists"

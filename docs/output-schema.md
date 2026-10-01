@@ -207,22 +207,28 @@ stable across v0.1.x (breaking changes are reserved for v0.2+).
 
 ## `bbr ci watch --json`
 
-Emits a single JSON object when the pipeline reaches a terminal state:
+Emits a single JSON object when watching stops:
 
 ```json
 {
   "uuid": "{abc-123}",
   "final_state": "SUCCESSFUL",
   "duration_seconds": 172,
-  "success": true
+  "success": true,
+  "outcome": "completed"
 }
 ```
 
-On failure, `success` is `false` and the process exits with code `5`. The
-`failing_step` and `failure_log` fields appear when a step failed and
-`--logs` was not used. `failure_log` contains the last portion of the failing
-step's log (up to 64KB, fetched via an HTTP range request; the complete log
-is used when the server does not support ranges).
+`outcome` is `completed` (the pipeline finished), `paused` (halted at a manual
+step; `final_state` is `PAUSED`), or `timed_out` (`--wait-timeout` elapsed;
+`final_state` is the last observed state). `success` is `true` only for a
+completed `SUCCESSFUL` pipeline. A completed pipeline that did not succeed
+(`FAILED`, `ERROR`, `STOPPED`, `EXPIRED`) exits with code `5`; `paused` and
+`timed_out` exit with code `1`. The `failing_step` and `failure_log` fields
+appear when a completed pipeline did not succeed and `--logs` was not used.
+`failure_log` contains the last portion of the failing step's log (up to 64KB,
+fetched via an HTTP range request; the complete log is used when the server
+does not support ranges).
 
 ## `bbr ci logs --json`
 
@@ -233,6 +239,23 @@ is used when the server does not support ranges).
   "log": "<raw log text>"
 }
 ```
+
+## `bbr auth setup --json`
+
+Provide `--username` and either `--token-stdin` (recommended) or `--token`.
+JSON mode never opens an interactive prompt. The success receipt contains no
+secret and confirms only local storage, not successful authentication:
+
+```json
+{
+  "saved": true,
+  "username": "you@example.com",
+  "path": "/home/user/.config/bbr/credentials.toml"
+}
+```
+
+The path is platform-dependent. Use `bbr auth test` to validate the token.
+Machine-readable schema: `bbr schema auth-setup`.
 
 ## `bbr auth status --json`
 
@@ -388,6 +411,60 @@ The setting lives in `config.toml` under `[ui]` and applies to the next run.
 when `--json` is set the structured shape above is always emitted (never the
 legacy flat `{ "id", "diff" }` shape, which was ambiguous and produced
 corrupted stdout when combined with `--json`).
+
+## `bbr pr stack land --json`
+
+Emits a result after landing starts, including partial failures:
+
+```json
+{
+  "merged": [101],
+  "failed": [
+    { "pr_id": 102, "branch": "feature-2", "reason": "authentication failed: ..." }
+  ]
+}
+```
+
+A nonempty `failed` list produces a nonzero exit and the normal error object on
+stderr. API failures preserve their mapped exit code; checkpoint failures exit
+`1`. An ID can appear in both arrays if its remote merge succeeded but saving its
+local checkpoint failed. Already-MERGED PRs reconciled on retry appear in `merged`
+without a repeated merge request. When a merged PR's dependent PR cannot be
+retargeted, the merged PR appears in both arrays and its `reason` names the
+dependent PR; rerunning `land` resumes from there. Validation errors before landing starts emit
+only the error on stderr. Local branch cleanup is best-effort with warnings and
+does not change the confirmed remote merge outcome.
+
+## `bbr pr stack abort --json`
+
+```json
+{
+  "declined": [101],
+  "branches_deleted": ["remote/feature-1", "local/feature-1"]
+}
+```
+
+A partial abort emits this receipt on stdout, exits nonzero, and reports the error
+on stderr. `declined` includes previously-declined PRs reconciled during retry;
+`branches_deleted` includes only branches deleted in this invocation (already
+absent branches are not repeated). Entries remain pending until cleanup and the
+local checkpoint succeed. API errors preserve their mapped exit codes, while
+local Git/checkpoint failures use exit `1`. Validation failures before execution
+emit only an error. The receipt alone does not imply the whole abort completed.
+
+`pr stack rebase --json` likewise preserves its `{ "steps": [...] }` receipt
+but now exits nonzero when a rebase or subsequent push fails. Step `status` is
+`ok`, `conflict` (rebase failed; nothing was pushed), `error` (push failed), or
+`skipped` (rebased locally but not pushed because an earlier push failed).
+
+## `bbr batch * --json`
+
+After confirmation, `merge-approved`, `rerun-failed`, and `cleanup-merged`
+print `{ "succeeded": [...], "failed": [...] }` (each entry `{ id, description,
+error }`). Any `failed` entry produces exit `1` and an error object on stderr;
+the receipt on stdout is still complete. `merge-approved` re-checks each PR just
+before merging, and a PR that no longer qualifies is listed under `failed` with
+the reason in `error`.
 
 ## Exit codes
 

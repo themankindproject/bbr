@@ -8,7 +8,7 @@ to one.
 | Channel | Command | Platforms | Maintained by |
 |---------|---------|-----------|---------------|
 | Install script | `curl -fsSL …/install.sh \| bash` | Linux (x86_64/aarch64), macOS (Intel/ARM) | this repo |
-| `cargo binstall` | `cargo binstall bbr` | all published targets | `[package.metadata.binstall]` in `Cargo.toml` |
+| `cargo binstall` (advanced, local manifest only) | `cargo binstall --manifest-path ./Cargo.toml --strategies crate-meta-data bbr` | targets available for that manifest's version | this checkout's metadata; see integrity caveat below |
 | From source | `cargo install --locked --git …` | any Rust platform | this repo |
 | Homebrew | `brew install themankindproject/tap/bbr` | macOS, Linux | `themankindproject/homebrew-tap` (optional) |
 | Scoop | `scoop install bbr` | Windows | `themankindproject/scoop-bucket` (optional) |

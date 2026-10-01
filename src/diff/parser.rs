@@ -125,51 +125,55 @@ fn parse_two_quoted_paths(s: &str) -> Option<(String, String)> {
 }
 
 /// Parse a leading `"..."` C-style string; return (unescaped, remainder).
+///
+/// Git quotes non-ASCII paths by octal-escaping each *byte* of the UTF-8
+/// encoding (`café` is `caf\303\251`), so escapes are collected as raw bytes
+/// and decoded as UTF-8 once the closing quote is reached. Decoding each
+/// escape as its own code point produced mojibake (`cafÃ©`).
 fn parse_one_quoted(s: &str) -> Option<(String, &str)> {
     if !s.starts_with('"') {
         return None;
     }
     let bytes = s.as_bytes();
     let mut i = 1; // after opening quote
-    let mut out = String::new();
+    let mut out: Vec<u8> = Vec::new();
     while i < bytes.len() {
         match bytes[i] {
             b'"' => {
                 i += 1;
-                return Some((out, &s[i..]));
+                return Some((String::from_utf8_lossy(&out).into_owned(), &s[i..]));
             }
             b'\\' => {
                 i += 1;
                 if i >= bytes.len() {
                     return None;
                 }
-                let (ch, consumed) = unescape_bytes(bytes, i)?;
-                out.push(ch);
+                let (byte, consumed) = unescape_byte(bytes, i)?;
+                out.push(byte);
                 i += consumed;
             }
-            _ => {
-                let ch = s[i..].chars().next()?;
-                out.push(ch);
-                i += ch.len_utf8();
+            b => {
+                out.push(b);
+                i += 1;
             }
         }
     }
     None
 }
 
-/// Unescape starting at `i` (first char after `\`). Returns (char, bytes_consumed from i).
-fn unescape_bytes(bytes: &[u8], i: usize) -> Option<(char, usize)> {
+/// Unescape starting at `i` (first char after `\`). Returns (byte, bytes consumed).
+fn unescape_byte(bytes: &[u8], i: usize) -> Option<(u8, usize)> {
     let b = *bytes.get(i)?;
     match b {
-        b'n' => Some(('\n', 1)),
-        b't' => Some(('\t', 1)),
-        b'r' => Some(('\r', 1)),
-        b'"' => Some(('"', 1)),
-        b'\\' => Some(('\\', 1)),
-        b'a' => Some(('\u{7}', 1)),
-        b'b' => Some(('\u{8}', 1)),
-        b'f' => Some(('\u{c}', 1)),
-        b'v' => Some(('\u{b}', 1)),
+        b'n' => Some((b'\n', 1)),
+        b't' => Some((b'\t', 1)),
+        b'r' => Some((b'\r', 1)),
+        b'"' => Some((b'"', 1)),
+        b'\\' => Some((b'\\', 1)),
+        b'a' => Some((0x07, 1)),
+        b'b' => Some((0x08, 1)),
+        b'f' => Some((0x0c, 1)),
+        b'v' => Some((0x0b, 1)),
         b'0'..=b'7' => {
             let mut val: u32 = (b - b'0') as u32;
             let mut n = 1;
@@ -183,10 +187,20 @@ fn unescape_bytes(bytes: &[u8], i: usize) -> Option<(char, usize)> {
                 }
                 break;
             }
-            let ch = char::from_u32(val)?;
-            Some((ch, n))
+            // `\777` exceeds a byte; git never emits it.
+            Some((u8::try_from(val).ok()?, n))
         }
-        other => Some((other as char, 1)),
+        other => Some((other, 1)),
+    }
+}
+
+/// Decode a path that git may have C-quoted (`"a/caf\303\251.txt"`).
+/// Unquoted input is returned unchanged.
+fn unquote_path(s: &str) -> String {
+    let s = s.trim();
+    match parse_one_quoted(s) {
+        Some((path, rest)) if rest.trim().is_empty() => path,
+        _ => s.to_string(),
     }
 }
 
@@ -343,7 +357,9 @@ fn parse_hunk_header(line: &str) -> Option<HunkHeader> {
     // Find the second @@
     let end = rest.find(" @@")?;
     let ranges = &rest[..end];
-    let header = rest[end + 3..].trim().to_string();
+    // The header repeats source text (the enclosing function line), which a
+    // hostile PR controls: strip escape sequences like line content.
+    let header = sanitize_terminal_escapes(rest[end + 3..].trim());
 
     // Parse ranges: "-old_start,old_lines +new_start,new_lines"
     let parts: Vec<&str> = ranges.split_whitespace().collect();
@@ -512,10 +528,10 @@ fn sanitize_terminal_escapes(s: &str) -> String {
 /// Check if a line is `rename from` or `rename to`.
 fn rename_context(line: &str) -> Option<RenameCtx> {
     line.strip_prefix("rename from ")
-        .map(|path| RenameCtx::From(path.trim().to_string()))
+        .map(|path| RenameCtx::From(unquote_path(path)))
         .or_else(|| {
             line.strip_prefix("rename to ")
-                .map(|path| RenameCtx::To(path.trim().to_string()))
+                .map(|path| RenameCtx::To(unquote_path(path)))
         })
 }
 
@@ -560,7 +576,8 @@ impl DiffFileBuilder {
     }
 
     fn new_from_paths(line: &str) -> Self {
-        let stripped = line.trim_start_matches('-').trim_start_matches('+').trim();
+        let unquoted = unquote_path(line.trim_start_matches('-').trim_start_matches('+'));
+        let stripped = unquoted.as_str();
         let (old, new) = if line.starts_with("--- ") {
             (
                 stripped.strip_prefix("a/").unwrap_or(stripped).to_string(),
@@ -600,15 +617,9 @@ impl DiffFileBuilder {
     }
 
     fn set_paths(&mut self, line: &str) {
-        let stripped = line[4..].trim();
-        // Git may quote paths: --- "a/my file.rs"
-        let stripped =
-            if stripped.starts_with('"') && stripped.ends_with('"') && stripped.len() >= 2 {
-                // Best-effort: strip surrounding quotes (full C-unescape not required for ---/+++)
-                &stripped[1..stripped.len() - 1]
-            } else {
-                stripped
-            };
+        // Git quotes unusual paths: --- "a/my file.rs", +++ "b/caf\303\251"
+        let unquoted = unquote_path(&line[4..]);
+        let stripped = unquoted.as_str();
         if line.starts_with("--- ") {
             if stripped != "/dev/null" {
                 self.old_path = stripped.strip_prefix("a/").unwrap_or(stripped).to_string();
@@ -1082,6 +1093,58 @@ diff --git \"a/my file.rs\" \"b/my file.rs\"
             files[0].old_path,
             files[0].new_path
         );
+    }
+
+    #[test]
+    fn octal_escaped_utf8_paths_decode_as_utf8() {
+        let (old, new) = parse_diff_git_paths(
+            r#"diff --git "a/caf\303\251.txt" "b/\346\227\245\346\234\254.md""#,
+        );
+        assert_eq!(old, "café.txt");
+        assert_eq!(new, "日本.md");
+    }
+
+    #[test]
+    fn full_diff_with_non_ascii_quoted_paths_and_rename() {
+        let diff = "\
+diff --git \"a/caf\\303\\251.txt\" \"b/caf\\303\\251 v2.txt\"
+similarity index 90%
+rename from \"caf\\303\\251.txt\"
+rename to \"caf\\303\\251 v2.txt\"
+--- \"a/caf\\303\\251.txt\"
++++ \"b/caf\\303\\251 v2.txt\"
+@@ -1 +1 @@
+-a
++b
+";
+        let files = parse(diff);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].old_path, "café.txt");
+        assert_eq!(files[0].new_path, "café v2.txt");
+        assert_eq!(files[0].status, FileStatus::Renamed);
+    }
+
+    #[test]
+    fn invalid_utf8_escapes_and_overflow_do_not_panic() {
+        let (old, _) = parse_diff_git_paths(r#"diff --git "a/x\377y" "b/x\377y""#);
+        assert!(old.starts_with('x') && old.ends_with('y'), "{old:?}");
+        // \777 is out of byte range: falls back to the unquoted parser.
+        let _ = parse_diff_git_paths(r#"diff --git "a/\777" "b/\777""#);
+    }
+
+    #[test]
+    fn hunk_header_text_is_stripped_of_escape_sequences() {
+        let diff = "\
+diff --git a/x.rs b/x.rs
+--- a/x.rs
++++ b/x.rs
+@@ -1,1 +1,1 @@ fn \u{1b}[2J\u{1b}]52;c;aGk=\u{7}evil()
+-a
++b
+";
+        let files = parse(diff);
+        let header = &files[0].hunks[0].header;
+        assert_eq!(header, "fn evil()");
     }
 
     #[test]

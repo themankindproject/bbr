@@ -73,8 +73,8 @@ pub struct GlobalArgs {
     #[arg(long, global = true, action = ArgAction::SetTrue)]
     pub no_unicode: bool,
 
-    /// HTTP request timeout in seconds (default: 30).
-    #[arg(long, global = true, env = "BBR_TIMEOUT")]
+    /// HTTP request timeout in seconds, 1-3600 (default: 30).
+    #[arg(long, global = true, env = "BBR_TIMEOUT", value_parser = parse_timeout_secs)]
     pub timeout: Option<u64>,
 }
 
@@ -305,6 +305,9 @@ pub enum VariableAction {
     Delete {
         /// Variable key name to delete.
         key: String,
+        /// Skip confirmation prompt.
+        #[arg(long, short)]
+        yes: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -438,7 +441,7 @@ pub enum PrAction {
         close_source_branch: bool,
         #[arg(long, help = "create as draft")]
         draft: bool,
-        #[arg(long, help = "reviewer UUID (repeatable)")]
+        #[arg(long, help = "reviewer username or UUID (repeatable)")]
         reviewer: Vec<String>,
         /// Push the source branch to origin before creating the PR.
         ///
@@ -795,6 +798,10 @@ pub enum CiAction {
         /// Resume streaming from a byte offset (reconnect after a dropped watch).
         #[arg(long, value_name = "BYTES", default_value_t = 0)]
         from_offset: u64,
+        /// Give up after this many seconds (0 = no limit). A timeout exits 1
+        /// with the pipeline's current state in the receipt.
+        #[arg(long, value_name = "SECS", default_value_t = 0)]
+        wait_timeout: u64,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -1193,14 +1200,19 @@ pub enum OpenAction {
 
 #[derive(Debug, Subcommand)]
 pub enum AuthAction {
-    /// Interactive credential setup.
+    /// Store credentials interactively or from explicit inputs (use auth test to verify).
     Setup {
         /// Username (email) for non-interactive setup.
         #[arg(long)]
         username: Option<String>,
-        /// API token for non-interactive setup.
-        #[arg(long)]
+        /// API token (visible in shell history/process arguments; prefer --token-stdin).
+        #[arg(long, conflicts_with = "token_stdin")]
         token: Option<String>,
+        /// Read the API token from piped stdin (up to 64 KiB); requires --username.
+        #[arg(long, requires = "username")]
+        token_stdin: bool,
+        #[command(flatten)]
+        g: GlobalArgs,
     },
     /// Show current credential status.
     Status {
@@ -1506,6 +1518,9 @@ pub enum DeployEnvVarsAction {
         env_uuid: String,
         /// Variable key name.
         key: String,
+        /// Skip confirmation prompt.
+        #[arg(long, short)]
+        yes: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -1538,6 +1553,9 @@ pub enum CiVarsAction {
     /// Delete a pipeline variable.
     Delete {
         key: String,
+        /// Skip confirmation prompt.
+        #[arg(long, short)]
+        yes: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -1732,6 +1750,27 @@ pub fn resolve_api_base(g: &GlobalArgs) -> &str {
 pub const MAX_LIMIT: u32 = 10_000;
 
 /// clap `value_parser` for every `--limit` flag: `1..=MAX_LIMIT`.
+/// Longest accepted per-request HTTP timeout (one hour).
+pub const MAX_TIMEOUT_SECS: u64 = 3600;
+
+/// Parse `--timeout` / `BBR_TIMEOUT`.
+///
+/// `0` would make every request time out immediately (a zero `Duration` is a
+/// real deadline), so it is rejected rather than silently breaking the CLI.
+pub fn parse_timeout_secs(s: &str) -> std::result::Result<u64, String> {
+    let n: u64 = s
+        .trim()
+        .parse()
+        .map_err(|_| format!("'{s}' is not a whole number of seconds"))?;
+    if n == 0 {
+        return Err("must be at least 1 second".to_string());
+    }
+    if n > MAX_TIMEOUT_SECS {
+        return Err(format!("must be <= {MAX_TIMEOUT_SECS} seconds"));
+    }
+    Ok(n)
+}
+
 pub fn parse_limit(s: &str) -> std::result::Result<u32, String> {
     let n: u32 = s
         .trim()
@@ -1826,5 +1865,15 @@ mod tests {
         assert_ne!(USAGE_ERROR_EXIT, AppExitCode::Generic as u8);
         assert_ne!(USAGE_ERROR_EXIT, AppExitCode::Auth as u8);
         assert_eq!(USAGE_ERROR_EXIT, 64);
+    }
+
+    #[test]
+    fn timeout_must_be_a_positive_bounded_number_of_seconds() {
+        assert_eq!(parse_timeout_secs("30"), Ok(30));
+        assert_eq!(parse_timeout_secs(" 1 "), Ok(1));
+        assert_eq!(parse_timeout_secs("3600"), Ok(3600));
+        for bad in ["0", "3601", "-5", "1.5", "", "abc"] {
+            assert!(parse_timeout_secs(bad).is_err(), "{bad:?}");
+        }
     }
 }

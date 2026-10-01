@@ -185,6 +185,7 @@ pub async fn create(
     language: Option<&str>,
     enable_issues: bool,
 ) -> Result<()> {
+    crate::git::validate_repo_segment("repository slug", slug)?;
     let ws = resolve_repo(g)?.workspace;
     let client = client(g)?;
 
@@ -220,6 +221,7 @@ pub async fn create(
 }
 
 pub async fn delete(g: &GlobalArgs, slug: &str, yes: bool) -> Result<()> {
+    crate::git::validate_repo_segment("repository slug", slug)?;
     let ws = resolve_repo(g)?.workspace;
     let client = client(g)?;
 
@@ -251,6 +253,10 @@ pub async fn fork(
 ) -> Result<()> {
     let repo = resolve_repo(g)?;
     let slug = slug.unwrap_or(&repo.slug);
+    crate::git::validate_repo_segment("repository slug", slug)?;
+    if let Some(target) = workspace {
+        crate::git::validate_repo_segment("target workspace", target)?;
+    }
     let client = client(g)?;
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));

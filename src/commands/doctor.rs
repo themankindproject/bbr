@@ -108,12 +108,11 @@ fn check_repo_identity(g: &GlobalArgs) -> Check {
 }
 
 fn check_credentials() -> Check {
-    match crate::auth::resolve() {
-        Ok(creds) => {
-            let source = if std::env::var(crate::auth::ENV_TOKEN).is_ok() {
-                "environment"
-            } else {
-                "config file"
+    match crate::auth::resolve_with_source() {
+        Ok((creds, source)) => {
+            let source = match source {
+                crate::auth::CredentialSource::Environment => "environment",
+                crate::auth::CredentialSource::ConfigFile => "config file",
             };
             check(
                 "credentials",

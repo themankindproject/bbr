@@ -1,7 +1,8 @@
 //! `bbr ci vars` — pipeline variable management.
 use crate::cli::GlobalArgs;
 use crate::commands::{
-    client, make_formatter, make_spinner, resolve_repo, table_or_empty, SpinnerGuard,
+    aborted, client, confirm_destructive, ensure_confirmable, make_formatter, make_spinner,
+    resolve_repo, table_or_empty, SpinnerGuard,
 };
 use crate::error::{BitbucketError, Result};
 use crate::output::table::Table;
@@ -108,7 +109,10 @@ pub async fn set(
     Ok(())
 }
 
-pub async fn delete(g: &GlobalArgs, key: &str) -> Result<()> {
+pub async fn delete(g: &GlobalArgs, key: &str, yes: bool) -> Result<()> {
+    // Refuse before any request: deleting a (possibly secured) variable is
+    // irreversible, and its value cannot be read back to restore it.
+    ensure_confirmable(yes, &format!("Delete pipeline variable {key}"))?;
     let repo = resolve_repo(g)?;
     let api = client(g)?;
 
@@ -123,6 +127,21 @@ pub async fn delete(g: &GlobalArgs, key: &str) -> Result<()> {
         .into_iter()
         .find(|v| v.key == key)
         .ok_or_else(|| BitbucketError::Other(format!("variable '{}' not found", key)))?;
+
+    let what = if var.secured {
+        format!(
+            "Delete secured pipeline variable {key} from {}/{}",
+            repo.workspace, repo.slug
+        )
+    } else {
+        format!(
+            "Delete pipeline variable {key} from {}/{}",
+            repo.workspace, repo.slug
+        )
+    };
+    if !confirm_destructive(g, yes, &what).await? {
+        return aborted();
+    }
 
     let spinner2 = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner2.set_message(format!("Deleting {key}..."));

@@ -495,7 +495,7 @@ async fn send_raw_range_retries_on_429_then_succeeds() {
 }
 
 // ---------------------------------------------------------------------------
-// Parallel pagination must preserve page order
+// Next-link pagination must preserve page order
 // ---------------------------------------------------------------------------
 
 fn pr_json(id: u64) -> serde_json::Value {
@@ -512,16 +512,14 @@ fn pr_json(id: u64) -> serde_json::Value {
 }
 
 #[tokio::test]
-async fn parallel_pagination_preserves_page_order() {
-    // Regression: `paginate_from` fetches pages 2..N concurrently via
-    // `buffer_unordered`, which yields results in *completion* order. The
-    // results must be re-sorted by page index before flattening, otherwise
-    // rows come back scrambled. We force out-of-order completion by making
-    // page 2 slow and page 3 fast, then assert the final order is 1..6.
+async fn pagination_preserves_page_order() {
+    // Rows must remain in server page order, regardless of page latency.
+    // Each continuation supplies the next link rather than relying on size
+    // metadata to invent later pages.
     use std::time::Duration;
     let server = MockServer::start().await;
 
-    // Page 1: 2 items, total size 6, numeric `next` link → parallel path.
+    // Page 1: numeric-looking next link is still followed as an opaque URL.
     Mock::given(method("GET"))
         .and(path("/repositories/ws/slug/pullrequests"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -535,7 +533,7 @@ async fn parallel_pagination_preserves_page_order() {
         .mount(&server)
         .await;
 
-    // Page 2: deliberately SLOW so it completes after page 3.
+    // Page 2: slower, but its values must still precede page 3.
     Mock::given(method("GET"))
         .and(path("/repositories/ws/slug/pullrequests"))
         .and(query_param("page", "2"))
@@ -543,14 +541,15 @@ async fn parallel_pagination_preserves_page_order() {
             ResponseTemplate::new(200)
                 .set_body_json(json!({
                     "size": 6, "page": 2, "pagelen": 2,
-                    "values": [pr_json(3), pr_json(4)]
+                    "values": [pr_json(3), pr_json(4)],
+                    "next": format!("{}/repositories/ws/slug/pullrequests?page=3", server.uri())
                 }))
                 .set_delay(Duration::from_millis(300)),
         )
         .mount(&server)
         .await;
 
-    // Page 3: fast — completes before page 2.
+    // Page 3: terminal page with no next link.
     Mock::given(method("GET"))
         .and(path("/repositories/ws/slug/pullrequests"))
         .and(query_param("page", "3"))

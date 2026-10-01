@@ -112,29 +112,45 @@ pub fn sanitize_human_output(s: &str) -> std::borrow::Cow<'_, str> {
     while let Some(ch) = chars.next() {
         match ch {
             '\x1b' => match chars.peek().copied() {
-                // CSI: keep only SGR (`...m`); drop screen/cursor manipulation.
+                // CSI: keep only well-formed SGR (`ESC [ <digits ; :> m`); drop
+                // screen/cursor manipulation. Parameter bytes are restricted to
+                // ECMA-48's 0x30-0x3F range so a control character or C1
+                // introducer can never ride along inside a "kept" sequence.
                 Some('[') => {
                     chars.next();
                     let mut params = String::new();
-                    let mut final_byte = None;
-                    for c in chars.by_ref() {
-                        if ('\x40'..='\x7e').contains(&c) {
-                            final_byte = Some(c);
-                            break;
+                    let mut sgr_candidate = true;
+                    while let Some(&c) = chars.peek() {
+                        match c {
+                            '\x30'..='\x3f' => params.push(c),
+                            // Intermediate bytes: valid CSI, but never SGR.
+                            '\x20'..='\x2f' => sgr_candidate = false,
+                            '\x40'..='\x7e' => {
+                                chars.next();
+                                if sgr_candidate && c == 'm' {
+                                    out.push_str("\x1b[");
+                                    out.push_str(&params);
+                                    out.push('m');
+                                }
+                                break;
+                            }
+                            // Malformed or truncated: drop what was consumed and
+                            // let the main loop handle this character.
+                            _ => break,
                         }
-                        params.push(c);
-                    }
-                    if final_byte == Some('m') {
-                        out.push('\x1b');
-                        out.push('[');
-                        out.push_str(&params);
-                        out.push('m');
+                        chars.next();
                     }
                 }
                 // OSC (e.g. clipboard hijack via OSC 52): consume to BEL or ST.
+                // An unterminated OSC ends at the line break, so one hostile
+                // title cannot swallow every following line of output.
                 Some(']') => {
                     chars.next();
-                    while let Some(c) = chars.next() {
+                    while let Some(&c) = chars.peek() {
+                        if c == '\n' {
+                            break;
+                        }
+                        chars.next();
                         if c == '\x07' {
                             break;
                         }
@@ -150,12 +166,16 @@ pub fn sanitize_human_output(s: &str) -> std::borrow::Cow<'_, str> {
                 }
                 None => {}
             },
-            // Single-byte C1 CSI introducer.
+            // Single-byte C1 CSI introducer: drop it with its parameters.
             '\u{9b}' => {
-                for c in chars.by_ref() {
-                    if ('\x40'..='\x7e').contains(&c) {
+                while let Some(&c) = chars.peek() {
+                    if !('\x20'..='\x3f').contains(&c) {
+                        if ('\x40'..='\x7e').contains(&c) {
+                            chars.next();
+                        }
                         break;
                     }
+                    chars.next();
                 }
             }
             '\n' | '\t' => out.push(ch),
@@ -164,6 +184,117 @@ pub fn sanitize_human_output(s: &str) -> std::borrow::Cow<'_, str> {
         }
     }
     std::borrow::Cow::Owned(out)
+}
+
+/// Sanitize one line of CI log output for display.
+///
+/// Build tools redraw progress lines with carriage returns; a terminal shows
+/// only the text after the last `\r`, so do the same (a trailing CRLF `\r` is
+/// ignored) instead of gluing every redraw together. Escape sequences other
+/// than SGR colors are then removed as for any other remote text.
+pub fn sanitize_log_line(line: &str) -> std::borrow::Cow<'_, str> {
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    let visible = match line.rfind('\r') {
+        Some(i) => &line[i + 1..],
+        None => line,
+    };
+    sanitize_human_output(visible)
+}
+
+/// A writer that removes non-SGR terminal escapes from everything written
+/// through it, one complete line at a time.
+///
+/// Rendering code streams many small writes (diff rows, comment bodies); the
+/// sanitizer needs whole lines so a sequence split across two `write` calls is
+/// still recognized. Sanitized lines never end inside an escape sequence, so
+/// concatenating them cannot recreate one. Call [`SanitizingWriter::finish`]
+/// to emit a trailing partial line.
+pub struct SanitizingWriter<W: Write> {
+    inner: W,
+    pending: Vec<u8>,
+}
+
+impl<W: Write> SanitizingWriter<W> {
+    pub fn new(inner: W) -> Self {
+        Self {
+            inner,
+            pending: Vec::new(),
+        }
+    }
+
+    fn emit(&mut self, bytes: &[u8]) -> io::Result<()> {
+        let text = String::from_utf8_lossy(bytes);
+        self.inner
+            .write_all(sanitize_human_output(&text).as_bytes())
+    }
+
+    /// Flush the buffered partial line and the inner writer.
+    pub fn finish(mut self) -> io::Result<W> {
+        let rest = std::mem::take(&mut self.pending);
+        if !rest.is_empty() {
+            self.emit(&rest)?;
+        }
+        self.inner.flush()?;
+        Ok(self.inner)
+    }
+}
+
+impl<W: Write> Write for SanitizingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.pending.extend_from_slice(buf);
+        if let Some(end) = self.pending.iter().rposition(|&b| b == b'\n') {
+            let complete: Vec<u8> = self.pending.drain(..=end).collect();
+            self.emit(&complete)?;
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        // Partial lines stay buffered until `finish`, so a sequence split at a
+        // flush boundary is still sanitized as a whole.
+        self.inner.flush()
+    }
+}
+
+/// Run `write_fn` against `w` through a [`SanitizingWriter`].
+fn write_sanitized<F>(w: &mut dyn Write, write_fn: F) -> Result<()>
+where
+    F: FnOnce(&mut dyn Write) -> Result<()>,
+{
+    let mut sanitizing = SanitizingWriter::new(w);
+    let result = write_fn(&mut sanitizing);
+    let finished = sanitizing.finish();
+    result?;
+    finished?;
+    Ok(())
+}
+
+/// Stream human output to stdout, through the pager when appropriate.
+///
+/// Like [`write_paginated`], all text is sanitized; `no_pager` (or a
+/// non-terminal stdout) writes straight to stdout.
+pub fn write_human<F>(no_pager: bool, write_fn: F) -> Result<()>
+where
+    F: FnOnce(&mut dyn Write) -> Result<()>,
+{
+    if no_pager || !io::stdout().is_terminal() {
+        let mut out = io::stdout().lock();
+        return write_sanitized(&mut out, write_fn);
+    }
+    write_paginated(write_fn)
+}
+
+/// Print text that is meant to be consumed verbatim (`pr diff --raw`,
+/// `src cat`): exact bytes when stdout is redirected, so patches and files
+/// round-trip unchanged, but sanitized like other remote text on a terminal.
+pub fn print_raw(s: &str) -> Result<()> {
+    if io::stdout().is_terminal() {
+        return print_block(s);
+    }
+    let mut out = io::stdout().lock();
+    out.write_all(s.as_bytes())?;
+    out.flush()?;
+    Ok(())
 }
 
 /// Print a diff with syntax highlighting (via `bat`) and paging, falling
@@ -241,14 +372,17 @@ pub fn print_paginated(s: &str) -> Result<()> {
 }
 
 /// Stream output through a pager (or stdout when not a TTY), avoiding a full buffer.
+///
+/// Everything written is sanitized with [`sanitize_human_output`]: this is the
+/// streaming path for PR diffs, titles, and comment bodies, all of which can
+/// carry attacker-controlled escape sequences.
 pub fn write_paginated<F>(write_fn: F) -> Result<()>
 where
     F: FnOnce(&mut dyn Write) -> Result<()>,
 {
     if !io::stdout().is_terminal() {
         let mut out = io::stdout().lock();
-        write_fn(&mut out)?;
-        return Ok(());
+        return write_sanitized(&mut out, write_fn);
     }
 
     let pager_env = std::env::var("PAGER").unwrap_or_else(|_| "less".to_string());
@@ -264,7 +398,7 @@ where
             c
         } else {
             let mut out = io::stdout().lock();
-            return write_fn(&mut out);
+            return write_sanitized(&mut out, write_fn);
         }
     };
 
@@ -272,7 +406,7 @@ where
 
     if let Ok(mut child) = cmd.spawn() {
         let write_result = if let Some(mut stdin) = child.stdin.take() {
-            write_fn(&mut stdin)
+            write_sanitized(&mut stdin, write_fn)
         } else {
             Ok(())
         };
@@ -280,7 +414,7 @@ where
         ignore_broken_pipe(write_result)
     } else {
         let mut out = io::stdout().lock();
-        write_fn(&mut out)
+        write_sanitized(&mut out, write_fn)
     }
 }
 
@@ -406,5 +540,83 @@ mod tests {
         assert_eq!(sanitize_human_output("a\x07b\x0dc\nd\te"), "abc\nd\te");
         // C1 single-byte CSI introducer.
         assert_eq!(sanitize_human_output("a\u{9b}31mb"), "ab");
+    }
+
+    #[test]
+    fn sanitize_never_keeps_controls_inside_an_sgr_lookalike() {
+        // ESC [ <C1 OSC> 52;c;0 BEL m — previously re-emitted verbatim because
+        // the final byte was `m`.
+        let hostile = "a\x1b[\u{9d}52;c;0123\x07mb";
+        let out = sanitize_human_output(hostile);
+        assert!(!out.contains('\u{9d}') && !out.contains('\x07'), "{out:?}");
+        assert!(!out.contains('\x1b'), "{out:?}");
+        // Intermediate bytes make it a non-SGR control function.
+        assert_eq!(sanitize_human_output("a\x1b[1 mb"), "ab");
+        // Well-formed SGR with colon sub-parameters survives.
+        assert_eq!(sanitize_human_output("\x1b[38:5:196mX"), "\x1b[38:5:196mX");
+    }
+
+    #[test]
+    fn unterminated_osc_does_not_swallow_following_lines() {
+        assert_eq!(
+            sanitize_human_output("title \x1b]52;c;aGk=\nnext line\nlast"),
+            "title \nnext line\nlast"
+        );
+    }
+
+    #[test]
+    fn sanitizing_is_idempotent() {
+        for s in [
+            "\x1b[1;31mred\x1b[0m",
+            "a\x1b[2Jb\x1b]0;t\x07c",
+            "x\u{9b}2Jy\tz\n",
+        ] {
+            let once = sanitize_human_output(s).into_owned();
+            assert_eq!(sanitize_human_output(&once), once);
+        }
+    }
+
+    #[test]
+    fn sanitizing_writer_catches_sequences_split_across_writes() {
+        let mut w = SanitizingWriter::new(Vec::new());
+        for piece in [
+            "safe \x1b",
+            "]52;c;aGk",
+            "=\x07 text\n\x1b[1",
+            "mbold\x1b[0m",
+            "\x1b[2",
+            "J",
+        ] {
+            w.write_all(piece.as_bytes()).unwrap();
+        }
+        let out = String::from_utf8(w.finish().unwrap()).unwrap();
+        assert_eq!(out, "safe  text\n\x1b[1mbold\x1b[0m");
+    }
+
+    #[test]
+    fn write_sanitized_reports_writer_errors_and_flushes_partial_line() {
+        let mut buf = Vec::new();
+        write_sanitized(&mut buf, |w| {
+            w.write_all(b"no newline \x1b[2J")?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(buf, b"no newline ");
+        let err = write_sanitized(&mut Vec::new(), |_| {
+            Err(crate::error::BitbucketError::Other("boom".into()))
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("boom"));
+    }
+
+    #[test]
+    fn log_lines_show_the_last_carriage_return_redraw() {
+        assert_eq!(
+            sanitize_log_line("progress 10%\rprogress 100%"),
+            "progress 100%"
+        );
+        assert_eq!(sanitize_log_line("windows line\r"), "windows line");
+        assert_eq!(sanitize_log_line("\x1b[32mok\x1b[0m"), "\x1b[32mok\x1b[0m");
+        assert_eq!(sanitize_log_line("evil\x1b]52;c;aGk=\x07!"), "evil!");
     }
 }

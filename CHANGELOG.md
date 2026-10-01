@@ -7,8 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-01
+
 ### Added
 
+- **`bbr ci watch --wait-timeout <SECS>`** bounds a watch; a timeout exits `1`
+  with `"outcome": "timed_out"`. The `--json` receipt gains an `outcome` field
+  (`completed`, `paused`, `timed_out`).
+- **`--yes` for variable deletes** — `ci vars delete`, `variable delete`, and
+  `deploy env vars delete` now confirm before deleting (secured values cannot be
+  recovered) and refuse non-interactively without `--yes` (exit `64`).
+- **`bbr src` ref resolution** — `--git-ref feature/login` (any branch or tag
+  name containing `/`) is resolved to its commit before reading files.
+- **`bbr auth setup --token-stdin`** reads a token from piped input or a file,
+  keeping it out of process arguments. It requires `--username`, conflicts with
+  `--token`, and limits input to 64 KiB of UTF-8 text. Setup now honors `--json`
+  with a secret-free storage receipt, documented by `bbr schema auth-setup`.
 - **`bbr help <command>`** — the `help` subcommand is now enabled, so
   `bbr help pr` and `bbr help pr merge` work alongside `bbr pr --help`.
   Programmatic callers that prefer a subcommand over a flag no longer get a
@@ -20,8 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`deploy env vars set --stdin`** — read an environment-variable value from
   stdin so secrets stay out of `ps` output and shell history. `--value` and
   `--stdin` are mutually exclusive; a missing value is a usage error.
-- **`cargo binstall` metadata** (`[package.metadata.binstall]`) so
-  `cargo binstall bbr` fetches the right release archive per platform.
+- **`cargo binstall` metadata** (`[package.metadata.binstall]`) for
+  `cargo binstall --manifest-path` against this repository's checkout. Archive
+  names match `release.yml` (`.tar.gz` / Windows `.zip`), and the
+  `quick-install` and `compile` fallbacks are disabled so binstall can never
+  resolve the unrelated crates.io `bbr` package. Bare `cargo binstall bbr` is
+  not supported.
 - **Cargo-deny policy** (`deny.toml`) plus `cargo deny` and install-script
   jobs in CI, and `scripts/install-smoke.sh`, which drives `install.sh`
   end-to-end against a synthetic local release and asserts every fail-closed
@@ -36,6 +54,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   registries.
 
 ### Changed
+
+- **`batch` commands exit `1` when any action failed**, after printing the full
+  `{ succeeded, failed }` receipt. Previously every merge could be rejected and
+  the command still exited `0`.
+- **`bbr ci watch` stops on a paused (manual-step) pipeline** and exits `1`
+  instead of polling forever; any completed non-successful result, including
+  `EXPIRED`, exits `5`.
+- **`pr create --reviewer`** accepts usernames as well as UUIDs (like
+  `pr add-reviewer`); names are resolved before the PR is created.
+- **`--timeout` / `BBR_TIMEOUT`** must be 1–3600 seconds; `0` used to make every
+  request time out immediately and is now a usage error.
+- **`auth setup`** lists the full API-token scope set (including webhook,
+  SSH-key, workspace, and repository-delete scopes) from one table shared with
+  the README; the invalid `webhook:bitbucket` name is gone.
+- **Plain `bbr`** fetches the recent PR and pipeline lists concurrently with the
+  branch status (two request waves instead of three).
 
 - **Destructive commands now share one confirmation contract.** Previously the
   behaviour was inconsistent: some commands let `--json` silently bypass the
@@ -107,12 +141,159 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   believes it owns.
 - **`--limit` is bounded** to `1..=10000` at parse time. An unbounded `u32`
   let a typo turn `--paginate` into billions of requests.
+- **Auth scope documentation** in the README and USAGE uses Atlassian API-token
+  scope names (`read:user:bitbucket`, …) instead of legacy app-password names,
+  and the README drops the unrelated crates.io license badge and the stale
+  hard-coded test-count badge.
 - **README install instructions corrected.** The one-liner's platform support
   now matches what is actually published, and the `cargo install bbr` footgun
   is called out explicitly: the `bbr` name on crates.io belongs to an unrelated
   crate, so that command installs the wrong tool.
 
 ### Fixed
+
+- **Declining a confirmation now exits `1`** (JSON error kind `aborted`), as
+  documented; `aborted()` still returned success after printing
+  `Aborted — nothing changed.`
+- **`pr stack land` no longer orphans stacked PRs.** Child PRs targeted their
+  parent's branch, and the parent was merged with `close_source_branch: true`;
+  Bitbucket does not retarget PRs off a deleted branch, so children were merged
+  into the dead parent branch and never reached the base, while `land` reported
+  success. Parents now keep their branch until each open child is retargeted to
+  where the parent landed; the branch is then deleted and the stack file
+  records the new parent. A failed retarget stops with the parent branch intact
+  and a rerun resumes.
+- **`land` validates PR identity and destination** before merging (source
+  branch and repository must match the stack entry, and the PR must target the
+  expected branch), matching `abort`.
+- **`pr stack rebase --push`** rebases the whole chain before pushing anything,
+  so a conflict no longer leaves some branches force-pushed; it validates all
+  branch names up front (rejecting `@{…}` revision syntax) and returns to the
+  starting branch.
+- **Workspace and repository identities are validated** before they reach an
+  API URL. `BB_WORKSPACE=mine/../victim` previously sent requests (including
+  mutations) to the `victim` workspace; `?`, `#`, `%`, slashes, and whitespace
+  are now usage errors from every source (flags, environment, contexts,
+  `config set workspace`, `batch --repo`, `repo create|delete|fork`).
+- **Terminal escape injection** — `pr view`/`pr diff` streamed PR titles,
+  comment bodies, and diff hunk headers (which repeat source lines) without
+  sanitizing them, so a hostile PR could write the clipboard (OSC 52) or clear
+  the screen. All streamed human output is now sanitized, as are issue
+  comments, CI log lines, and spinner messages. The sanitizer no longer keeps
+  control bytes inside an SGR-looking sequence, and an unterminated OSC no longer
+  swallows the rest of the output. `pr diff --raw` and `src cat` stay byte-exact
+  when piped.
+- **`ci watch` recognizes `EXPIRED` and `COMPLETED`** pipelines and steps (and
+  `NOT_RUN` steps) as finished, so it no longer polls forever. With `--logs`, log
+  lines reach a piped stderr (they were dropped whenever the spinner was
+  hidden), finished steps are no longer re-fetched every poll, a failed step
+  listing is reported instead of silently streaming nothing, and the last line
+  of a finished step is printed even without a trailing newline.
+- **Pipeline status labels** — running pipelines report `IN_PROGRESS`, but
+  `status` and the overview matched only `INPROGRESS`, showing "unknown" and
+  suggesting the wrong next commands.
+- **`batch merge-approved` re-checks each PR before merging**, skipping PRs
+  that lost approvals, gained a change request, became drafts, closed, or
+  changed branches after the plan was shown. Draft PRs were never excluded
+  because `draft` was missing from the API field projection; it is now
+  requested.
+- **Plain `bbr` waited up to 10s on every run when GitHub was unreachable**
+  (the update check was awaited, and failures were never cached). The wait is
+  now capped at 750ms and a failed check backs off for an hour.
+- **Update checks** compare `1.2` and `1.2.0` as equal and never offer an
+  unparseable tag as an upgrade.
+- **Non-ASCII paths in diffs** (`café.txt`) were shown as mojibake or raw octal
+  escapes; quoted paths are now decoded as UTF-8 in `diff --git`, `---`/`+++`,
+  and rename lines.
+- **`auth status` and `doctor` report the credential source actually used**:
+  a `BITBUCKET_TOKEN` without a username falls back to the credentials file and
+  is no longer reported as "environment".
+- **`Retry-After` HTTP-dates** are honored (still capped at 60s); only integer
+  seconds were understood before.
+
+- **Stack abort fails closed and checkpoints completed cleanup.** PR state/source
+  identity is verified before decline or deletion, remote deletion targets the
+  resolved Bitbucket repository rather than Git origin, and local deletion never
+  forces away unmerged commits. Failures preserve unfinished entries and return
+  nonzero with partial receipts. Retry reconciles already-declined PRs and absent
+  branches; protected/shared branches and invalid IDs are rejected up front.
+  Rebase and force-push failures also return nonzero with their step receipt.
+- **CI tail with an explicit pipeline no longer requires a Git branch.** UUID
+  mode works on detached checkouts and outside Git with explicit repo identity.
+- **TLS advisory addressed:** update locked rustls to 0.23.45 (and rustls-webpki
+  to 0.103.15) for RUSTSEC-2026-0285, without broad dependency upgrades.
+- **CI portability fixes:** use native Windows path construction in the auth
+  receipt test; document the installer's intentional display-only literal tildes
+  with a scoped ShellCheck SC2088 suppression.
+- **Stack landing reports failures and checkpoints each confirmed merge.** Missing,
+  zero, or duplicate PR IDs fail before remote work. Landing checks current PR
+  state, reconciles already-MERGED PRs on retry, and never treats an unconfirmed
+  merge response as success. Each merge saves remaining work before continuing;
+  save failures and detected config changes stop the run with recovery guidance.
+  Partial API failures retain their exit codes instead of returning success.
+  Local cleanup uses safe branch deletion after checkpointing. The final save
+  retains an empty stack file rather than ignoring deletion failures.
+- **Stack state saves are atomic and corrupt files are not reset by init.** Stack
+  writes reuse the private same-directory temporary-file replacement path and
+  report directory-creation failures. Only an absent stack file loads as empty;
+  read/parse errors propagate. An explicitly stale active-stack name now fails
+  instead of silently selecting the first stack for operations such as abort.
+  Legacy files with no active selection still use the first stack.
+- **Search, pipeline-step consumers, and full branch-PR lookup are paginated.**
+  Search honors the requested limit while retaining the first page's reported
+  total. CI/status/compare consumers now fetch all steps, including later-page
+  log/test selectors. Pipeline and step field projections retain next links.
+  Full branch lookup no longer caps at 50 PRs; lightweight identity lookup still
+  returns at most one. The single-page `list_steps` library API is preserved,
+  with a separate `list_all_steps` helper for complete-list consumers.
+- **More list endpoints now follow every page.** Issues, issue comments, schedule
+  executions, and workspaces honor the requested item limit independently of API
+  page-size caps. Source directories, pipeline/environment variables, and schedules
+  follow next links instead of silently stopping at page one. Variable updates
+  now find existing keys on later pages instead of trying to create duplicates;
+  continuation failures prevent writes based on an incomplete list.
+- **Conditional HTTP caching preserves representation and mutation boundaries.**
+  Cache keys include the Accept header; body-bearing GETs and mutation responses
+  are not cached as ordinary GETs. Mutations invalidate shared entries, including
+  ambiguous failures, and older in-flight GETs cannot repopulate that generation.
+  Requests retain the exact validator/body pair for 304 responses even after
+  eviction. Responses without ETags, with `no-store`, or with unsupported Vary
+  fields are not retained; replacement entries obey the total-byte budget.
+  A mutation returning HTTP 304 is now an error, not cached success.
+- **Verbose JSON decode diagnostics no longer print response previews or query
+  values.** Diagnostics retain the path, byte count, and numeric error location.
+- **Pagination no longer guesses numeric URLs or drops short pages.** The shared
+  paginator follows opaque `next` links for every limit, including limits <=100,
+  preserving cursor/query parameters and non-first-page starts. It ignores stale
+  size/page-length metadata and follows empty intermediate pages. Repeated links,
+  off-base links, and more than 10,000 pages fail explicitly. Sequential traversal
+  replaces speculative page-number concurrency to avoid duplicated/missing rows.
+- **Git remote detection no longer mistakes unrelated hosts for Bitbucket.**
+  HTTP(S) requires `bitbucket.org`; SSH allows Bitbucket hosts and single-label
+  local aliases, but not unrelated dotted hosts. Explicit `ssh://` URLs (including
+  the port-443 alternate SSH host) are supported. Paths reject extra/dot segments,
+  queries, fragments, escapes, and control characters. Only one trailing `.git`
+  suffix is stripped. Unsupported origins can fall back to a supported remote,
+  and the no-match error suggests explicit workspace/slug overrides.
+- **Invalid contexts no longer silently target the Git remote.** Repository
+  resolution now propagates malformed/unreadable config errors and rejects stale
+  active-context references or empty context identity fields. Full workspace and
+  slug overrides still work independently of config; partial overrides require a
+  valid context or no selected context. Config errors stop repository-scoped API
+  calls before they send credentials or mutations to a guessed target.
+- **Authentication setup rejects empty credentials before writing.** Whitespace-
+  only values no longer overwrite a working credential file. Noninteractive or
+  JSON setup without explicit inputs fails with exit `64` instead of prompting.
+  `auth status` now surfaces corrupt/unreadable credential files as errors rather
+  than treating them as a successful "no credentials" report.
+- **Malformed credentials no longer leak into errors.** TOML parser diagnostics
+  could echo API tokens from the offending line or a duplicate key into human
+  and JSON error output. Credential parse errors now include only the file path,
+  line number, and recovery guidance, never the parser's source text.
+- **Configuration saves are atomic.** `config.toml` now uses the private temporary
+  file and atomic replacement path already used for credentials, rather than
+  truncating the live file. Existing readers retain a complete old configuration,
+  and failed replacements clean up their temporary file.
 
 - **Command injection via `--notify command=…` (security).** The message was
   interpolated raw into a shell command string, so a crafted pipeline step name
@@ -1238,7 +1419,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credentials file opened with mode `0o600` at creation time on Unix, closing TOCTOU window.
 - No system keyring dependency (avoids 671 MB texlive pull).
 
-[Unreleased]: https://github.com/themankindproject/bbr/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/themankindproject/bbr/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/themankindproject/bbr/compare/v0.2.5...v0.3.0
 [0.2.0]: https://github.com/themankindproject/bbr/compare/v0.1.9...v0.2.0
 [0.1.9]: https://github.com/themankindproject/bbr/releases/tag/v0.1.9
 [0.1.8]: https://github.com/themankindproject/bbr/releases/tag/v0.1.8

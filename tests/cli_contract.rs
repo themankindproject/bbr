@@ -28,6 +28,9 @@ fn bbr() -> Command {
         .env("APPDATA", &home)
         .env("BITBUCKET_USERNAME", "test@example.com")
         .env("BITBUCKET_TOKEN", "not-a-real-token")
+        // These test consent/transport, not identity inference from this checkout.
+        .env("BB_WORKSPACE", "test-workspace")
+        .env("BB_SLUG", "test-repository")
         // Port 9 (discard) refuses instantly, so any command that gets past
         // validation fails fast instead of hanging.
         .env("BITBUCKET_API_BASE", "http://127.0.0.1:9");
@@ -53,6 +56,20 @@ fn missing_required_argument_is_a_usage_error() {
     // `pr create` requires --title. (`pr view`/`pr merge` deliberately infer
     // the PR from the current branch, so they are not usable as probes here.)
     bbr().args(["pr", "create"]).assert().code(USAGE);
+}
+
+#[test]
+fn zero_or_out_of_range_timeout_is_a_usage_error() {
+    // A zero timeout would make every request fail immediately.
+    bbr()
+        .env("BBR_TIMEOUT", "0")
+        .args(["pr", "list"])
+        .assert()
+        .code(USAGE);
+    bbr()
+        .args(["pr", "list", "--timeout", "100000"])
+        .assert()
+        .code(USAGE);
 }
 
 #[test]

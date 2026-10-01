@@ -168,10 +168,16 @@ async fn fetch_branch_status(
     g: &GlobalArgs,
     spinner: Option<&SpinnerGuard>,
     extras_cache: Option<&PrExtrasCache>,
+    shared_client: Option<crate::api::BitbucketClient>,
 ) -> Result<(BranchStatus, crate::api::BitbucketClient)> {
     let repo_id = resolve_repo(g)?;
     let head = current_head()?;
-    let client = client(g)?;
+    // Clones share one connection pool and cache, so concurrent callers can
+    // multiplex over a single HTTP/2 connection.
+    let client = match shared_client {
+        Some(c) => c,
+        None => client(g)?,
+    };
 
     if let Some(s) = spinner {
         s.set_message("Fetching branch status...");
@@ -201,9 +207,8 @@ async fn fetch_branch_status(
         async {
             match &pipeline {
                 Some(p) => client
-                    .list_steps(&repo_id.workspace, &repo_id.slug, &p.uuid)
+                    .list_all_steps(&repo_id.workspace, &repo_id.slug, &p.uuid)
                     .await
-                    .map(|page| page.values)
                     .unwrap_or_default(),
                 None => Vec::new(),
             }
@@ -408,23 +413,15 @@ pub async fn run_overview(g: &GlobalArgs) -> Result<()> {
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching overview...");
 
-    let (
-        BranchStatus {
-            repo,
-            head,
-            pr_summaries,
-            pipeline_summary,
-            commit_statuses,
-        },
-        api_client,
-    ) = fetch_branch_status(g, Some(&spinner), None).await?;
-
-    spinner.set_message("Fetching recent PRs & CI...");
-
-    let (recent_prs, recent_ci) = tokio::try_join!(
-        api_client.list_prs(
-            &repo.workspace,
-            &repo.slug,
+    // The repo-wide recent lists do not depend on the branch status, so they
+    // run alongside it instead of as a third sequential round trip.
+    let recent_repo = resolve_repo(g)?;
+    let recent_client = client(g)?;
+    let (branch_status, recent_prs, recent_ci) = tokio::try_join!(
+        fetch_branch_status(g, Some(&spinner), None, Some(recent_client.clone())),
+        recent_client.list_prs(
+            &recent_repo.workspace,
+            &recent_repo.slug,
             PrState::Open,
             25,
             None,
@@ -433,8 +430,18 @@ pub async fn run_overview(g: &GlobalArgs) -> Result<()> {
             None,
             None
         ),
-        api_client.list_pipelines(&repo.workspace, &repo.slug, None, 10),
+        recent_client.list_pipelines(&recent_repo.workspace, &recent_repo.slug, None, 10),
     )?;
+    let (
+        BranchStatus {
+            repo,
+            head,
+            pr_summaries,
+            pipeline_summary,
+            commit_statuses,
+        },
+        _api_client,
+    ) = branch_status;
 
     spinner.finish();
 
@@ -499,7 +506,7 @@ async fn run_inner_with_cache(
             commit_statuses,
         },
         _client,
-    ) = fetch_branch_status(g, Some(&spinner), extras_cache).await?;
+    ) = fetch_branch_status(g, Some(&spinner), extras_cache, None).await?;
 
     spinner.finish();
 
@@ -720,13 +727,9 @@ fn suggested_commands(
                     }
                     None => false,
                 };
-                let ci_running = match pipeline {
-                    Some(pl) => {
-                        pl.state.eq_ignore_ascii_case("INPROGRESS")
-                            || pl.state.eq_ignore_ascii_case("RUNNING")
-                    }
-                    None => false,
-                };
+                let ci_running = pipeline
+                    .as_ref()
+                    .is_some_and(|pl| is_running_state(&pl.state));
                 let ci_passing = match pipeline {
                     Some(pl) => pl.state.eq_ignore_ascii_case("SUCCESSFUL"),
                     None => false,
@@ -767,10 +770,7 @@ fn suggested_commands(
                     commands.push("bbr ci logs --failed".to_string());
                     commands.push("bbr ci watch --logs".to_string());
                 }
-                Some(pl)
-                    if pl.state.eq_ignore_ascii_case("INPROGRESS")
-                        || pl.state.eq_ignore_ascii_case("RUNNING") =>
-                {
+                Some(pl) if is_running_state(&pl.state) => {
                     commands.push("bbr ci watch --logs".to_string());
                     commands.push("bbr open ci".to_string());
                 }
@@ -786,6 +786,15 @@ fn suggested_commands(
 
     commands.truncate(3);
     commands
+}
+
+/// Whether a pipeline or commit-status state means work is still underway.
+///
+/// Pipelines report `IN_PROGRESS`/`PENDING`; commit statuses use `INPROGRESS`.
+fn is_running_state(state: &str) -> bool {
+    ["IN_PROGRESS", "INPROGRESS", "RUNNING", "PENDING"]
+        .iter()
+        .any(|s| state.eq_ignore_ascii_case(s))
 }
 
 fn render_short(out: &StatusOut) -> String {
@@ -942,8 +951,12 @@ fn render_pr_section(
         let ci_colored = match pipeline {
             Some(p) => match p.state.to_ascii_uppercase().as_str() {
                 "SUCCESSFUL" => theme.success("passing").into_owned(),
-                "FAILED" => theme.error("failed").into_owned(),
-                "INPROGRESS" | "RUNNING" => theme.warn("running").into_owned(),
+                "FAILED" | "ERROR" => theme.error("failed").into_owned(),
+                "STOPPED" => theme.warn("stopped").into_owned(),
+                "EXPIRED" => theme.warn("expired").into_owned(),
+                "PAUSED" => theme.warn("paused").into_owned(),
+                "PENDING" => theme.warn("pending").into_owned(),
+                state if is_running_state(state) => theme.warn("running").into_owned(),
                 _ => "unknown".to_string(),
             },
             None => "none".to_string(),
@@ -1106,8 +1119,9 @@ fn render_overview_human(out: &OverviewOut) -> String {
         for ci in &out.recent_ci {
             let state = match ci.state.to_ascii_uppercase().as_str() {
                 "SUCCESSFUL" => theme.success(&ci.state),
-                "FAILED" => theme.error(&ci.state),
-                "INPROGRESS" => theme.warn(&ci.state),
+                "FAILED" | "ERROR" => theme.error(&ci.state),
+                "PAUSED" | "STOPPED" | "EXPIRED" => theme.warn(&ci.state),
+                state if is_running_state(state) => theme.warn(&ci.state),
                 _ => theme.dim(&ci.state),
             };
             table = table.add_row([
@@ -1376,6 +1390,29 @@ mod tests {
     }
 
     #[test]
+    fn real_pipeline_in_progress_state_is_recognized_as_running() {
+        // Bitbucket pipelines report `IN_PROGRESS` (with an underscore); only
+        // commit statuses use `INPROGRESS`.
+        for state in ["IN_PROGRESS", "PENDING"] {
+            let pipeline = Some(PipelineSummary {
+                uuid: "p".into(),
+                state: state.into(),
+                duration_seconds: 10,
+                branch: Some("main".into()),
+                commit: None,
+                url: None,
+                failing_steps: vec![],
+                steps: vec![],
+            });
+            let commands = suggested_commands(&None, &pipeline);
+            assert!(commands.contains(&"bbr ci watch --logs".into()), "{state}");
+        }
+        assert!(is_running_state("in_progress"));
+        assert!(!is_running_state("PAUSED"));
+        assert!(!is_running_state("SUCCESSFUL"));
+    }
+
+    #[test]
     fn suggested_commands_successful_pipeline_suggests_open_ci() {
         let pipeline = Some(PipelineSummary {
             uuid: "p".into(),
@@ -1591,6 +1628,7 @@ mod tests {
                 result: Some(crate::api::pipeline::PipelineResult {
                     name: "SUCCESSFUL".into(),
                 }),
+                stage: None,
             },
             duration_in_seconds: 120,
             target: crate::api::pipeline::PipelineTarget {
@@ -1611,6 +1649,7 @@ mod tests {
             state: crate::api::pipeline::PipelineState {
                 name: "SUCCESSFUL".into(),
                 result: None,
+                stage: None,
             },
             duration_in_seconds: 60,
             ..Default::default()
@@ -1632,6 +1671,7 @@ mod tests {
                 result: Some(crate::api::pipeline::PipelineResult {
                     name: "FAILED".into(),
                 }),
+                stage: None,
             },
             duration_in_seconds: 60,
             ..Default::default()
@@ -1642,6 +1682,7 @@ mod tests {
             state: crate::api::pipeline::PipelineState {
                 name: "SUCCESSFUL".into(),
                 result: None,
+                stage: None,
             },
             ..Default::default()
         };
@@ -1651,6 +1692,7 @@ mod tests {
             state: crate::api::pipeline::PipelineState {
                 name: "FAILED".into(),
                 result: None,
+                stage: None,
             },
             ..Default::default()
         };
