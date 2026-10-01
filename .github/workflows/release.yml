@@ -199,6 +199,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      # scripts/gen-packages.sh (manifest generation below) lives in the repo.
+      - uses: actions/checkout@v4
+
       - name: Download release archives
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
