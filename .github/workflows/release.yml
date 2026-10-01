@@ -99,13 +99,16 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # musl needs a C toolchain for `ring` (rustls' crypto backend).
+      # musl needs a C compiler for `ring` (rustls' crypto backend). Only the
+      # C compiler is musl-gcc: linking must stay with rustc's self-contained
+      # musl. Linking through musl-gcc pulls in the distro's libc.a, which does
+      # not match the musl that Rust's std was built against, and the result
+      # segfaults on startup (v0.3.0's x86_64 build exited 139 on `--version`).
       - name: Install musl toolchain
         if: matrix.musl
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools
-          echo "CARGO_TARGET_$(echo '${{ matrix.target }}' | tr 'a-z-' 'A-Z_')_LINKER=musl-gcc" >> "$GITHUB_ENV"
           echo "CC_$(echo '${{ matrix.target }}' | tr 'a-z-' 'A-Z_')=musl-gcc" >> "$GITHUB_ENV"
 
       - name: Build release binary
@@ -144,10 +147,14 @@ jobs:
           set -euo pipefail
           asset="bbr-${{ matrix.target }}.${{ matrix.archive }}"
           test -f "$asset" || { echo "::error::missing $asset"; exit 1; }
+          # Capture the listing first: `tar | grep -q` under pipefail fails
+          # spuriously when grep exits before tar finishes writing (SIGPIPE).
           if [ "${{ matrix.archive }}" = "zip" ]; then
-            unzip -l "$asset" | grep -q 'bbr\.exe' || { echo "::error::$asset has no bbr.exe"; exit 1; }
+            listing="$(unzip -l "$asset")"
+            grep -q 'bbr\.exe' <<<"$listing" || { echo "::error::$asset has no bbr.exe"; exit 1; }
           else
-            tar -tzf "$asset" | grep -qE '(^|/)bbr$' || { echo "::error::$asset has no bbr binary"; exit 1; }
+            listing="$(tar -tzf "$asset")"
+            grep -qE '(^|/)bbr$' <<<"$listing" || { echo "::error::$asset has no bbr binary"; exit 1; }
           fi
 
       # Per-asset checksum, produced in the same leg that built the artifact so
