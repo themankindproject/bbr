@@ -33,8 +33,11 @@ pub async fn cat(g: &GlobalArgs, path: &str, git_ref: Option<&str>) -> Result<()
     };
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message(format!("Fetching {path}..."));
+    let revision = client
+        .resolve_src_revision(&repo.workspace, &repo.slug, &resolved_ref)
+        .await?;
     let content = client
-        .get_file_raw(&repo.workspace, &repo.slug, &resolved_ref, path)
+        .get_file_raw(&repo.workspace, &repo.slug, &revision, path)
         .await?;
     spinner.finish();
 
@@ -47,8 +50,8 @@ pub async fn cat(g: &GlobalArgs, path: &str, git_ref: Option<&str>) -> Result<()
         };
         fmt.print(&out, "")
     } else {
-        print!("{content}");
-        Ok(())
+        // Exact bytes when redirected; escape-sanitized on a terminal.
+        crate::output::print_raw(&content)
     }
 }
 
@@ -63,8 +66,11 @@ pub async fn ls(g: &GlobalArgs, path: Option<&str>, git_ref: Option<&str>) -> Re
     let dir = path.unwrap_or("");
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching directory listing...");
+    let revision = client
+        .resolve_src_revision(&repo.workspace, &repo.slug, &resolved_ref)
+        .await?;
     let entries = client
-        .list_src(&repo.workspace, &repo.slug, &resolved_ref, dir)
+        .list_src(&repo.workspace, &repo.slug, &revision, dir)
         .await?;
     spinner.finish();
 

@@ -565,3 +565,105 @@ async fn rebase_push_failure_is_not_reported_as_success() {
     let receipt: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(receipt["steps"][0]["status"], "error");
 }
+
+impl Fixture {
+    fn commit_file(&self, branch: &str, file: &str, contents: &str) {
+        self.git(&["switch", "--quiet", branch]);
+        fs::write(self.repo.join(file), contents).unwrap();
+        self.git(&["add", file]);
+        self.commit(&format!("{branch}: {file}"));
+    }
+    fn stdout(&self, args: &[&str]) -> String {
+        let mut c = assert_cmd::Command::new("git");
+        self.isolate(&mut c);
+        let out = c.args(args).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+    /// Bare `origin` holding the current stack branches.
+    fn with_origin(&self) {
+        // Rebase rewrites commits, so the isolated repo needs an identity.
+        self.git(&["config", "user.name", "Test"]);
+        self.git(&["config", "user.email", "test@example.com"]);
+        self.git(&["config", "commit.gpgsign", "false"]);
+        let remote = self.home.path().join("origin.git");
+        self.git(&["init", "--quiet", "--bare", remote.to_str().unwrap()]);
+        self.git(&["remote", "add", "origin", remote.to_str().unwrap()]);
+        self.git(&[
+            "push",
+            "--quiet",
+            "origin",
+            "main",
+            "feature-0",
+            "feature-1",
+        ]);
+    }
+    fn remote_sha(&self, branch: &str) -> String {
+        self.stdout(&["ls-remote", "origin", &format!("refs/heads/{branch}")])
+    }
+}
+
+#[tokio::test]
+async fn rebase_conflict_pushes_nothing_and_restores_the_starting_branch() {
+    let s = MockServer::start().await;
+    let f = Fixture::new(2);
+    f.commit_file("feature-0", "zero.txt", "feature zero\n");
+    f.commit_file("feature-1", "shared.txt", "from feature-1\n");
+    f.commit_file("main", "shared.txt", "from main\n");
+    f.with_origin();
+    let before = f.remote_sha("feature-0");
+
+    let out = f.run(&s, &["rebase", "--push"]);
+    assert_eq!(out.status.code(), Some(1));
+    let receipt: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(receipt["steps"][0]["status"], "ok");
+    assert_eq!(receipt["steps"][1]["status"], "conflict");
+    assert_eq!(
+        f.remote_sha("feature-0"),
+        before,
+        "feature-0 must not be force-pushed while the chain is incomplete"
+    );
+    assert_eq!(f.stdout(&["rev-parse", "--abbrev-ref", "HEAD"]), "main");
+    assert!(!f.repo.join(".git/rebase-merge").exists());
+}
+
+#[tokio::test]
+async fn successful_rebase_push_publishes_all_and_returns_to_start_branch() {
+    let s = MockServer::start().await;
+    let f = Fixture::new(2);
+    f.commit_file("feature-0", "zero.txt", "zero\n");
+    f.commit_file("feature-1", "one.txt", "one\n");
+    f.commit_file("main", "main.txt", "main\n");
+    f.with_origin();
+    let before = (f.remote_sha("feature-0"), f.remote_sha("feature-1"));
+
+    let out = f.run(&s, &["rebase", "--push"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let receipt: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(receipt["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|step| step["status"] == "ok"));
+    assert_ne!(f.remote_sha("feature-0"), before.0);
+    assert_ne!(f.remote_sha("feature-1"), before.1);
+    assert_eq!(f.stdout(&["rev-parse", "--abbrev-ref", "HEAD"]), "main");
+}
+
+#[tokio::test]
+async fn rebase_rejects_revision_syntax_in_stack_file_before_touching_git() {
+    let s = MockServer::start().await;
+    let f = Fixture::new(1);
+    let mut cfg = f.config();
+    cfg.stacks[0].prs[0].parent_branch = "main@{1}".into();
+    f.save(&cfg);
+    let head_before = f.stdout(&["rev-parse", "feature-0"]);
+    let out = f.run(&s, &["rebase"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty(), "rejected before any step ran");
+    assert_eq!(f.stdout(&["rev-parse", "feature-0"]), head_before);
+    assert_eq!(f.stdout(&["rev-parse", "--abbrev-ref", "HEAD"]), "main");
+}

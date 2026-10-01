@@ -33,7 +33,12 @@ pub async fn list(g: &GlobalArgs, role: Option<&str>, limit: u32) -> Result<()> 
 
     let mut path = format!("/user/workspaces?pagelen={}", limit.min(100));
     if let Some(r) = role {
-        path.push_str(&format!("&q=permission%3D%22{r}%22"));
+        // `--role` is a closed set today; encode anyway so this filter can never
+        // be broken out of by a future caller.
+        path.push_str(&format!(
+            "&q=permission%3D%22{}%22",
+            crate::api::url_encode(r)
+        ));
     }
 
     let memberships: Vec<WorkspaceMembership> =

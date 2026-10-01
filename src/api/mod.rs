@@ -400,7 +400,7 @@ impl BitbucketClient {
         headers
             .get("retry-after")
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.trim().parse::<u64>().ok())
+            .and_then(|v| parse_retry_after(v, time::OffsetDateTime::now_utc()))
     }
 
     /// Shared retry loop for HTTP requests.
@@ -1036,6 +1036,27 @@ pub(crate) fn url_encode(s: &str) -> String {
     out
 }
 
+/// Parse a `Retry-After` value: delay-seconds or an HTTP-date (RFC 9110
+/// IMF-fixdate, e.g. `Wed, 21 Oct 2026 07:28:00 GMT`), relative to `now`.
+/// A date in the past means "retry now" (0 seconds).
+fn parse_retry_after(value: &str, now: time::OffsetDateTime) -> Option<u64> {
+    let value = value.trim();
+    if let Ok(secs) = value.parse::<u64>() {
+        return Some(secs);
+    }
+    // IMF-fixdate always uses the literal zone "GMT"; RFC 2822 parsing wants a
+    // numeric offset, so normalize it first.
+    let normalized = value
+        .strip_suffix(" GMT")
+        .or_else(|| value.strip_suffix(" UTC"))
+        .map(|rest| format!("{rest} +0000"))?;
+    let at =
+        time::OffsetDateTime::parse(&normalized, &time::format_description::well_known::Rfc2822)
+            .ok()?;
+    let delta = (at - now).whole_seconds();
+    Some(u64::try_from(delta).unwrap_or(0))
+}
+
 /// Simple jitter based on system time nanos mixed with a per-process counter
 /// to avoid thundering herd. Wall-clock nanos alone would be identical for
 /// concurrent retries within the same process; the atomic counter decorrelates
@@ -1060,6 +1081,33 @@ pub(crate) fn base64_encode(input: &[u8]) -> String {
 mod tests {
     use super::*;
     use reqwest::StatusCode;
+
+    #[test]
+    fn retry_after_accepts_seconds_and_http_dates() {
+        let now = time::OffsetDateTime::parse(
+            "Wed, 21 Oct 2026 07:28:00 +0000",
+            &time::format_description::well_known::Rfc2822,
+        )
+        .unwrap();
+        assert_eq!(parse_retry_after("120", now), Some(120));
+        assert_eq!(parse_retry_after(" 7 ", now), Some(7));
+        assert_eq!(
+            parse_retry_after("Wed, 21 Oct 2026 07:28:45 GMT", now),
+            Some(45)
+        );
+        // A date in the past means "now", not a parse failure.
+        assert_eq!(
+            parse_retry_after("Wed, 21 Oct 2026 07:00:00 GMT", now),
+            Some(0)
+        );
+        assert_eq!(parse_retry_after("soon", now), None);
+        assert_eq!(parse_retry_after("", now), None);
+        // The wait is still capped by `retry_wait`.
+        assert_eq!(
+            BitbucketClient::retry_wait(1, parse_retry_after("Wed, 21 Oct 2026 09:00:00 GMT", now)),
+            std::time::Duration::from_secs(MAX_RETRY_AFTER_SECS)
+        );
+    }
 
     fn cache_test_client() -> BitbucketClient {
         BitbucketClient::new(

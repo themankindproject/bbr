@@ -16,6 +16,26 @@ use crate::error::{BitbucketError, Result};
 pub const ENV_USERNAME: &str = "BITBUCKET_USERNAME";
 pub const ENV_TOKEN: &str = "BITBUCKET_TOKEN";
 
+/// Where resolved credentials came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CredentialSource {
+    /// `BITBUCKET_USERNAME` + `BITBUCKET_TOKEN`.
+    #[default]
+    Environment,
+    /// The credentials file written by `bbr auth setup`.
+    ConfigFile,
+}
+
+impl CredentialSource {
+    /// Stable machine-readable name (`auth status --json` `source` field).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CredentialSource::Environment => "environment",
+            CredentialSource::ConfigFile => "config-file",
+        }
+    }
+}
+
 /// Resolved credentials ready to attach to HTTP requests.
 /// The `secret` field is zeroized on drop to prevent credential leakage
 /// in memory dumps or core files.
@@ -36,11 +56,21 @@ impl std::fmt::Debug for Credentials {
 
 /// Resolve credentials from the environment first, then the config file.
 pub fn resolve() -> Result<Credentials> {
+    resolve_with_source().map(|(creds, _)| creds)
+}
+
+/// Like [`resolve`], also reporting which source supplied the credentials.
+///
+/// `auth status` and `doctor` report this instead of re-inspecting the
+/// environment: a set-but-unusable `BITBUCKET_TOKEN` (no username, or blank)
+/// falls back to the credentials file, which must not be described as
+/// "environment".
+pub fn resolve_with_source() -> Result<(Credentials, CredentialSource)> {
     if let Some(c) = from_env() {
-        return Ok(c);
+        return Ok((c, CredentialSource::Environment));
     }
     if let Some(c) = from_config()? {
-        return Ok(c);
+        return Ok((c, CredentialSource::ConfigFile));
     }
     Err(BitbucketError::NoCredentials)
 }
@@ -109,6 +139,12 @@ mod tests {
         assert_eq!(c.username, "u@example.com");
         std::env::remove_var(ENV_TOKEN);
         std::env::remove_var(ENV_USERNAME);
+    }
+
+    #[test]
+    fn credential_source_names_are_stable() {
+        assert_eq!(CredentialSource::Environment.as_str(), "environment");
+        assert_eq!(CredentialSource::ConfigFile.as_str(), "config-file");
     }
 
     #[test]

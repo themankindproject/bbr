@@ -57,9 +57,16 @@ struct UpdateCache {
     last_check_epoch: u64,
     latest_version: String,
     release_url: String,
+    /// The last check failed; retry after [`FAILED_CHECK_TTL_SECS`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    failed: bool,
 }
 
 const CACHE_TTL_SECS: u64 = 86400; // 24 hours
+
+/// Back-off after a failed check (offline, proxy, GitHub outage), so an
+/// unreachable GitHub costs one attempt per hour rather than one per command.
+const FAILED_CHECK_TTL_SECS: u64 = 3600;
 
 fn cache_path() -> Option<PathBuf> {
     let dir = crate::config::config_dir()?;
@@ -75,21 +82,34 @@ fn read_cache() -> Option<UpdateCache> {
 fn write_cache(cache: &UpdateCache) {
     if let Some(path) = cache_path() {
         if let Ok(data) = serde_json::to_string(cache) {
+            if let Some(dir) = path.parent() {
+                let _ = fs::create_dir_all(dir);
+            }
             let _ = fs::write(path, data);
         }
     }
 }
 
+fn now_epoch() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 fn cache_is_fresh() -> bool {
     read_cache()
-        .map(|c| {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            now.saturating_sub(c.last_check_epoch) < CACHE_TTL_SECS
-        })
+        .map(|c| cache_entry_is_fresh(&c, now_epoch()))
         .unwrap_or(false)
+}
+
+fn cache_entry_is_fresh(cache: &UpdateCache, now: u64) -> bool {
+    let ttl = if cache.failed {
+        FAILED_CHECK_TTL_SECS
+    } else {
+        CACHE_TTL_SECS
+    };
+    now.saturating_sub(cache.last_check_epoch) < ttl
 }
 
 // ---------------------------------------------------------------------------
@@ -109,8 +129,17 @@ fn parse_version(tag: &str) -> Option<Vec<u64>> {
 
 fn is_newer(latest: &str, current: &str) -> bool {
     match (parse_version(latest), parse_version(current)) {
-        (Some(a), Some(b)) => a > b,
-        _ => latest != current,
+        (Some(mut a), Some(mut b)) => {
+            // `1.2` and `1.2.0` are the same release: compare padded vectors
+            // so a missing trailing component never reads as "older".
+            let len = a.len().max(b.len());
+            a.resize(len, 0);
+            b.resize(len, 0);
+            a > b
+        }
+        // Unparseable tags are never offered as upgrades: a stray or
+        // malformed "latest" tag must not nag on every run.
+        _ => false,
     }
 }
 
@@ -235,10 +264,10 @@ async fn fetch_latest_release() -> Result<GithubRelease> {
         .map_err(BitbucketError::Http)?;
 
     if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
+        // The status is enough to report; never buffer an arbitrary error body.
         return Err(BitbucketError::Other(format!(
-            "GitHub API returned {status}: {body:.200}"
+            "GitHub API returned {}",
+            resp.status()
         )));
     }
 
@@ -265,6 +294,22 @@ pub async fn notify_if_outdated() {
         return;
     }
 
+    // Record the attempt *before* the request, as a failed check: plain `bbr`
+    // stops waiting for this task after a short grace period, so a request to
+    // an unreachable GitHub is usually abandoned before it can fail. Without
+    // this marker every later command would start (and wait for) a new one.
+    // Success below overwrites it; the last known version is kept meanwhile.
+    let previous = read_cache();
+    write_cache(&UpdateCache {
+        last_check_epoch: now_epoch(),
+        latest_version: previous
+            .as_ref()
+            .map(|c| c.latest_version.clone())
+            .unwrap_or_default(),
+        release_url: previous.map(|c| c.release_url).unwrap_or_default(),
+        failed: true,
+    });
+
     let release = match fetch_latest_release().await {
         Ok(r) => r,
         Err(_) => return,
@@ -274,12 +319,10 @@ pub async fn notify_if_outdated() {
     let current = env!("CARGO_PKG_VERSION");
 
     write_cache(&UpdateCache {
-        last_check_epoch: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
+        last_check_epoch: now_epoch(),
         latest_version: latest.clone(),
         release_url: format!("https://github.com/themankindproject/bbr/releases/tag/{latest}"),
+        failed: false,
     });
 
     if !is_newer(&latest, current) {
@@ -431,12 +474,10 @@ pub async fn run(g: &GlobalArgs, check_only: bool) -> Result<()> {
     eprintln!("{}  Updated bbr to {latest}", theme.checkmark());
 
     write_cache(&UpdateCache {
-        last_check_epoch: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
+        last_check_epoch: now_epoch(),
         latest_version: latest,
         release_url: String::new(),
+        failed: false,
     });
 
     Ok(())
@@ -1027,6 +1068,50 @@ mod tests {
     fn is_newer_falls_back_to_string_compare() {
         assert!(is_newer("v1.0.1", "v1.0.0"));
         assert!(!is_newer("v1.0.0", "v1.0.1"));
+    }
+
+    #[test]
+    fn is_newer_treats_missing_trailing_components_as_zero() {
+        assert!(!is_newer("v1.2", "1.2.0"));
+        assert!(!is_newer("v1.2.0", "1.2"));
+        assert!(is_newer("v1.2.1", "1.2"));
+        assert!(!is_newer("v1.2", "1.2.1"));
+    }
+
+    #[test]
+    fn unparseable_tags_are_never_offered_as_upgrades() {
+        assert!(!is_newer("nightly", "0.2.5"));
+        assert!(!is_newer("", "0.2.5"));
+    }
+
+    #[test]
+    fn failed_checks_back_off_for_an_hour_not_a_day() {
+        let now = 1_000_000;
+        let entry = |age: u64, failed: bool| UpdateCache {
+            last_check_epoch: now - age,
+            latest_version: String::new(),
+            release_url: String::new(),
+            failed,
+        };
+        assert!(cache_entry_is_fresh(&entry(60, true), now));
+        assert!(!cache_entry_is_fresh(
+            &entry(FAILED_CHECK_TTL_SECS + 1, true),
+            now
+        ));
+        assert!(cache_entry_is_fresh(
+            &entry(FAILED_CHECK_TTL_SECS + 1, false),
+            now
+        ));
+        assert!(!cache_entry_is_fresh(
+            &entry(CACHE_TTL_SECS + 1, false),
+            now
+        ));
+        // Older cache files without the field still parse as successful checks.
+        let legacy: UpdateCache = serde_json::from_str(
+            r#"{"last_check_epoch":1,"latest_version":"v1","release_url":"u"}"#,
+        )
+        .unwrap();
+        assert!(!legacy.failed);
     }
 
     #[test]

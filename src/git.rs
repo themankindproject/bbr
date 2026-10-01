@@ -178,6 +178,45 @@ fn is_remote_segment(segment: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
 }
 
+/// Whether `segment` is a braced Bitbucket UUID such as `{0e3a…-…}`.
+fn is_braced_uuid(segment: &str) -> bool {
+    segment
+        .strip_prefix('{')
+        .and_then(|s| s.strip_suffix('}'))
+        .is_some_and(|inner| {
+            !inner.is_empty() && inner.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
+        })
+}
+
+/// Reject a workspace or repository slug that would change the meaning of the
+/// API URL it is interpolated into.
+///
+/// Identities are formatted directly into `/repositories/{workspace}/{slug}`;
+/// a value such as `mine/../victim`, `repo?x=1`, or `repo#x` would otherwise
+/// silently target a different repository (or alter the query) — dangerous for
+/// destructive commands. Bitbucket workspace IDs and repository slugs consist of
+/// ASCII letters, digits, `-`, `_` and `.`; braced UUIDs are also accepted.
+pub fn validate_repo_segment(kind: &str, value: &str) -> Result<()> {
+    if is_remote_segment(value) || is_braced_uuid(value) {
+        return Ok(());
+    }
+    let shown: String = value
+        .chars()
+        .flat_map(char::escape_default)
+        .take(80)
+        .collect();
+    Err(BitbucketError::Usage(format!(
+        "invalid {kind} \"{shown}\": use only ASCII letters, digits, '-', '_' and '.' (or a {{UUID}}); \
+         slashes, '..', '?', '#', '%' and whitespace are not allowed"
+    )))
+}
+
+/// Validate both halves of a repository identity.
+pub fn validate_repo_identity(repo: &RepoIdentity) -> Result<()> {
+    validate_repo_segment("workspace", &repo.workspace)?;
+    validate_repo_segment("repository slug", &repo.slug)
+}
+
 fn is_bitbucket_ssh_host(host: &str) -> bool {
     host.eq_ignore_ascii_case("bitbucket.org")
         || host.eq_ignore_ascii_case("altssh.bitbucket.org")
@@ -319,6 +358,11 @@ pub fn delete_branch_remote(branch: &str) -> Result<()> {
 /// restored to the branch it was on before the call, so callers never
 /// inherit a half-finished rebase state.
 pub fn rebase_branch(branch: &str, onto: &str) -> Result<()> {
+    // Literal names only: `--` blocks option injection, but `git switch` and
+    // `git rebase` would still DWIM-expand `@{upstream}`/`main@{1}` from a
+    // hand-edited stack file into an unintended revision.
+    validate_branch_name(branch)?;
+    validate_branch_name(onto)?;
     let original = current_branch().ok();
     // switch to the target branch first, then rebase onto the parent
     git(&["switch", "--", branch])?;
@@ -335,6 +379,13 @@ pub fn rebase_branch(branch: &str, onto: &str) -> Result<()> {
             None => Err(e),
         };
     }
+    Ok(())
+}
+
+/// Switch the working tree to an existing local branch.
+pub fn switch_branch(branch: &str) -> Result<()> {
+    validate_branch_name(branch)?;
+    git(&["switch", "--", branch])?;
     Ok(())
 }
 
@@ -407,6 +458,14 @@ pub async fn rebase_branch_async(branch: &str, onto: &str) -> Result<()> {
         .map_err(|e| BitbucketError::Git(format!("spawn_blocking join error: {e}")))?
 }
 
+/// Async version of [`switch_branch`] — runs on the blocking thread pool.
+pub async fn switch_branch_async(branch: &str) -> Result<()> {
+    let branch = branch.to_string();
+    tokio::task::spawn_blocking(move || switch_branch(&branch))
+        .await
+        .map_err(|e| BitbucketError::Git(format!("spawn_blocking join error: {e}")))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,6 +503,48 @@ mod tests {
             "git version with piped stdout must not time out: {big:?}"
         );
         assert!(big.unwrap().contains("git version"));
+    }
+
+    #[test]
+    fn repo_segments_accept_real_identities_and_reject_url_syntax() {
+        for ok in [
+            "sdadev",
+            "bvrm-backend",
+            "my_repo.v2",
+            "A1",
+            "{0e3a9a5c-1f2b-4c3d-9e8f-123456789abc}",
+        ] {
+            assert!(validate_repo_segment("workspace", ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "",
+            ".",
+            "..",
+            "mine/../victim",
+            "a/b",
+            "repo?x=1",
+            "repo#x",
+            "a%2Fb",
+            "a b",
+            "a\tb",
+            "a\\b",
+            "café",
+            "{}",
+            "{not-hex!}",
+            "{abc",
+        ] {
+            let err = validate_repo_segment("workspace", bad).unwrap_err();
+            assert_eq!(err.exit_code(), crate::error::ExitCode::Usage, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn invalid_segment_message_escapes_control_characters() {
+        let msg = validate_repo_segment("repository slug", "x\u{1b}[2J")
+            .unwrap_err()
+            .to_string();
+        assert!(!msg.contains('\u{1b}'));
+        assert!(msg.contains("\\u{1b}"));
     }
 
     #[test]

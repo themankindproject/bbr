@@ -49,6 +49,7 @@ pub async fn run_audit(g: &GlobalArgs, slug_arg: Option<&str>) -> Result<()> {
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
 
     let repos = if let Some(s) = slug_arg {
+        crate::git::validate_repo_segment("repository slug", s)?;
         spinner.set_message(format!("Fetching repository {}...", s));
         vec![client.get_repo(ws, s).await?]
     } else {

@@ -74,7 +74,7 @@ These flags are available on **every** subcommand:
 | `--color <WHEN>` | | Color output: `auto` (default), `always`, or `never` |
 | `--no-color` | | Disable color (same as `--color never`; wins over `--color`) |
 | `--no-unicode` | | Use ASCII instead of Unicode (for terminals without UTF-8 support) |
-| `--timeout <SECS>` | | HTTP request timeout in seconds (env: `BBR_TIMEOUT`, default: 30) |
+| `--timeout <SECS>` | | HTTP request timeout in seconds, 1–3600 (env: `BBR_TIMEOUT`, default: 30) |
 
 ---
 
@@ -206,7 +206,7 @@ bbr pr create --title "Fix X" \
 bbr pr create --title "Fix X" \
   --close-source-branch                          # auto-close source
 bbr pr create --title "Fix X" \
-  --reviewer "user1" --reviewer "user2"          # add reviewers (repeatable)
+  --reviewer "user1" --reviewer "{uuid}"         # usernames or UUIDs (repeatable)
 bbr pr create --title "Fix X" --push             # push branch first, then create
 bbr pr create --title "Fix X" --push --force     # overwrite a diverged branch (force-with-lease)
 ```
@@ -413,9 +413,21 @@ reinitializing over it. Legacy files without `active` use the first stack, but a
 explicit active name that no longer exists is an error. Recover with
 `bbr pr stack use <existing-name>` (inspect `.bbr/stack.toml` for names if needed).
 
-`land` requires positive, unique PR IDs for every entry before it starts. It
-checks each PR's current state: OPEN can be merged, MERGED is reconciled without
-another merge request, and other states stop the run. After each confirmed merge,
+`land` requires positive, unique PR IDs and literal branch names for every
+entry before it starts. Each PR must still have the recorded source branch and
+repository, and an OPEN PR must target the branch the stack expects; anything
+else stops before a merge. OPEN can be merged, MERGED is reconciled without
+another merge request, and other states stop the run.
+
+Bitbucket does not move a pull request whose destination branch is deleted, so
+`land` keeps a parent's branch while it merges it (`close_source_branch: false`),
+retargets each open child PR to the branch the parent landed in, and only then
+deletes the parent branch through the API. The saved stack records the new
+parent. If a retarget fails, the parent branch is kept and the run stops; rerun
+`land` to resume (the merged parent is reconciled, the child is retargeted and
+landed). The top PR uses `close_source_branch: true`. Squash merges of stacked
+parents can make a child's diff repeat the parent's changes; `land` warns when
+`--strategy squash` is used on a stack. After each confirmed merge,
 it saves the remaining entries before processing the next PR. The last checkpoint
 removes only the completed stack; an empty `.bbr/stack.toml` is retained when no
 stacks remain. Local cleanup uses safe deletion and warns if a branch is retained.
@@ -439,6 +451,12 @@ reconciles already-declined PRs and absent branches. Partial aborts preserve the
 `{ "declined": [...], "branches_deleted": [...] }` receipt and exit nonzero;
 consult stderr and the remaining stack before retrying. `rebase` also returns a
 nonzero exit on a rebase or push failure while preserving its step receipt.
+
+`rebase` validates every branch and parent name first (revision syntax such as
+`main@{1}` is rejected), rebases the whole chain locally, and only then
+force-pushes with `--push`: a conflict part-way pushes nothing. If a push fails,
+later branches are reported as `skipped` (rebased locally, not pushed). The
+branch you started on is checked out again afterwards.
 
 > **Note:** `rebase` and `land` require a clean working tree. Stack operations are
 > **not transactional** across Bitbucket, Git, and the state file. Inspect remote
@@ -471,6 +489,12 @@ bbr batch merge-approved --json                  # machine-readable plan/result
 ```
 
 Source branches are never closed unless `--close-source-branch` is passed.
+Draft PRs are never planned. Just before each merge the PR is fetched again and
+skipped (reported under `failed`) if it is no longer open, became a draft, lost
+approvals below `--min-approvals`, had changes requested, or changed branches
+since the plan was shown. All `batch` commands print their result receipt and
+then exit `1` if any action failed, so `bbr batch ... && next-step` stops on a
+partial failure.
 
 Plan output:
 
@@ -549,13 +573,15 @@ Output: table with columns `Step  State  Duration`.
 
 #### `bbr ci watch`
 
-Live-tail a running pipeline. Exits with code `5` on pipeline failure.
+Live-tail a running pipeline until it completes, pauses at a manual step, or
+`--wait-timeout` elapses.
 
 ```bash
 bbr ci watch                         # current branch
 bbr ci watch --branch main
 bbr ci watch --logs                  # stream step logs in real-time while watching
-bbr ci watch --interval-secs 10      # poll interval (default 5)
+bbr ci watch --interval 10           # poll interval in seconds (default 5)
+bbr ci watch --wait-timeout 1800     # give up after 30 minutes (default: no limit)
 bbr ci watch --notify                # ring the terminal bell when the pipeline finishes
 bbr ci watch --notify desktop        # OS desktop notification on finish
 bbr ci watch --notify 'command=notify-send bbr %m'   # run a custom command (%m = message)
@@ -566,6 +592,22 @@ bbr ci watch --logs --from-offset 12345   # resume streaming from a byte offset
 When `--logs` is active, step output is streamed with box-drawn headers as it arrives. Error and warning lines are highlighted (red/yellow) when colors are enabled; piped output is unchanged. If parallel steps stream at once, each line is tagged with its step name (`│ [build] …`) so interleaved output stays readable. The spinner shows the pipeline state, current step, and elapsed time. On failure without `--logs`, the first error line is located and shown with surrounding context (10 lines before, 30 after, plus a short tail); if nothing classifies as an error, the last 120 lines are shown instead. `--from-offset` resumes a dropped watch from a byte offset (the offset is the number of log bytes already streamed).
 
 `--notify` takes an optional BACKEND: bare `--notify` (default) rings the terminal bell, `--notify desktop` posts an OS desktop notification, and `--notify command=<cmd>` runs a shell command with `%m` replaced by the notification message. Bell output goes to stderr (piping stays clean); the desktop and command backends are skipped under `--json`.
+
+Streamed log lines, step transitions, and poll warnings go to **stderr** (also
+when stderr is piped or `--quiet` hides the spinner); the final summary or
+`--json` receipt goes to stdout. A failed step listing is reported as a warning
+and retried rather than silently showing no output. Finished steps whose logs
+have been fully read are not re-requested on later polls.
+
+| Outcome | Exit | `outcome` (JSON) |
+|---------|------|------------------|
+| Completed `SUCCESSFUL` | `0` | `completed` |
+| Completed `FAILED`, `ERROR`, `STOPPED`, or `EXPIRED` | `5` | `completed` |
+| Paused at a manual step | `1` | `paused` |
+| `--wait-timeout` reached | `1` | `timed_out` |
+
+A paused or timed-out watch never reports success, so `bbr ci watch && deploy`
+only proceeds after a green build.
 
 #### `bbr ci tail`
 
@@ -587,7 +629,7 @@ bbr ci tail --line-numbers           # prefix streamed lines with line numbers
 bbr ci tail --from-offset 12345      # resume streaming from a byte offset
 ```
 
-Output: raw log text streamed to stdout with a header line (`==> StepName :: #42 :: uuid :: STATE`) and an exit summary showing elapsed time. Error and warning lines are highlighted (red/yellow) when colors are enabled; piped output is byte-identical. With `--all`, when the current step finishes and the pipeline is still running, tail automatically switches to the next step (preferring one already running, else the next pending one) and prints a fresh header. `--from-offset` resumes a dropped tail from a byte offset. `--notify` works the same as on `ci watch` (see above).
+Output: log text streamed to stdout with a header line (`==> StepName :: #42 :: uuid :: STATE`) and an exit summary showing elapsed time. Error and warning lines are highlighted (red/yellow) when colors are enabled. Terminal control sequences in log text are removed (color codes are kept) and carriage-return progress redraws show their final state; use `--json` (NDJSON events) or `bbr ci logs --json` for the exact log bytes. With `--all`, when the current step finishes and the pipeline is still running, tail automatically switches to the next step (preferring one already running, else the next pending one) and prints a fresh header. `--from-offset` resumes a dropped tail from a byte offset. `--notify` works the same as on `ci watch` (see above).
 
 #### `bbr ci trigger`
 
@@ -726,7 +768,8 @@ Manage repository pipeline variables (alias of `bbr ci vars`).
 ```bash
 bbr variable list
 bbr variable set KEY value [--secured]
-bbr variable delete KEY
+bbr variable delete KEY              # asks for confirmation
+bbr variable delete KEY --yes        # non-interactive
 ```
 
 ---
@@ -767,6 +810,24 @@ Output:
   src/commands/pr.rs
     src/commands/pr.rs:89    // TODO: extract helper
 ```
+
+---
+
+### `bbr src`
+
+Read files and list directories in the remote repository without cloning.
+
+```bash
+bbr src cat Cargo.toml                       # file at the current branch
+bbr src cat Cargo.toml --git-ref v1.2.0      # at a tag, branch, or commit hash
+bbr src cat src/main.rs -r feature/login     # branch names with '/' work too
+bbr src ls src/ --json                       # directory listing
+```
+
+A ref containing `/` is resolved to its commit through the branch (then tag)
+API first, because the source endpoint takes the revision as a single path
+segment. `src cat` prints the file's exact bytes when stdout is redirected
+(`bbr src cat x > x`); on a terminal, control sequences in the file are removed.
 
 ---
 
@@ -983,7 +1044,7 @@ current top of the environment's history. It confirms before re-deploying
 bbr deploy env vars list <env-uuid>        # list env variables
 bbr deploy env vars set <env-uuid> KEY value   # set variable
 bbr deploy env vars set <env-uuid> KEY value --secured  # encrypted
-bbr deploy env vars delete <env-uuid> KEY  # delete variable
+bbr deploy env vars delete <env-uuid> KEY  # delete variable (confirms; --yes to skip)
 ```
 
 ---
@@ -1244,15 +1305,28 @@ Platform paths:
 
 ### Required scopes
 
+Atlassian API-token scopes use the `read|write|admin|delete:<area>:bitbucket`
+form. A `write:` scope does not imply its `read:` counterpart, so request both
+when you need both. Authoritative reference:
+[API token permissions](https://support.atlassian.com/bitbucket-cloud/docs/api-token-permissions/).
+
 | Scope | Required for |
-|-------|-------------|
-| `account:read` | Read user info (`bbr auth test`, `bbr pr dashboard`) |
-| `repository:read` | Read repos, branches, commits |
-| `repository:write` | Create repos, create/update commit statuses |
-| `pullrequest:read` | Read PRs, comments, tasks |
-| `pullrequest:write` | Create/merge/decline PRs, post comments |
-| `pipeline:read` | Read pipelines and test reports |
-| `pipeline:write` | Rerun/stop pipelines (`bbr batch rerun-failed`, `bbr ci rerun/stop`) |
+|-------|--------------|
+| `read:user:bitbucket` | `auth test`, `auth status`, `pr dashboard` |
+| `read:repository:bitbucket` | repo info, branches, commits, `src`, code search |
+| `write:repository:bitbucket` | commit statuses |
+| `read:pullrequest:bitbucket` | reading PRs, comments, tasks, diffs, conflicts |
+| `write:pullrequest:bitbucket` | create/approve/decline/merge PRs, comments, tasks |
+| `read:pipeline:bitbucket` | pipelines, steps, logs, test reports |
+| `write:pipeline:bitbucket` | trigger/rerun/stop pipelines, schedule changes |
+| `read:issue:bitbucket` / `write:issue:bitbucket` | `bbr issue` (optional) |
+| `read:webhook:bitbucket` / `write:webhook:bitbucket` | `bbr webhook` (optional) |
+| `read:ssh-key:bitbucket` / `write:ssh-key:bitbucket` / `delete:ssh-key:bitbucket` | `bbr deploy-keys` (optional) |
+| `read:workspace:bitbucket` | `bbr workspace list` (optional) |
+| `delete:repository:bitbucket` | `bbr repo delete` (optional, destructive) |
+
+A `401`/`403` from one command usually means the token is missing that command's
+scope; `bbr doctor` and `bbr auth test` report what the API returns.
 
 ---
 
@@ -1260,15 +1334,16 @@ Platform paths:
 
 Every destructive command (`pr merge`, `pr decline`, `pr comment delete`,
 `repo delete`, `webhook delete`, `deploy-keys delete`, `ci schedules delete`,
-`ci rerun`, `ci stop`, `deploy rollback`, `batch *`, `stack land|abort`) runs
-through one confirmation path with consistent rules:
+`ci vars delete` / `variable delete`, `deploy env vars delete`, `ci rerun`,
+`ci stop`, `deploy rollback`, `batch *`, `stack land|abort`) runs through one
+confirmation path with consistent rules:
 
 | Situation | Behaviour |
 |-----------|-----------|
 | `--yes` passed | Proceeds without prompting. |
 | Interactive TTY, no `--yes` | Prompts on **stderr**; `y`/`yes` proceeds, anything else declines. |
 | **No TTY**, no `--yes` | **Exits `64`** (usage error) with `Pass --yes to proceed non-interactively.` |
-| User declines | Prints `Aborted — nothing changed.` and exits non-zero. |
+| User declines | Prints `Aborted — nothing changed.` and exits `1` (JSON error kind `aborted`). |
 
 `--json` selects an **output format only** — it never implies consent. A script
 that asks for JSON still must pass `--yes` to perform a destructive action.
@@ -1345,7 +1420,7 @@ bbr pr view --json | jq -r '.url'
 bbr pr create --title "Fix" --body-file body.md --json | jq -r '.url'
 
 # Wait for CI, fail the script if pipeline fails
-bbr ci watch --branch "$BRANCH" --interval-secs 10
+bbr ci watch --branch "$BRANCH" --interval 10
 
 # List PRs with details
 bbr pr list --state open --json | jq -c '.pull_requests[] | {id, title}'
@@ -1402,7 +1477,7 @@ Exit codes are stable — scripts can branch on `$?`.
 | `BB_WORKSPACE` | Default workspace override | — |
 | `BB_SLUG` | Default repo slug override | — |
 | `BBR_QUIET` | Suppress spinners and non-essential output | — |
-| `BBR_TIMEOUT` | HTTP request timeout in seconds | 30 |
+| `BBR_TIMEOUT` | HTTP request timeout in seconds (1–3600) | 30 |
 | `NO_COLOR` | Disable color output (any value) | — |
 | `CLICOLOR_FORCE` | Force color on (unless `0`) | — |
 | `CLICOLOR` | Set to `0` to disable color | — |

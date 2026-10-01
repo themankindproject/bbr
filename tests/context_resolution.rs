@@ -324,3 +324,84 @@ async fn invalid_context_prevents_authenticated_api_requests() {
         "no credentials or mutations sent to a guessed target"
     );
 }
+
+#[tokio::test]
+async fn url_syntax_in_any_identity_source_is_rejected_before_requests() {
+    use wiremock::MockServer;
+    let server = MockServer::start().await;
+    let fixture = Fixture::new(false);
+    type Env<'a> = Vec<(&'a str, &'a str)>;
+    let cases: Vec<(Env, Vec<&str>)> = vec![
+        (
+            vec![("BB_WORKSPACE", "mine/../victim"), ("BB_SLUG", "repo")],
+            vec![],
+        ),
+        (
+            vec![],
+            vec!["--workspace", "team", "--slug", "repo?role=admin"],
+        ),
+        (vec![], vec!["--workspace", "team", "--slug", "repo#frag"]),
+        (vec![], vec!["--workspace", "a b", "--slug", "repo"]),
+        (vec![], vec!["--workspace", "team", "--slug", "%2e%2e"]),
+    ];
+    for (env, args) in cases {
+        let mut cmd = fixture.bbr();
+        cmd.env("BITBUCKET_API_BASE", server.uri());
+        for (k, v) in &env {
+            cmd.env(k, v);
+        }
+        let output = cmd
+            .args(["pr", "list", "--json"])
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(64), "{env:?} {args:?}");
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["error"]["kind"], "usage");
+    }
+    // A hand-edited context is validated too.
+    fixture.config(
+        "active_context = \"work\"\n[contexts.work]\nworkspace = \"..\"\nslug = \"repo\"\n",
+    );
+    let output = fixture
+        .bbr()
+        .env("BITBUCKET_API_BASE", server.uri())
+        .args(["repo", "info", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(64));
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[test]
+fn context_create_and_config_set_refuse_unsafe_identities() {
+    let fixture = Fixture::new(false);
+    for args in [
+        vec!["context", "create", "x", "--set-workspace", "ws/../other"],
+        vec![
+            "context",
+            "create",
+            "x",
+            "--set-workspace",
+            "ws",
+            "--set-slug",
+            "a?b",
+        ],
+        vec!["config", "set", "workspace", "evil/.."],
+    ] {
+        let output = fixture.bbr().args(&args).output().unwrap();
+        assert_eq!(output.status.code(), Some(64), "{args:?}");
+    }
+    assert!(!fixture.home.path().join("bbr/config.toml").exists());
+    // Braced workspace UUIDs remain valid identities.
+    fixture.assert_target(
+        &[
+            "--workspace",
+            "{0e3a9a5c-1f2b-4c3d-9e8f-123456789abc}",
+            "--slug",
+            "repo",
+        ],
+        "{0e3a9a5c-1f2b-4c3d-9e8f-123456789abc}",
+        "repo",
+    );
+}

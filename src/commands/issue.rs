@@ -255,7 +255,8 @@ pub async fn view(g: &GlobalArgs, id: u64, show_comments: bool) -> Result<()> {
             let body = c.content.as_ref().map(|ct| ct.raw.as_str()).unwrap_or("");
             extra.push_str(&format!("\n  @{author} on {date}\n  {body}\n"));
         }
-        print!("{extra}");
+        // Comment bodies are remote text: never print them unsanitized.
+        crate::output::print_block(&extra)?;
     }
     Ok(())
 }

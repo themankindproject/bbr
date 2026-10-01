@@ -158,6 +158,23 @@ pub fn apply_land_result(
     }
 }
 
+/// Record that `branch`'s pull request now targets `new_parent` (pure, testable).
+///
+/// Used after `stack land` retargets a child PR away from a merged parent so
+/// the saved stack keeps matching Bitbucket.
+pub fn set_parent_branch(
+    config: &mut StackConfig,
+    stack_name: &str,
+    branch: &str,
+    new_parent: &str,
+) {
+    if let Some(s) = config.find_stack_mut(stack_name) {
+        for p in s.prs.iter_mut().filter(|p| p.branch == branch) {
+            p.parent_branch = new_parent.to_string();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,5 +346,16 @@ base_branch = "main"
         assert_eq!(s1.prs.len(), 1);
         assert_eq!(s1.prs[0].pr_id, Some(102));
         assert_eq!(c.active.as_deref(), Some("s1"));
+    }
+
+    #[test]
+    fn set_parent_branch_only_touches_named_stack_entry() {
+        let mut c = cfg_with_prs();
+        set_parent_branch(&mut c, "s1", "b2", "main");
+        assert_eq!(c.find_stack("s1").unwrap().prs[1].parent_branch, "main");
+        assert_eq!(c.find_stack("s1").unwrap().prs[0].parent_branch, "main");
+        assert_eq!(c.find_stack("s2").unwrap().prs[0].parent_branch, "main");
+        set_parent_branch(&mut c, "missing", "b2", "x");
+        assert_eq!(c.find_stack("s1").unwrap().prs[1].parent_branch, "main");
     }
 }

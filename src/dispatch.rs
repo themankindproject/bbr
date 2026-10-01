@@ -14,11 +14,12 @@ use crate::cli::{
 use crate::commands;
 use crate::error::{BitbucketError, Result};
 
+/// How long plain `bbr` waits after its output for the background update
+/// check before exiting anyway.
+const UPDATE_CHECK_GRACE: std::time::Duration = std::time::Duration::from_millis(750);
+
 pub(crate) async fn dispatch(cli: Cli) -> Result<()> {
     let g = &cli.global;
-
-    // Warm the syntax-highlighting engine in the background while network
-    // and git work proceed; a no-op for commands that never render diffs.
 
     // Fail fast on missing credentials BEFORE git detection so the error
     // says "auth first", not "not a git repo". Commands that legitimately
@@ -31,10 +32,12 @@ pub(crate) async fn dispatch(cli: Cli) -> Result<()> {
         None => {
             // Run the update check concurrently with the overview fetch so a
             // cold cache + slow GitHub doesn't add latency to plain `bbr`.
-            // Awaited after the overview so the notice prints after the output.
+            // Awaited after the overview so the notice prints after the
+            // output, but only briefly: an unreachable GitHub must never hold
+            // the prompt hostage (the check's own timeout is 10s).
             let update_check = tokio::spawn(commands::update::notify_if_outdated());
             let result = commands::status::run_overview(g).await;
-            let _ = update_check.await;
+            let _ = tokio::time::timeout(UPDATE_CHECK_GRACE, update_check).await;
             result
         }
         Some(Command::Status {
@@ -394,16 +397,20 @@ async fn dispatch_ci(action: CiAction) -> Result<()> {
             notify,
             line_numbers,
             from_offset,
+            wait_timeout,
             g,
         } => {
             commands::ci::watch(
                 &g,
                 branch.as_deref(),
-                interval,
-                logs,
-                notify,
-                line_numbers,
-                from_offset,
+                commands::ci::WatchOptions {
+                    interval,
+                    include_logs: logs,
+                    notify,
+                    line_numbers,
+                    from_offset,
+                    timeout_secs: wait_timeout,
+                },
             )
             .await
         }
@@ -489,7 +496,7 @@ async fn dispatch_ci(action: CiAction) -> Result<()> {
                 secured,
                 g,
             } => commands::ci_vars::set(&g, &key, value.as_deref(), stdin, secured).await,
-            CiVarsAction::Delete { key, g } => commands::ci_vars::delete(&g, &key).await,
+            CiVarsAction::Delete { key, yes, g } => commands::ci_vars::delete(&g, &key, yes).await,
         },
         CiAction::Schedules { action } => match action {
             CiSchedulesAction::List { g } => commands::ci_schedules::list(&g).await,
@@ -776,9 +783,12 @@ async fn dispatch_deploy(action: DeployAction) -> Result<()> {
                     };
                     commands::deploy::set_env_var(&g, &env_uuid, &key, &value, secured).await
                 }
-                DeployEnvVarsAction::Delete { env_uuid, key, g } => {
-                    commands::deploy::delete_env_var(&g, &env_uuid, &key).await
-                }
+                DeployEnvVarsAction::Delete {
+                    env_uuid,
+                    key,
+                    yes,
+                    g,
+                } => commands::deploy::delete_env_var(&g, &env_uuid, &key, yes).await,
             },
         },
     }
@@ -856,7 +866,7 @@ async fn dispatch_variable(action: VariableAction) -> Result<()> {
             secured,
             g,
         } => commands::ci_vars::set(&g, &key, value.as_deref(), stdin, secured).await,
-        VariableAction::Delete { key, g } => commands::ci_vars::delete(&g, &key).await,
+        VariableAction::Delete { key, yes, g } => commands::ci_vars::delete(&g, &key, yes).await,
     }
 }
 

@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 use tempfile::{tempdir, TempDir};
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 struct Fixture {
@@ -108,7 +108,20 @@ impl Fixture {
     }
 }
 fn pr(id: u64, state: &str) -> Value {
-    json!({"id":id,"state":state,"source":{"branch":{"name":"feature"}},"destination":{"branch":{"name":"main"}}})
+    pr_to(id, state, "main")
+}
+/// A PR for stack entry `feature-{id - 101}` in `ws/repo`, targeting `destination`.
+fn pr_to(id: u64, state: &str, destination: &str) -> Value {
+    json!({
+        "id": id,
+        "state": state,
+        "title": format!("PR {id}"),
+        "source": {
+            "branch": {"name": format!("feature-{}", id - 101)},
+            "repository": {"full_name": "ws/repo", "type": "repository"}
+        },
+        "destination": {"branch": {"name": destination}}
+    })
 }
 async fn get_pr(server: &MockServer, id: u64, state: &str) {
     Mock::given(method("GET"))
@@ -423,4 +436,283 @@ async fn concurrent_state_change_is_not_overwritten_after_merge() {
         .unwrap()
         .iter()
         .all(|r| !r.url.path().contains("102")));
+}
+
+// ---------------------------------------------------------------------------
+// Stacked landing: children targeting a parent branch must be retargeted
+// before that branch is deleted (Bitbucket does not move them).
+// ---------------------------------------------------------------------------
+
+impl Fixture {
+    /// `feature-0 -> main`, `feature-1 -> feature-0`, ... as `stack add` creates.
+    fn stacked(ids: &[u64]) -> Self {
+        let f = Self::new(&ids.iter().map(|id| Some(*id)).collect::<Vec<_>>(), false);
+        let mut cfg = f.config();
+        for (i, entry) in cfg.stacks[0].prs.iter_mut().enumerate().skip(1) {
+            entry.parent_branch = format!("feature-{}", i - 1);
+        }
+        fs::write(f.path(), toml::to_string_pretty(&cfg).unwrap()).unwrap();
+        f
+    }
+}
+
+/// In-memory Bitbucket PR store: id -> (state, destination).
+type Store = Arc<Mutex<std::collections::HashMap<u64, (String, String)>>>;
+
+fn id_from(req: &Request) -> u64 {
+    req.url
+        .path()
+        .trim_end_matches("/merge")
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+/// Mount GET / PUT (retarget) / POST merge / DELETE branch handlers backed by `store`.
+/// `put_status` lets a test make the retarget fail.
+async fn mount_store(server: &MockServer, store: &Store, put_status: u16) {
+    let s = store.clone();
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/repositories/ws/repo/pullrequests/\d+$"))
+        .respond_with(move |req: &Request| {
+            let id = id_from(req);
+            let (state, dest) = s.lock().unwrap()[&id].clone();
+            ResponseTemplate::new(200).set_body_json(pr_to(id, &state, &dest))
+        })
+        .mount(server)
+        .await;
+    let s = store.clone();
+    Mock::given(method("PUT"))
+        .and(path_regex(r"^/repositories/ws/repo/pullrequests/\d+$"))
+        .respond_with(move |req: &Request| {
+            if put_status != 200 {
+                return ResponseTemplate::new(put_status)
+                    .set_body_json(json!({"error": {"message": "retarget denied"}}));
+            }
+            let id = id_from(req);
+            let body: Value = serde_json::from_slice(&req.body).unwrap();
+            assert!(body["title"].is_string(), "PUT must carry the title");
+            let dest = body["destination"]["branch"]["name"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let mut map = s.lock().unwrap();
+            let entry = map.get_mut(&id).unwrap();
+            entry.1 = dest;
+            ResponseTemplate::new(200).set_body_json(pr_to(id, &entry.0, &entry.1))
+        })
+        .mount(server)
+        .await;
+    let s = store.clone();
+    Mock::given(method("POST"))
+        .and(path_regex(
+            r"^/repositories/ws/repo/pullrequests/\d+/merge$",
+        ))
+        .respond_with(move |req: &Request| {
+            let id = id_from(req);
+            let mut map = s.lock().unwrap();
+            let entry = map.get_mut(&id).unwrap();
+            entry.0 = "MERGED".into();
+            ResponseTemplate::new(200).set_body_json(pr_to(id, &entry.0, &entry.1))
+        })
+        .mount(server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path_regex(r"^/repositories/ws/repo/refs/branches/.+$"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(server)
+        .await;
+}
+
+fn store(entries: &[(u64, &str, &str)]) -> Store {
+    Arc::new(Mutex::new(
+        entries
+            .iter()
+            .map(|(id, state, dest)| (*id, (state.to_string(), dest.to_string())))
+            .collect(),
+    ))
+}
+
+/// `METHOD path [close_source_branch|destination]` for every received request.
+async fn request_log(server: &MockServer) -> Vec<String> {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| {
+            let body: Value = serde_json::from_slice(&r.body).unwrap_or(Value::Null);
+            let detail = match r.method.as_str() {
+                "POST" => format!(" close={}", body["close_source_branch"]),
+                "PUT" => format!(" dest={}", body["destination"]["branch"]["name"]),
+                _ => String::new(),
+            };
+            format!("{} {}{detail}", r.method, r.url.path())
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn stacked_children_are_retargeted_before_parent_branch_is_deleted() {
+    let server = MockServer::start().await;
+    let f = Fixture::stacked(&[101, 102, 103]);
+    let prs = store(&[
+        (101, "OPEN", "main"),
+        (102, "OPEN", "feature-0"),
+        (103, "OPEN", "feature-1"),
+    ]);
+    mount_store(&server, &prs, 200).await;
+
+    let out = f.land(&server);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let receipt: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(receipt["merged"], json!([101, 102, 103]));
+
+    let log = request_log(&server).await;
+    let pos = |needle: &str| {
+        log.iter()
+            .position(|l| l == needle)
+            .unwrap_or_else(|| panic!("missing {needle:?} in {log:#?}"))
+    };
+    // Parents keep their branch through the merge; the last PR closes its own.
+    let merge0 = pos("POST /repositories/ws/repo/pullrequests/101/merge close=false");
+    let put1 = pos("PUT /repositories/ws/repo/pullrequests/102 dest=\"main\"");
+    let del0 = pos("DELETE /repositories/ws/repo/refs/branches/feature-0");
+    let merge1 = pos("POST /repositories/ws/repo/pullrequests/102/merge close=false");
+    let put2 = pos("PUT /repositories/ws/repo/pullrequests/103 dest=\"main\"");
+    let del1 = pos("DELETE /repositories/ws/repo/refs/branches/feature-1");
+    let merge2 = pos("POST /repositories/ws/repo/pullrequests/103/merge close=true");
+    assert!(merge0 < put1 && put1 < del0 && del0 < merge1, "{log:#?}");
+    assert!(merge1 < put2 && put2 < del1 && del1 < merge2, "{log:#?}");
+    assert!(!log.iter().any(|l| l.contains("refs/branches/feature-2")));
+    // Every child landed in main, not in a deleted parent branch.
+    assert!(prs
+        .lock()
+        .unwrap()
+        .values()
+        .all(|(s, d)| s == "MERGED" && d == "main"));
+    assert!(f.config().find_stack("work").is_none());
+}
+
+#[tokio::test]
+async fn retarget_failure_keeps_parent_branch_and_retry_resumes() {
+    let server = MockServer::start().await;
+    let f = Fixture::stacked(&[101, 102]);
+    let prs = store(&[(101, "OPEN", "main"), (102, "OPEN", "feature-0")]);
+    mount_store(&server, &prs, 403).await;
+
+    let out = f.land(&server);
+    assert_eq!(out.status.code(), Some(2), "API exit code is preserved");
+    let receipt: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(receipt["merged"], json!([101]));
+    assert_eq!(receipt["failed"][0]["pr_id"], 101);
+    let reason = receipt["failed"][0]["reason"].as_str().unwrap();
+    assert!(reason.contains("retargeting dependent PR #102"), "{reason}");
+    let log = request_log(&server).await;
+    assert!(
+        !log.iter().any(|l| l.starts_with("DELETE")),
+        "parent branch must survive a failed retarget: {log:#?}"
+    );
+    assert!(!log.iter().any(|l| l.contains("102/merge")));
+    assert_eq!(f.config().find_stack("work").unwrap().prs.len(), 2);
+    f.git(&["show-ref", "--verify", "refs/heads/feature-0"]);
+
+    // Retry: #101 is reconciled as MERGED (no second merge), #102 is moved and landed.
+    server.reset().await;
+    mount_store(&server, &prs, 200).await;
+    let out = f.land(&server);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let receipt: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(receipt["merged"], json!([101, 102]));
+    let log = request_log(&server).await;
+    assert!(!log.iter().any(|l| l.contains("101/merge")), "{log:#?}");
+    assert!(log
+        .iter()
+        .any(|l| l == "PUT /repositories/ws/repo/pullrequests/102 dest=\"main\""));
+    assert!(log
+        .iter()
+        .any(|l| l == "DELETE /repositories/ws/repo/refs/branches/feature-0"));
+    assert_eq!(prs.lock().unwrap()[&102], ("MERGED".into(), "main".into()));
+    assert!(f.config().find_stack("work").is_none());
+}
+
+#[tokio::test]
+async fn checkpoint_records_retargeted_parent_for_resume() {
+    let server = MockServer::start().await;
+    let f = Fixture::stacked(&[101, 102]);
+    let prs = store(&[(101, "OPEN", "main"), (102, "OPEN", "feature-0")]);
+    mount_store(&server, &prs, 200).await;
+    // Make the child's merge fail after the parent's checkpoint was written.
+    Mock::given(method("POST"))
+        .and(path("/repositories/ws/repo/pullrequests/102/merge"))
+        .respond_with(
+            ResponseTemplate::new(409).set_body_json(json!({"error": {"message": "conflict"}})),
+        )
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    let out = f.land(&server);
+    assert_eq!(out.status.code(), Some(1));
+    let saved = f.config();
+    let remaining = &saved.find_stack("work").unwrap().prs;
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].branch, "feature-1");
+    assert_eq!(
+        remaining[0].parent_branch, "main",
+        "stack file follows the retarget"
+    );
+}
+
+#[tokio::test]
+async fn land_refuses_pr_whose_source_branch_does_not_match_the_stack() {
+    let server = MockServer::start().await;
+    let f = Fixture::new(&[Some(101)], false);
+    let mut unrelated = pr(101, "OPEN");
+    unrelated["source"]["branch"]["name"] = json!("someone-elses-branch");
+    Mock::given(method("GET"))
+        .and(path("/repositories/ws/repo/pullrequests/101"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(unrelated))
+        .mount(&server)
+        .await;
+    let original = fs::read(f.path()).unwrap();
+    let out = f.land(&server);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("source identity"));
+    assert!(server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .all(|r| r.method.as_str() == "GET"));
+    assert_eq!(fs::read(f.path()).unwrap(), original);
+}
+
+#[tokio::test]
+async fn land_refuses_pr_targeting_an_unexpected_branch() {
+    let server = MockServer::start().await;
+    let f = Fixture::new(&[Some(101)], false);
+    Mock::given(method("GET"))
+        .and(path("/repositories/ws/repo/pullrequests/101"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(pr_to(101, "OPEN", "develop")))
+        .mount(&server)
+        .await;
+    let out = f.land(&server);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("expects \\\"main\\\""));
+    assert!(server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .all(|r| r.method.as_str() == "GET"));
 }

@@ -7,7 +7,7 @@ use crate::commands::{
     aborted, client, confirm_destructive, ensure_confirmable, make_formatter, make_spinner,
     resolve_repo, SpinnerGuard,
 };
-use crate::error::Result;
+use crate::error::{BitbucketError, Result};
 use crate::output::table::Table;
 use crate::output::theme::Theme;
 use serde::Serialize;
@@ -69,6 +69,77 @@ pub struct BatchActionOutcome {
     pub error: Option<String>,
 }
 
+/// Print the batch receipt, then fail when any action failed.
+///
+/// The receipt is always printed so scripts can see what did and did not
+/// happen, but a run with failures must not exit 0: `bbr batch ... && next`
+/// would otherwise continue after, say, every merge was rejected.
+fn finish_batch(g: &GlobalArgs, result: BatchResult, noun: &str) -> Result<()> {
+    let human = render_results(&result);
+    make_formatter(g).print(&result, &human)?;
+    if result.failed.is_empty() {
+        return Ok(());
+    }
+    Err(BitbucketError::Other(format!(
+        "{} of {} {noun} failed; see the failed entries in the result above",
+        result.failed.len(),
+        result.failed.len() + result.succeeded.len()
+    )))
+}
+
+/// Count distinct approvals: reviewers plus any approving participant,
+/// deduplicated per person. Bitbucket records web-UI approvals from
+/// non-reviewers as role=PARTICIPANT, so counting reviewers only would miss
+/// them and skip approved PRs.
+fn approval_count(pr: &crate::api::pr::PullRequest) -> usize {
+    let reviewers = pr.reviewers.iter().filter(|r| r.is_approved()).count();
+    reviewers
+        + pr.participants
+            .iter()
+            .filter(|p| p.is_approved() && !pr.reviewers.iter().any(|r| r.same_person(p)))
+            .count()
+}
+
+/// Re-check a planned merge against the PR's current state.
+///
+/// The plan was built from an earlier listing; approvals can be withdrawn,
+/// changes requested, the PR marked draft or retargeted, or closed while the
+/// user read the prompt. Returns why the PR no longer qualifies.
+fn merge_precondition_failure(
+    act: &MergeAction,
+    current: &crate::api::pr::PullRequest,
+    min_approvals: u32,
+) -> Option<String> {
+    if !current.state.eq_ignore_ascii_case("OPEN") {
+        return Some(format!("PR is now {}", current.state));
+    }
+    if current.draft {
+        return Some("PR was marked as draft".into());
+    }
+    if current
+        .reviewers
+        .iter()
+        .chain(current.participants.iter())
+        .any(|p| p.is_changes_requested())
+    {
+        return Some("changes were requested".into());
+    }
+    let approvals = approval_count(current);
+    if approvals < min_approvals as usize {
+        return Some(format!(
+            "approvals dropped to {approvals} (need {min_approvals})"
+        ));
+    }
+    if current.source_branch() != act.source || current.destination_branch() != act.destination {
+        return Some(format!(
+            "branches changed to {} -> {}",
+            current.source_branch(),
+            current.destination_branch()
+        ));
+    }
+    None
+}
+
 pub async fn merge_approved(
     g: &GlobalArgs,
     repo_arg: Option<&str>,
@@ -89,6 +160,7 @@ pub async fn merge_approved(
     let client = client(g)?;
     let repo = resolve_repo(g)?;
     let slug = repo_arg.unwrap_or(&repo.slug);
+    crate::git::validate_repo_segment("repository slug", slug)?;
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching open pull requests...");
@@ -117,20 +189,7 @@ pub async fn merge_approved(
         if pr.draft {
             continue;
         }
-        // Count distinct approvals: reviewers plus any approving participant,
-        // deduplicated per person. Bitbucket records web-UI approvals from
-        // non-reviewers as role=PARTICIPANT, so counting reviewers only
-        // would miss them and skip approved PRs.
-        let approval_count = {
-            let mut count = pr.reviewers.iter().filter(|r| r.is_approved()).count();
-            count += pr
-                .participants
-                .iter()
-                .filter(|p| p.is_approved() && !pr.reviewers.iter().any(|r| r.same_person(p)))
-                .count();
-            count
-        };
-
+        let approval_count = approval_count(&pr);
         let is_approved = approval_count >= min_approvals as usize;
 
         if is_approved {
@@ -218,6 +277,29 @@ pub async fn merge_approved(
         if i > 0 {
             batch_pace(&client).await;
         }
+        run_spinner.set_message(format!("Re-checking PR #{}...", act.pr_id));
+        let current = match client.get_pr(&repo.workspace, slug, act.pr_id).await {
+            Ok(pr) => pr,
+            Err(e) => {
+                failed.push(BatchActionOutcome {
+                    id: act.pr_id.to_string(),
+                    description: format!(
+                        "PR #{} could not be re-checked before merging",
+                        act.pr_id
+                    ),
+                    error: Some(e.to_string()),
+                });
+                continue;
+            }
+        };
+        if let Some(reason) = merge_precondition_failure(&act, &current, min_approvals) {
+            failed.push(BatchActionOutcome {
+                id: act.pr_id.to_string(),
+                description: format!("PR #{} skipped: no longer qualifies", act.pr_id),
+                error: Some(reason),
+            });
+            continue;
+        }
         run_spinner.set_message(format!("Merging PR #{}...", act.pr_id));
         let merge_req = MergePrRequest {
             close_source_branch: if close_source_branch {
@@ -246,9 +328,7 @@ pub async fn merge_approved(
     }
     run_spinner.finish();
 
-    let result = BatchResult { succeeded, failed };
-    let human = render_results(&result);
-    make_formatter(g).print(&result, &human)
+    finish_batch(g, BatchResult { succeeded, failed }, "merges")
 }
 
 pub async fn rerun_failed(
@@ -269,6 +349,7 @@ pub async fn rerun_failed(
     let client = client(g)?;
     let repo = resolve_repo(g)?;
     let slug = repo_arg.unwrap_or(&repo.slug);
+    crate::git::validate_repo_segment("repository slug", slug)?;
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching recent pipelines...");
@@ -392,9 +473,7 @@ pub async fn rerun_failed(
     }
     run_spinner.finish();
 
-    let result = BatchResult { succeeded, failed };
-    let human = render_results(&result);
-    make_formatter(g).print(&result, &human)
+    finish_batch(g, BatchResult { succeeded, failed }, "pipeline reruns")
 }
 
 pub async fn cleanup_merged_branches(
@@ -415,6 +494,7 @@ pub async fn cleanup_merged_branches(
     let client = client(g)?;
     let repo = resolve_repo(g)?;
     let slug = repo_arg.unwrap_or(&repo.slug);
+    crate::git::validate_repo_segment("repository slug", slug)?;
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Listing remote branches...");
@@ -550,9 +630,7 @@ pub async fn cleanup_merged_branches(
     }
     run_spinner.finish();
 
-    let result = BatchResult { succeeded, failed };
-    let human = render_results(&result);
-    make_formatter(g).print(&result, &human)
+    finish_batch(g, BatchResult { succeeded, failed }, "branch deletions")
 }
 
 fn render_results(res: &BatchResult) -> String {

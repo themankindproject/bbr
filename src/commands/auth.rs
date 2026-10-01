@@ -13,6 +13,44 @@ use crate::error::{BitbucketError, Result};
 
 const API_TOKEN_URL: &str = "https://id.atlassian.com/manage-profile/security/api-tokens";
 
+/// Atlassian API-token scopes shown by `auth setup`, with what each enables.
+///
+/// The single source for the interactive prompt; tests check it against the
+/// README scope table so the two cannot drift apart.
+pub const TOKEN_SCOPES: &[(&str, &str)] = &[
+    ("read:user:bitbucket", "auth test/status, pr dashboard"),
+    (
+        "read:repository:bitbucket",
+        "repos, branches, commits, src, search",
+    ),
+    ("write:repository:bitbucket", "commit statuses"),
+    (
+        "read:pullrequest:bitbucket",
+        "list/view PRs, comments, diffs",
+    ),
+    ("write:pullrequest:bitbucket", "create/merge/approve PRs"),
+    ("read:pipeline:bitbucket", "pipelines, logs, test reports"),
+    ("write:pipeline:bitbucket", "trigger/rerun/stop pipelines"),
+    ("read:issue:bitbucket", "optional: bbr issue"),
+    ("write:issue:bitbucket", "optional: create/edit issues"),
+    ("read:webhook:bitbucket", "optional: bbr webhook list/view"),
+    (
+        "write:webhook:bitbucket",
+        "optional: create/delete webhooks",
+    ),
+    (
+        "read:ssh-key:bitbucket",
+        "optional: bbr deploy-keys list/view",
+    ),
+    ("write:ssh-key:bitbucket", "optional: add deploy keys"),
+    ("delete:ssh-key:bitbucket", "optional: delete deploy keys"),
+    ("read:workspace:bitbucket", "optional: bbr workspace list"),
+    (
+        "delete:repository:bitbucket",
+        "optional, destructive: bbr repo delete",
+    ),
+];
+
 #[derive(Debug, Serialize)]
 pub struct AuthStatusOut {
     pub authenticated: bool,
@@ -65,22 +103,16 @@ pub fn setup(
             }
             println!("bbr auth setup");
             println!("  Need an API token? {API_TOKEN_URL}");
-            println!("  Required scopes (select ALL for full CLI access):");
+            println!("  Token scopes (grant the ones for the commands you use):");
             let check = if crate::output::theme::Theme::current().unicode_enabled() {
                 "✓"
             } else {
                 "*"
             };
-            println!("    {check} read:user:bitbucket");
-            println!("    {check} read:repository:bitbucket");
-            println!("    {check} write:repository:bitbucket  (for commit statuses)");
-            println!("    {check} read:pullrequest:bitbucket");
-            println!("    {check} write:pullrequest:bitbucket  (create/merge/approve PRs)");
-            println!("    {check} read:pipeline:bitbucket");
-            println!("    {check} write:pipeline:bitbucket    (rerun/stop pipelines)");
-            println!("    {check} read:issue:bitbucket        (optional — issue tracking)");
-            println!("    {check} write:issue:bitbucket       (optional — create issues)");
-            println!("    {check} webhook:bitbucket           (optional — webhook management)");
+            let width = TOKEN_SCOPES.iter().map(|(s, _)| s.len()).max().unwrap_or(0);
+            for (scope, enables) in TOKEN_SCOPES {
+                println!("    {check} {scope:<width$}  ({enables})");
+            }
             println!();
 
             let u = prompt("Bitbucket username (email): ")?;
@@ -156,22 +188,15 @@ fn read_setup_token(reader: impl Read) -> Result<String> {
 /// but the API call fails, the failure is reported truthfully and mapped to
 /// its stable exit code so scripts can branch on it.
 pub async fn status(g: &GlobalArgs) -> Result<()> {
-    let creds = auth::resolve();
-    let (username, credential_kind) = match creds {
-        Ok(c) => (c.username, Some("atlassian_api_token".to_string())),
-        Err(BitbucketError::NoCredentials) => (String::new(), None),
+    let creds = auth::resolve_with_source();
+    let (username, credential_kind, source) = match creds {
+        Ok((c, source)) => (
+            c.username,
+            Some("atlassian_api_token".to_string()),
+            source.as_str(),
+        ),
+        Err(BitbucketError::NoCredentials) => (String::new(), None, "none"),
         Err(e) => return Err(e),
-    };
-
-    let source = if std::env::var(auth::ENV_TOKEN).is_ok() {
-        "environment"
-    } else if config::credentials_path()
-        .map(|p| p.exists())
-        .unwrap_or(false)
-    {
-        "config-file"
-    } else {
-        "none"
     };
 
     let mut out = AuthStatusOut {

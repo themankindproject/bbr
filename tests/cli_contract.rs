@@ -59,6 +59,20 @@ fn missing_required_argument_is_a_usage_error() {
 }
 
 #[test]
+fn zero_or_out_of_range_timeout_is_a_usage_error() {
+    // A zero timeout would make every request fail immediately.
+    bbr()
+        .env("BBR_TIMEOUT", "0")
+        .args(["pr", "list"])
+        .assert()
+        .code(USAGE);
+    bbr()
+        .args(["pr", "list", "--timeout", "100000"])
+        .assert()
+        .code(USAGE);
+}
+
+#[test]
 fn help_and_version_succeed_without_a_runtime() {
     // These must not need credentials, a network, or an executor.
     bbr().arg("--help").assert().success();

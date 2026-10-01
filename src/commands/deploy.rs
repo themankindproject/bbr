@@ -263,7 +263,8 @@ pub async fn set_env_var(
     Ok(())
 }
 
-pub async fn delete_env_var(g: &GlobalArgs, env_uuid: &str, key: &str) -> Result<()> {
+pub async fn delete_env_var(g: &GlobalArgs, env_uuid: &str, key: &str, yes: bool) -> Result<()> {
+    ensure_confirmable(yes, &format!("Delete environment variable {key}"))?;
     let repo = resolve_repo(g)?;
     let api = client(g)?;
 
@@ -278,6 +279,16 @@ pub async fn delete_env_var(g: &GlobalArgs, env_uuid: &str, key: &str) -> Result
         .into_iter()
         .find(|v| v.key == key)
         .ok_or_else(|| BitbucketError::Other(format!("variable '{}' not found", key)))?;
+
+    if !confirm_destructive(
+        g,
+        yes,
+        &format!("Delete environment variable {key} from environment {env_uuid}"),
+    )
+    .await?
+    {
+        return aborted();
+    }
 
     let spinner2 = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner2.set_message(format!("Deleting {key}..."));

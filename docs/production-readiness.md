@@ -336,6 +336,77 @@ licenses/bans/sources passes with duplicate-version warnings. Rebuilt release-bi
 installer smoke: **7 passed, 0 failed** against localhost; synthetic Homebrew/Scoop/
 winget generation passed Ruby syntax and JSON/YAML/digest checks. Nothing published.
 
+## Multi-area review fixes (post-#54 review round)
+
+A parallel review of API/HTTP, stack/Git, config/CLI, CI/status, PR commands,
+rendering/update, and performance produced findings that were reproduced before
+fixing (scratch mock-server tests, then permanent regressions):
+
+- **Stacked landing orphaned children (critical).** `stack add` targets each PR
+  at its parent branch; `land` merged parents with `close_source_branch: true`
+  and never retargeted children, and Bitbucket does not move PRs off a deleted
+  destination. Reproduced: PR #2 (destination `feature-0`) merged after #1
+  deleted `feature-0`, exit 0. Now parents keep their branch, each open child is
+  retargeted (`PUT … destination`) to where the parent landed, the parent branch
+  is then deleted via the API, and the checkpoint records the new parent. A
+  failed retarget keeps the parent branch and stops; a rerun resumes. `land`
+  also verifies source branch/repository and the expected destination before any
+  merge. `rebase` validates names up front, rebases everything before pushing,
+  marks later pushes `skipped` after a push failure, and restores the start
+  branch. Tests: `stack_land.rs` (+5), `stack_abort.rs` (+3).
+- **Identity injection.** `BB_WORKSPACE=mine/../victim` reached
+  `/repositories/victim/…`. `git::validate_repo_segment` (ASCII alnum, `-_.`, or
+  a braced UUID) now runs in `resolve_repo` for every source and at
+  `config set workspace`, `context create`, `batch --repo`, `repo
+  create|delete|fork`, and `audit`. Usage exit 64. `context_resolution.rs` (+2).
+- **Terminal escape injection.** `write_paginated` and direct stdout paths did
+  not sanitize; a hostile hunk header or PR title reached the terminal (OSC 52).
+  `write_paginated` now streams through a line-buffered `SanitizingWriter`;
+  `pr view/diff` use it, issue comments and spinner lines are sanitized, CI log
+  lines go through `sanitize_log_line` (final carriage-return redraw kept), and
+  hunk headers are sanitized at parse time. The sanitizer now keeps SGR only when
+  every parameter byte is in 0x30–0x3F, drops intermediates, and ends an
+  unterminated OSC at the newline. `pr diff --raw` and `src cat` remain
+  byte-exact when piped. `terminal_safety.rs` (3) plus unit tests.
+- **Unconfirmed deletes and false-success exits.** `ci vars delete`,
+  `variable delete`, and `deploy env vars delete` deleted without consent; they
+  now use the shared confirmation path. `aborted()` returned `Ok` (exit 0) despite
+  the documented non-zero contract; it now returns `BitbucketError::Aborted`
+  (exit 1). `batch` commands exited 0 with every action failed; they now print the
+  receipt and exit 1. `destructive_confirmation.rs` (2), `batch.rs` (4).
+- **`ci watch` never terminated** for `EXPIRED` (and paused/manual) pipelines.
+  `Pipeline::is_terminal` accepts any `COMPLETED` state, `is_paused` reads the
+  `IN_PROGRESS` stage, `--wait-timeout` bounds the wait, and the receipt has an
+  `outcome`. Log lines now reach a piped stderr, failed step listings warn, and
+  drained finished steps are not re-polled. `ci_watch.rs` (6).
+- **Batch TOCTOU and dead draft guard.** Approvals could be withdrawn between plan
+  and merge; each PR is now re-fetched and re-validated. `draft` was absent from
+  the list/get field projections, so the "never merge drafts" guard never fired.
+- **Update check stalled plain `bbr` for 10s per run** with GitHub unreachable
+  (awaited task, failures never cached). Measured with a blackholed proxy:
+  10.04s on every run before; after, 1.09s first run then 0.35s. The attempt is
+  recorded before the request (failed-check TTL 1h) and the wait is capped at
+  750ms. Version comparison pads components and rejects unparseable tags.
+- **Smaller fixes:** `src --git-ref` with `/` resolved via branch/tag lookup
+  (`src_ref.rs`); `--timeout`/`BBR_TIMEOUT` must be 1–3600; UTF-8 octal paths
+  decoded in diff headers; `pr create --reviewer` resolves usernames; `auth
+  setup` scope list is one table checked against the README (`auth_scopes.rs`);
+  `auth status`/`doctor` report the source `resolve` actually used;
+  `Retry-After` HTTP-dates honored (still capped); running pipeline label uses
+  `IN_PROGRESS`.
+- **Performance:** plain `bbr` requested 8 calls in three serial waves (0.49s at
+  150ms mock latency); the recent PR/CI lists now run beside the branch-status
+  fetch on one shared client: 8 calls in two waves (0.37s).
+
+Review findings rejected after inspection: `pr merge --strategy`, `batch
+--strategy`, `stack land --strategy`, and `workspace list --role` were already
+constrained by clap value parsers (role is now URL-encoded as defense in depth).
+
+Verification for this round: full `cargo test --locked --all-features` passes
+(see the PR description for the count), Clippy with warnings denied, `cargo fmt
+--check`, and Rust 1.88 `cargo check --locked --all-targets`. All tests use
+local mock servers and disposable Git repositories.
+
 ## Review coverage and next actions
 
 Core architecture: `cli.rs` parses; `dispatch.rs` routes; `commands/` resolves
@@ -347,34 +418,34 @@ file size alone is not a reason to refactor them.
 
 Prioritized remaining items (source-inspected, not yet regression-verified):
 
-1. **Authentication follow-ups** — setup/status defects above are fixed.
-   `status`/`doctor` infer the credential source from token-env presence, which
-   can mislabel a fallback to file credentials when environment input is invalid.
-   Review this alongside source resolution and in-memory secret lifetimes.
+1. **Authentication follow-ups** — setup/status defects above are fixed, and
+   `status`/`doctor` now report the credential source `resolve` actually used.
+   In-memory secret lifetimes remain to review.
    Linux PTY behavior was verified this round; macOS/Windows still need native
    validation.
 2. **Repository identity follow-ups** — context-error fallback and remote-host
-   parsing are fixed above. Assess path-segment validation for explicit/configured
-   identity fields. Local SSH aliases remain trusted. Commands that infer API
+   parsing are fixed above, and explicit/configured identity segments are now
+   validated before URL interpolation. Local SSH aliases remain trusted. Commands that infer API
    identity from an upstream remote but push/fetch `origin` need consistency review.
 3. **Stack remote-operation safety (high priority)** — local persistence,
-   landing/abort checkpoints, rebase exits, and abort source validation are fixed.
-   Review destination retargeting/rebase order when parent branches are closed,
-   landing source validation, branch recreation races, and stack-add save failure.
+   landing/abort checkpoints, rebase exits, abort and landing source validation,
+   child retargeting on land, and push-after-full-rebase are fixed. Review branch
+   recreation races, `stack add` save failure after PR creation, and stack
+   rebasing after a squash-merged parent (`land` only warns about squash).
    Concurrent writers still need a locking strategy (optimistic checks are not locks).
 4. **Pagination follow-ups** — shared traversal, search, step consumers, and
    full branch lookup are fixed above. Review remaining low-level page-returning
    methods (commit statuses, diffstat) and their consumers, plus aggregate byte
    budgets for large results, API-base validation, and redirect boundaries.
-   Status/watch still swallow some failed fetches as empty data; audit that next.
+   `ci watch`/`tail` now warn on failed step listings; `status` step summaries
+   and `ci watch`'s final step list still treat a failed fetch as empty.
 5. **HTTP follow-ups** — cache consistency and JSON debug previews are fixed
    above. Audit URL/query exposure in retry/error messages, structured serde
    errors that may include offending string values, and cache metadata on 304.
    Transport timeout/redirect/cancellation behavior needs a separate review.
-6. **Installation and documentation truthfulness** — README warns the crates.io
-   name is unrelated but recommends bare `cargo binstall bbr`; verify registry
-   lookup behavior before recommending it. README scope names also disagree with
-   `auth setup`'s `read:*:bitbucket` names. Validate against authoritative docs.
+6. **Installation and documentation truthfulness** — scope names now come from
+   one table shared by `auth setup` and checked against the README. Verify the
+   binstall/registry guidance against the actual published artifacts.
    Review release-generated manifests, installer fallback/checksum behavior, and
    actual artifact support. Do not publish releases without explicit approval.
 7. **Test isolation and platform gates** — some existing smoke tests mutate the

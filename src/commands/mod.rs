@@ -63,6 +63,14 @@ static CACHED_HEAD: std::sync::Mutex<Option<Head>> = std::sync::Mutex::new(None)
 /// override, invalid context configuration is an error, not permission to guess
 /// a different repository from git. An omitted context slug may still use git.
 pub fn resolve_repo(g: &GlobalArgs) -> Result<RepoIdentity> {
+    let repo = resolve_repo_unchecked(g)?;
+    // Every source (flags, BB_WORKSPACE/BB_SLUG, contexts, git) is validated
+    // here, before the identity is formatted into any API URL path.
+    git::validate_repo_identity(&repo)?;
+    Ok(repo)
+}
+
+fn resolve_repo_unchecked(g: &GlobalArgs) -> Result<RepoIdentity> {
     let context = if g.workspace.is_some() && g.repo_slug.is_some() {
         None
     } else {
@@ -294,8 +302,28 @@ impl SpinnerGuard {
     }
 
     /// Print a line above the spinner without disturbing it.
+    ///
+    /// The text is sanitized: callers print remote data (step names, log
+    /// lines) here. Like any spinner output it is dropped while the spinner is
+    /// hidden; use [`SpinnerGuard::println_visible`] for output the user asked for.
     pub fn println(&self, msg: impl AsRef<str>) {
-        self.0.println(msg);
+        self.0
+            .println(crate::output::sanitize_human_output(msg.as_ref()));
+    }
+
+    /// Like [`SpinnerGuard::println`], but written straight to stderr when the
+    /// spinner is hidden (`--quiet`, `BBR_QUIET`, or a non-terminal stderr),
+    /// so requested output such as `ci watch --logs` still reaches pipes and
+    /// CI logs.
+    pub fn println_visible(&self, msg: impl AsRef<str>) {
+        let msg = crate::output::sanitize_human_output(msg.as_ref());
+        if self.0.is_hidden() {
+            use std::io::Write;
+            let mut err = std::io::stderr().lock();
+            let _ = writeln!(err, "{msg}");
+        } else {
+            self.0.println(msg);
+        }
     }
 
     /// Finish and clear immediately (also called on drop).
@@ -440,15 +468,14 @@ pub async fn confirm_destructive(_g: &GlobalArgs, yes: bool, action: &str) -> Re
     confirm(&format!("{action}? [y/N] ")).await
 }
 
-/// Print the standard "nothing happened" notice for a declined action.
+/// The standard result for a declined action.
 ///
 /// Every caller that got `Ok(false)` from [`confirm_destructive`] must return
-/// this, so a cancelled destructive command never exits 0 silently — a script
-/// checking `$?` would otherwise take the success branch for work that was
-/// never done.
+/// this, so a cancelled destructive command never exits 0 — a script checking
+/// `$?` would otherwise take the success branch for work that was never done.
+/// The error prints `Aborted — nothing changed.` and exits 1.
 pub fn aborted() -> Result<()> {
-    eprintln!("Aborted — nothing changed.");
-    Ok(())
+    Err(BitbucketError::Aborted)
 }
 
 #[cfg(test)]

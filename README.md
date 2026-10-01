@@ -3,8 +3,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/themankindproject/bbr/ci.yml?branch=main&label=CI)](https://github.com/themankindproject/bbr/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/github/v/release/themankindproject/bbr)](https://github.com/themankindproject/bbr/releases/latest)
 ![Rust Version](https://img.shields.io/badge/rust-1.88%2B-blue)
-[![License](https://img.shields.io/crates/l/bbr)](LICENSE)
-![Tests](https://img.shields.io/badge/tests-531%20passing-brightgreen)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 A fast, single-binary Bitbucket Cloud CLI. Agent-first (`--json` everywhere, stable schemas and exit codes, env auth) with pretty human output.
 
@@ -15,11 +14,8 @@ Full command reference: **[USAGE.md](USAGE.md)** · JSON schemas: **[docs/output
 ## Install
 
 ```bash
-# One-liner — Linux (x86_64/aarch64, musl or glibc), macOS (Intel/Apple Silicon)
+# Recommended: verified download from this repository's releases
 curl -fsSL https://github.com/themankindproject/bbr/raw/main/install.sh | bash
-
-# Binary install, no Rust toolchain needed
-cargo binstall bbr        # https://github.com/cargo-bins/cargo-binstall
 
 # From source
 cargo install --locked --git https://github.com/themankindproject/bbr
@@ -27,26 +23,37 @@ cargo install --locked --git https://github.com/themankindproject/bbr
 bbr completion --install  # shell completions (bash/zsh/fish/powershell)
 ```
 
-Pre-built archives with SHA-256 checksums: [Releases](https://github.com/themankindproject/bbr/releases/latest).
-Homebrew, Scoop, and winget manifests are attached to every release; see
-[docs/distribution.md](docs/distribution.md) for every channel and how to enable
-the optional package registries.
+**This project is not on crates.io.** The `bbr` name there belongs to an
+unrelated congestion-control crate, so `cargo install bbr`,
+`cargo binstall bbr`, and any plain registry lookup install the wrong program
+with no relation to this CLI. Always fetch from
+[this repository](https://github.com/themankindproject/bbr) — either the
+installer above, `cargo install --git`, or a pre-built archive from
+[Releases](https://github.com/themankindproject/bbr/releases/latest).
 
-> **Do not run `cargo install bbr`.** The name `bbr` on crates.io belongs to an
-> unrelated crate. Always use `--git` (as above) or `cargo binstall`.
+The install script verifies the download against the release's `checksums.txt`
+and **fails closed** — a missing or mismatched checksum aborts the install, with
+no silent "verification skipped" path. Set `BBR_SKIP_CHECKSUM=1` only if you must
+bypass it. Pin a version by passing a tag (`... | bash -s v0.2.5`), and set
+`GITHUB_TOKEN` to avoid GitHub API rate limits in CI. See
+[docs/distribution.md](docs/distribution.md) for the full channel list, published
+targets, and how to enable the optional package registries.
 
-`install.sh` verifies the download against the release's `checksums.txt` and
-**fails closed** — a missing or mismatched checksum aborts the install. Set
-`BBR_SKIP_CHECKSUM=1` only if you must bypass it. Pin a version by passing a tag:
-`... | bash -s v0.2.5`. Set `GITHUB_TOKEN` to avoid GitHub API rate limits in CI.
+If you installed through a package manager (Homebrew, Scoop, Nix, apt), upgrade
+through that same channel — `bbr update` detects a package-managed install and
+refuses to overwrite it.
 
-If you installed through a package manager (Homebrew, Scoop, Nix, apt), use that
-channel to upgrade — `bbr update` detects a package-managed install and refuses
-to overwrite it.
+The installer and `bbr update` verify `checksums.txt`; the latest published
+release provides Linux x86_64 (musl and glibc), macOS Intel and Apple Silicon,
+and Windows x86_64 (MSVC). Additional targets, including aarch64 Linux, are
+configured in the release matrix for future releases. Homebrew, Scoop, and winget
+manifests are generated per release; those registries are optional and are not
+published yet.
 
 ## Auth
 
-HTTP Basic with an [Atlassian API token](https://id.atlassian.com/manage-profile/security/api-tokens):
+HTTP Basic with an [Atlassian API token](https://id.atlassian.com/manage-profile/security/api-tokens)
+(as opposed to the older app passwords):
 
 ```bash
 export BITBUCKET_USERNAME="you@example.com"
@@ -59,7 +66,29 @@ bbr auth setup && bbr auth test
 bbr auth setup --username you@example.com --token-stdin < /secure/path/token.txt
 ```
 
-Required scopes: `account:read`, `repository:read`, `repository:write`, `pullrequest:read`, `pullrequest:write`, `pipeline:read`, `pipeline:write`. Env vars take precedence over the credentials file.
+### Token scopes
+
+Create the token with the scopes for the commands you use — see Atlassian's
+[API token permissions](https://support.atlassian.com/bitbucket-cloud/docs/api-token-permissions/)
+reference for the authoritative list.
+
+| Scope | Enables |
+|-------|---------|
+| `read:user:bitbucket` | `auth test`, `auth status`, `pr dashboard` |
+| `read:repository:bitbucket` | repo info, branches, commits, `src`, code search |
+| `write:repository:bitbucket` | commit statuses |
+| `read:pullrequest:bitbucket` | listing/viewing PRs, comments, tasks, diffs |
+| `write:pullrequest:bitbucket` | create, update, approve, decline, merge PRs |
+| `read:pipeline:bitbucket` | pipelines, steps, logs, test reports |
+| `write:pipeline:bitbucket` | trigger, rerun, stop pipelines |
+| `read:issue:bitbucket` / `write:issue:bitbucket` | `bbr issue` (optional) |
+| `read:webhook:bitbucket` / `write:webhook:bitbucket` | `bbr webhook` (optional) |
+| `read:ssh-key:bitbucket` / `write:ssh-key:bitbucket` / `delete:ssh-key:bitbucket` | `bbr deploy-keys` (optional) |
+| `read:workspace:bitbucket` | `bbr workspace list` (optional) |
+| `delete:repository:bitbucket` | `bbr repo delete` (optional, destructive) |
+
+`write:` scopes do not imply their `read:` counterparts, so request both where
+you need them. Environment variables take precedence over the credentials file.
 
 ## Quick Start
 
@@ -101,7 +130,7 @@ Stable public contract — scripts can branch on `$?`.
 | `BB_WORKSPACE` | Default workspace override | — |
 | `BB_SLUG` | Default repo slug override | — |
 | `BBR_QUIET` | Suppress spinners and non-essential output | — |
-| `BBR_TIMEOUT` | HTTP request timeout in seconds | 30 |
+| `BBR_TIMEOUT` | HTTP request timeout in seconds (1–3600) | 30 |
 | `BBR_NO_INTERACTIVE` | Never prompt, even on a TTY | — |
 | `NO_COLOR` | Disable color output | — |
 

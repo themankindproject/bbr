@@ -85,6 +85,10 @@ pub enum BitbucketError {
     #[error("{0}")]
     Other(String),
 
+    /// The user declined an interactive confirmation; nothing was changed.
+    #[error("Aborted — nothing changed.")]
+    Aborted,
+
     #[error("bad request: {0}")]
     BadRequest(String),
 
@@ -117,6 +121,8 @@ impl BitbucketError {
             BitbucketError::DeployFailed { .. } => ExitCode::PipelineFailed,
             BitbucketError::Usage(_) => ExitCode::Usage,
             BitbucketError::Server { source, .. } => source.exit_code(),
+            // Declining is not success: scripts must not take the success branch.
+            BitbucketError::Aborted => ExitCode::Generic,
             _ => ExitCode::Generic,
         }
     }
@@ -135,6 +141,7 @@ impl BitbucketError {
             BitbucketError::PipelineFailed { .. } => "pipeline_failed",
             BitbucketError::DeployFailed { .. } => "deploy_failed",
             BitbucketError::Other(_) => "generic",
+            BitbucketError::Aborted => "aborted",
             BitbucketError::BadRequest(_) => "bad_request",
             BitbucketError::Usage(_) => "usage",
             BitbucketError::Server { .. } => "server",
@@ -233,6 +240,7 @@ fn hints(e: &BitbucketError) -> Vec<String> {
             out.push("the API returned an unexpected payload.".into());
             out.push("run `bbr doctor`, and upgrade bbr if the problem persists.".into());
         }
+        BitbucketError::Aborted => {}
         BitbucketError::Io(_) | BitbucketError::Other(_) => {
             out.push("run `bbr doctor` to check your environment.".into());
             out.push("re-run with -v for more detail.".into());
@@ -362,6 +370,15 @@ mod tests {
             .kind(),
             "server"
         );
+    }
+
+    #[test]
+    fn declined_confirmation_is_a_nonzero_exit_without_hints() {
+        let e = BitbucketError::Aborted;
+        assert_eq!(e.exit_code(), ExitCode::Generic);
+        assert_eq!(e.kind(), "aborted");
+        assert!(hints(&e).is_empty());
+        assert_eq!(e.to_string(), "Aborted — nothing changed.");
     }
 
     #[test]
