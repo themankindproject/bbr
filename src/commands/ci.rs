@@ -415,6 +415,12 @@ pub async fn watch(g: &GlobalArgs, branch: Option<&str>, opts: WatchOptions) -> 
                     ));
                 }
                 state.prev_state = step_state_name;
+                // A pending step has no log file at all: Bitbucket answers
+                // 404 until the step starts producing output, so don't ask
+                // for it on every tick.
+                if step.state.name.eq_ignore_ascii_case("PENDING") {
+                    continue;
+                }
                 // A finished step's log can still be flushing, so it is polled
                 // until a fetch brings nothing new (or one final flush), then
                 // skipped instead of re-requested on every remaining tick.
@@ -433,6 +439,23 @@ pub async fn watch(g: &GlobalArgs, branch: Option<&str>, opts: WatchOptions) -> 
                 {
                     Ok(response) => response,
                     Err(error) => {
+                        // Bitbucket 404s the step-log endpoint while the log
+                        // file does not exist yet: the step is still pending,
+                        // has not flushed its first bytes, or a finished
+                        // step's log was moved to long-term storage. That is
+                        // an expected state while watching — warning on every
+                        // tick flooded the terminal with "HTTP 404" lines. A
+                        // finished step whose log never materialises still
+                        // counts toward the drain window below so it stops
+                        // being re-requested on every remaining tick.
+                        if matches!(error, BitbucketError::NotFound(_)) {
+                            if step_done {
+                                state.terminal_polls = state.terminal_polls.saturating_add(1);
+                                state.drained = state.terminal_polls > 1;
+                            }
+                            crate::log_debug!("no step log yet for {} ({error})", step.name);
+                            continue;
+                        }
                         emit(format!(
                             "warning: failed to stream logs for {}: {error}",
                             step.name
@@ -572,14 +595,21 @@ pub async fn watch(g: &GlobalArgs, branch: Option<&str>, opts: WatchOptions) -> 
                         String::new()
                     });
                 let failure_log_text = if failure_log_text.is_empty() {
+                    // A missing log (404 — moved to long-term storage or
+                    // never written) must not fail a watch whose result is
+                    // already known: the pipeline's own exit code (5) is the
+                    // contract, not the excerpt fetch.
                     client
                         .step_log(&repo.workspace, &repo.slug, &uuid, &step.uuid)
-                        .await?
-                        .text
+                        .await
+                        .map(|log| log.text)
+                        .unwrap_or_default()
                 } else {
                     failure_log_text
                 };
-                Some(failure_log_text)
+                // No log at all: omit the excerpt instead of rendering an
+                // empty "last 120 log lines" section.
+                (!failure_log_text.is_empty()).then_some(failure_log_text)
             }
         }
     } else {
@@ -841,7 +871,12 @@ pub async fn tail(
                     }
                 }
                 Err(error) => {
-                    if !g.json {
+                    // No log file yet (step pending / no output flushed) is
+                    // the same expected 404 as in `watch`: keep polling
+                    // quietly instead of warning on every tick.
+                    if matches!(error, BitbucketError::NotFound(_)) {
+                        crate::log_debug!("no step log yet for {current_step_name} ({error})");
+                    } else if !g.json {
                         eprintln!(
                             "warning: failed to stream logs for {current_step_name}: {error}"
                         );
@@ -967,6 +1002,12 @@ pub async fn tail(
                 {
                     Ok(response) => response,
                     Err(error) => {
+                        // No log file (404): nothing left to flush — stop
+                        // instead of warning on every retry.
+                        if matches!(error, BitbucketError::NotFound(_)) {
+                            crate::log_debug!("no step log yet for {current_step_name} ({error})");
+                            break;
+                        }
                         if !g.json {
                             eprintln!(
                                 "warning: failed to stream logs for {current_step_name}: {error}"

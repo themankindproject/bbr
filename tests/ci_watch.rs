@@ -264,6 +264,145 @@ async fn logs_reach_a_piped_stderr_sanitized_and_finished_steps_are_not_refetche
 }
 
 #[tokio::test]
+async fn pending_step_logs_are_skipped_and_missing_logs_do_not_warn() {
+    let server = MockServer::start().await;
+    mount_pipeline(&server, |n| {
+        if n < 2 {
+            json!({"name": "IN_PROGRESS"})
+        } else {
+            completed("SUCCESSFUL")
+        }
+    })
+    .await;
+    mount_steps(
+        &server,
+        json!([
+            step("{s1}", "build", json!({"name": "IN_PROGRESS"})),
+            step("{s2}", "test", json!({"name": "PENDING"}))
+        ]),
+    )
+    .await;
+    // The running step's log has not been created yet: Bitbucket answers
+    // 404 (documented) until the step flushes its first bytes.
+    let running_404s = Arc::new(AtomicUsize::new(0));
+    let counter = running_404s.clone();
+    Mock::given(method("GET"))
+        .and(path_regex(r"/steps/%7Bs1%7D/log$"))
+        .respond_with(move |_: &Request| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            ResponseTemplate::new(404).set_body_string("no log yet")
+        })
+        .mount(&server)
+        .await;
+    // A pending step has no log file at all; requesting it must not happen.
+    let pending_fetches = Arc::new(AtomicUsize::new(0));
+    let counter = pending_fetches.clone();
+    Mock::given(method("GET"))
+        .and(path_regex(r"/steps/%7Bs2%7D/log$"))
+        .respond_with(move |_: &Request| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            ResponseTemplate::new(404).set_body_string("pending")
+        })
+        .mount(&server)
+        .await;
+
+    let out = watch(&server, &["--logs"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("failed to stream logs"),
+        "an expected 404 must not warn on every tick: {stderr}"
+    );
+    assert!(!stderr.contains("404"), "{stderr}");
+    assert!(
+        running_404s.load(Ordering::SeqCst) >= 1,
+        "a started step must still be polled for its log"
+    );
+    assert_eq!(
+        pending_fetches.load(Ordering::SeqCst),
+        0,
+        "a pending step has no log: the endpoint must not be requested"
+    );
+}
+
+#[tokio::test]
+async fn finished_step_with_missing_log_stops_being_polled() {
+    let server = MockServer::start().await;
+    mount_pipeline(&server, |n| {
+        if n < 3 {
+            json!({"name": "IN_PROGRESS"})
+        } else {
+            completed("SUCCESSFUL")
+        }
+    })
+    .await;
+    mount_steps(
+        &server,
+        json!([step("{s1}", "build", completed("SUCCESSFUL"))]),
+    )
+    .await;
+    // The step is finished but its log 404s (moved to long-term storage
+    // and unavailable, or never written). It must be polled at most twice,
+    // not on every remaining tick of the watch.
+    let log_fetches = Arc::new(AtomicUsize::new(0));
+    let counter = log_fetches.clone();
+    Mock::given(method("GET"))
+        .and(path_regex(r"/steps/%7Bs1%7D/log$"))
+        .respond_with(move |_: &Request| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            ResponseTemplate::new(404).set_body_string("log expired")
+        })
+        .mount(&server)
+        .await;
+
+    let out = watch(&server, &["--logs"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("failed to stream logs"), "{stderr}");
+    assert!(!stderr.contains("404"), "{stderr}");
+    let fetches = log_fetches.load(Ordering::SeqCst);
+    assert!(
+        fetches <= 2,
+        "a finished step whose log404s must drain, not be re-requested every tick (got {fetches})"
+    );
+}
+
+#[tokio::test]
+async fn failed_pipeline_exits_5_not_3_when_the_failure_log_is_missing() {
+    let server = MockServer::start().await;
+    mount_pipeline(&server, |_| completed("FAILED")).await;
+    mount_steps(&server, json!([step("{s1}", "build", completed("FAILED"))])).await;
+    // Every log request 404s: the excerpt fetch must not override the
+    // documented PipelineFailed exit code (5) with NotFound (3).
+    Mock::given(method("GET"))
+        .and(path_regex(r"/steps/%7Bs1%7D/log$"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("gone"))
+        .mount(&server)
+        .await;
+
+    let out = watch(&server, &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(5),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("404"),
+        "a missing excerpt must not surface as an HTTP error: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[tokio::test]
 async fn failed_step_listing_is_reported_not_silently_empty() {
     let server = MockServer::start().await;
     mount_pipeline(&server, |n| {

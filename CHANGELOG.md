@@ -7,8 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-10-06
+
 ### Fixed
 
+- **`bbr ci watch --logs` spammed HTTP 404 after a while.** Bitbucket's step-log
+  endpoint returns 404 whenever the log file does not exist *yet* (the step is
+  pending, has not flushed its first bytes, or a finished step's log was moved
+  to long-term storage — documented behavior). The watch loop printed
+  `warning: failed to stream logs … HTTP 404` on every poll tick for such
+  steps, and because the error path skipped the terminal-drain bookkeeping, a
+  finished step whose log never appeared was re-requested forever. Pending
+  steps are no longer requested at all, a 404 on the log endpoint is treated as
+  "not written yet" (logged at debug level only), and such steps drain after
+  one retry. `bbr ci tail` received the same quiet handling in both of its
+  streaming loops.
+- **A failed pipeline could exit 3 instead of 5 when its failure log was
+  missing.** The failure-excerpt fallback propagated a 404 from the log
+  endpoint, overriding the documented `PipelineFailed` exit code (5) with
+  `NotFound` (3). The excerpt fetch is now non-fatal: when no log exists the
+  receipt simply omits `failure_log`.
 - **Release workflow: package manifests were never generated.** The
   `checksums.txt` job ran `scripts/gen-packages.sh` without checking out the
   repository, so the Homebrew/Scoop/winget manifests were not attached and the

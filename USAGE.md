@@ -597,7 +597,10 @@ Streamed log lines, step transitions, and poll warnings go to **stderr** (also
 when stderr is piped or `--quiet` hides the spinner); the final summary or
 `--json` receipt goes to stdout. A failed step listing is reported as a warning
 and retried rather than silently showing no output. Finished steps whose logs
-have been fully read are not re-requested on later polls.
+have been fully read are not re-requested on later polls. Steps whose log file
+does not exist yet — a pending step, or one that has not flushed its first
+bytes (Bitbucket answers `404` for these) — are polled quietly instead of
+warning on every tick; pending steps are not requested at all.
 
 | Outcome | Exit | `outcome` (JSON) |
 |---------|------|------------------|
