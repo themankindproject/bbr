@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Updated transitive TLS and archive dependencies to clear recent RUSTSEC
+  advisories: `rustls` 0.23.46, `rustls-webpki` 0.103.16, `webpki-roots`
+  1.0.10, `quinn-proto` 0.11.19, and the Windows-only `zip` 9.0.5.
+
 ## [0.4.0] - 2026-10-21
 
 ### Fixed

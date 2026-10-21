@@ -99,7 +99,7 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 # Zip extraction for Windows self-update assets (release.yml ships .zip there)
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 wiremock = "0.6"
