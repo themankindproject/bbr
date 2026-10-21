@@ -63,6 +63,20 @@ pub struct CiWatchOut {
     pub failing_step: Option<StepSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure_log: Option<String>,
+    /// Streamed log lines when `--logs` is combined with `--json`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub logs: Vec<CiWatchLogLine>,
+    /// Set when the final step listing failed. The watch result is still
+    /// reported, but the absence of steps is not silent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub steps_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CiWatchLogLine {
+    pub step: String,
+    pub line_number: u64,
+    pub text: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -142,13 +156,16 @@ pub async fn list(g: &GlobalArgs, branch: Option<&str>, limit: u32, no_steps: bo
                 }
             }
         });
+        // `buffered` preserves input order. `buffer_unordered` returned
+        // completion order, so the positional zip below attached one
+        // pipeline's steps to another. Step-fetch failures are propagated
+        // instead of being rendered as "no steps".
         futures::stream::iter(step_futures)
-            .buffer_unordered(5)
+            .buffered(5)
             .collect::<Vec<_>>()
             .await
             .into_iter()
-            .map(|r| r.unwrap_or_default())
-            .collect()
+            .collect::<Result<Vec<_>>>()?
     };
 
     let pips: Vec<PipelineOut> = pipelines
@@ -212,9 +229,10 @@ pub async fn status(g: &GlobalArgs, branch: Option<&str>) -> Result<()> {
         .ok_or_else(|| BitbucketError::NotFound(format!("no pipeline for branch '{branch}'")))?;
     spinner.set_message("Fetching steps...");
     let steps = steps_for_pipeline(&client, &repo.workspace, &repo.slug, &pipeline.uuid)
-        .await
-        .map(|steps| steps.iter().map(step_out).collect::<Vec<_>>())
-        .unwrap_or_default();
+        .await?
+        .iter()
+        .map(step_out)
+        .collect::<Vec<_>>();
     spinner.finish();
 
     let out = CiStatusOut {
@@ -311,6 +329,9 @@ pub async fn watch(g: &GlobalArgs, branch: Option<&str>, opts: WatchOptions) -> 
         terminal_polls: u8,
         /// Terminal and fully streamed: no further log requests needed.
         drained: bool,
+        /// Bytes after the last newline, held until the line completes or the
+        /// step finishes.
+        pending: String,
     }
 
     // Always present: it stays empty unless `include_logs`, and an empty map
@@ -325,6 +346,11 @@ pub async fn watch(g: &GlobalArgs, branch: Option<&str>, opts: WatchOptions) -> 
     // Last successful step listing, reused when a refresh fails so a transient
     // error neither stalls streaming silently nor forgets known steps.
     let mut known_steps: Vec<PipelineStep> = Vec::new();
+
+    // JSON output is a single document, so live log lines are collected here
+    // and attached to the final object. Emitting them immediately would break
+    // JSON consumers.
+    let mut captured_logs: Vec<CiWatchLogLine> = Vec::new();
 
     let mut current = initial;
     let watch_started = Instant::now();
@@ -377,6 +403,7 @@ pub async fn watch(g: &GlobalArgs, branch: Option<&str>, opts: WatchOptions) -> 
                             line_no: 1,
                             terminal_polls: 0,
                             drained: false,
+                            pending: String::new(),
                         },
                     );
                     resume_offset_remaining = 0;
@@ -393,6 +420,7 @@ pub async fn watch(g: &GlobalArgs, branch: Option<&str>, opts: WatchOptions) -> 
                         line_no: 1,
                         terminal_polls: 0,
                         drained: false,
+                        pending: String::new(),
                     });
                 if state.drained {
                     continue;
@@ -422,10 +450,9 @@ pub async fn watch(g: &GlobalArgs, branch: Option<&str>, opts: WatchOptions) -> 
                     continue;
                 }
                 // A finished step's log can still be flushing, so it is polled
-                // until a fetch brings nothing new (or one final flush), then
-                // skipped instead of re-requested on every remaining tick.
+                // until a fetch brings nothing new, then skipped instead of
+                // re-requested on every remaining tick.
                 let step_done = step.is_terminal();
-                let flush_all = step_done && state.terminal_polls > 0;
 
                 let (body, range_honored) = match client
                     .step_log_range_checked(
@@ -466,6 +493,9 @@ pub async fn watch(g: &GlobalArgs, branch: Option<&str>, opts: WatchOptions) -> 
                 let (chunk, reset_offset) = unseen_log_chunk(&body, range_honored, state.offset);
                 if reset_offset {
                     state.offset = 0;
+                    // The server ignored the range and the old offset no
+                    // longer exists: buffered partial bytes are stale.
+                    state.pending.clear();
                 }
 
                 if !chunk.is_empty() {
@@ -478,31 +508,68 @@ pub async fn watch(g: &GlobalArgs, branch: Option<&str>, opts: WatchOptions) -> 
                         state.header_printed = true;
                     }
 
-                    // Determine how much of the chunk contains complete lines.
-                    // If the chunk doesn't end with '\n', the trailing partial
-                    // line is held back — we only advance offset to the last
-                    // complete newline so the next poll re-fetches it whole.
-                    // On a finished step's second look, nothing more is coming:
-                    // print its final unterminated line too.
-                    let printable_end = if chunk.ends_with('\n') || flush_all {
-                        chunk.len()
+                    // Complete lines are emitted immediately; the trailing
+                    // partial line is buffered across polls. A terminal step's
+                    // final unterminated line is flushed on this poll, which
+                    // the old hold-back-until-next-poll logic dropped when the
+                    // watch loop exited as soon as the pipeline was terminal.
+                    let mut combined = std::mem::take(&mut state.pending);
+                    combined.push_str(chunk);
+                    let emit_end = if step_done {
+                        combined.len()
                     } else {
-                        chunk.rfind('\n').map(|i| i + 1).unwrap_or(0)
+                        combined.rfind('\n').map(|i| i + 1).unwrap_or(0)
                     };
 
-                    if printable_end > 0 {
+                    if emit_end > 0 {
                         let label = concurrent.then(|| step_tag(&step.name));
-                        for line in chunk[..printable_end].lines() {
+                        for line in combined[..emit_end].lines() {
                             let num = line_numbers.then_some(state.line_no);
+                            if g.json {
+                                captured_logs.push(CiWatchLogLine {
+                                    step: step.name.clone(),
+                                    line_number: state.line_no,
+                                    text: crate::output::sanitize_log_line(line).into_owned(),
+                                });
+                            }
                             emit(render_watch_log_line(theme, label.as_deref(), num, line));
                             state.line_no += 1;
                         }
                     }
-                    state.offset += printable_end as u64;
+                    state.pending = combined[emit_end..].to_string();
+                    // All fetched bytes are consumed; pending bytes are held
+                    // in memory, so the next range starts after them.
+                    state.offset = state.offset.saturating_add(chunk.len() as u64);
                 }
                 if step_done {
+                    // A terminal step whose final chunk arrived earlier may
+                    // still have a buffered partial line.
+                    if !state.pending.is_empty() {
+                        if !state.header_printed {
+                            emit(render_watch_step_header(
+                                theme,
+                                &step.name,
+                                step.state_name(),
+                            ));
+                            state.header_printed = true;
+                        }
+                        let label = concurrent.then(|| step_tag(&step.name));
+                        for line in state.pending.lines() {
+                            let num = line_numbers.then_some(state.line_no);
+                            if g.json {
+                                captured_logs.push(CiWatchLogLine {
+                                    step: step.name.clone(),
+                                    line_number: state.line_no,
+                                    text: crate::output::sanitize_log_line(line).into_owned(),
+                                });
+                            }
+                            emit(render_watch_log_line(theme, label.as_deref(), num, line));
+                            state.line_no += 1;
+                        }
+                        state.pending.clear();
+                    }
                     state.terminal_polls = state.terminal_polls.saturating_add(1);
-                    state.drained = chunk.is_empty() || flush_all;
+                    state.drained = chunk.is_empty() && state.pending.is_empty();
                 }
             }
         }
@@ -557,9 +624,14 @@ pub async fn watch(g: &GlobalArgs, branch: Option<&str>, opts: WatchOptions) -> 
         notify_backend::notify(*kind, &msg, cmd.as_deref(), g.json);
     }
 
-    let raw_steps = steps_for_pipeline(&client, &repo.workspace, &repo.slug, &uuid)
-        .await
-        .unwrap_or_default();
+    let (raw_steps, steps_error) =
+        match steps_for_pipeline(&client, &repo.workspace, &repo.slug, &uuid).await {
+            Ok(steps) => (steps, None),
+            Err(e) => {
+                emit(format!("warning: failed to list pipeline steps ({e})"));
+                (Vec::new(), Some(e.to_string()))
+            }
+        };
     let steps = raw_steps.iter().map(step_out).collect::<Vec<_>>();
 
     let final_state = current.state_name().to_string();
@@ -624,6 +696,8 @@ pub async fn watch(g: &GlobalArgs, branch: Option<&str>, opts: WatchOptions) -> 
         outcome: outcome.as_str(),
         failing_step: failing_step.map(step_out),
         failure_log: failure_log.clone(),
+        logs: captured_logs,
+        steps_error,
     };
 
     let fmt = make_formatter(g);
@@ -877,9 +951,7 @@ pub async fn tail(
                     if matches!(error, BitbucketError::NotFound(_)) {
                         crate::log_debug!("no step log yet for {current_step_name} ({error})");
                     } else if !g.json {
-                        eprintln!(
-                            "warning: failed to stream logs for {current_step_name}: {error}"
-                        );
+                        crate::log_warn!("failed to stream logs for {current_step_name}: {error}");
                     }
                 }
             }
@@ -899,8 +971,8 @@ pub async fn tail(
                         return Err(e);
                     }
                     if !g.json {
-                        eprintln!(
-                            "warning: failed to refresh pipeline steps ({e}), retrying next tick"
+                        crate::log_warn!(
+                            "failed to refresh pipeline steps ({e}), retrying next tick"
                         );
                     }
                     Vec::new()
@@ -937,18 +1009,26 @@ pub async fn tail(
                 Ok(p) => p.is_terminal(),
                 Err(e) => {
                     if !g.json {
-                        eprintln!(
-                            "warning: could not check pipeline state ({e}); not advancing to further steps"
+                        crate::log_warn!(
+                            "could not check pipeline state ({e}); not advancing to further steps"
                         );
                     }
                     true
                 }
             };
             if !pipeline_done {
-                let fresh_steps = client
+                let fresh_steps = match client
                     .list_all_steps(&repo.workspace, &repo.slug, &pipeline_uuid)
                     .await
-                    .unwrap_or_default();
+                {
+                    Ok(steps) => steps,
+                    Err(e) => {
+                        if !g.json {
+                            crate::log_warn!("could not refresh pipeline steps ({e})");
+                        }
+                        Vec::new()
+                    }
+                };
                 let next = fresh_steps
                     .iter()
                     .find(|s| !tailed.contains(&s.uuid) && !s.is_terminal())
@@ -958,7 +1038,11 @@ pub async fn tail(
                     current_step_name = next_step.name.clone();
                     tailed.insert(current_step_uuid.clone());
                     offset = 0;
-                    nums = LineNumState::new(1);
+                    // Keep numbering continuous across auto-advanced steps;
+                    // resetting to 1 made `--line-numbers --all` restart for
+                    // every step.
+                    let next_line = nums.next;
+                    nums = LineNumState::new(next_line);
                     prev_state = next_step.state_name().to_string();
                     step_is_terminal = next_step.is_terminal();
                     if g.json {
@@ -1009,8 +1093,8 @@ pub async fn tail(
                             break;
                         }
                         if !g.json {
-                            eprintln!(
-                                "warning: failed to stream logs for {current_step_name}: {error}"
+                            crate::log_warn!(
+                                "failed to stream logs for {current_step_name}: {error}"
                             );
                         }
                         continue;
@@ -1062,9 +1146,9 @@ pub async fn tail(
         crate::output::json::print_ndjson(&CiTailSummaryEvent {
             event: "summary",
             pipeline_uuid,
-            step_uuid: current_step_uuid,
-            step_name: current_step_name,
-            state: prev_state,
+            step_uuid: current_step_uuid.clone(),
+            step_name: current_step_name.clone(),
+            state: prev_state.clone(),
         })?;
     } else {
         let elapsed = started.elapsed();
@@ -1075,12 +1159,12 @@ pub async fn tail(
             elapsed.as_secs_f64(),
         );
         crate::output::print_block(&format!("\n{summary}\n"))?;
-        if let Some((kind, cmd)) = &notify {
-            // Only in human mode (mirrors the existing bell behavior, which
-            // was gated on `!g.json`).
-            let msg = format!("step '{}' reached {}", current_step_name, prev_state);
-            notify_backend::notify(*kind, &msg, cmd.as_deref(), g.json);
-        }
+    }
+    // `notify` honors JSON mode internally (bell only); gating the whole call
+    // on human output silently disabled `--notify` under `--json`.
+    if let Some((kind, cmd)) = &notify {
+        let msg = format!("step '{}' reached {}", current_step_name, prev_state);
+        notify_backend::notify(*kind, &msg, cmd.as_deref(), g.json);
     }
 
     Ok(())
@@ -1417,14 +1501,21 @@ pub async fn trigger(
     };
     let client = client(g)?;
 
-    // Parse --var KEY=VALUE pairs
-    let variables: Vec<(String, String)> = vars
-        .iter()
-        .filter_map(|v| {
-            let (key, value) = v.split_once('=')?;
-            Some((key.to_string(), value.to_string()))
-        })
-        .collect();
+    // Parse --var KEY=VALUE pairs. A malformed pair used to be dropped
+    // silently, triggering a pipeline without the variable the caller asked
+    // for.
+    let mut variables: Vec<(String, String)> = Vec::with_capacity(vars.len());
+    for var in vars {
+        let (key, value) = var.split_once('=').ok_or_else(|| {
+            BitbucketError::Usage(format!("invalid --var {var:?}: expected KEY=VALUE"))
+        })?;
+        if key.is_empty() {
+            return Err(BitbucketError::Usage(format!(
+                "invalid --var {var:?}: key must not be empty"
+            )));
+        }
+        variables.push((key.to_string(), value.to_string()));
+    }
 
     // Build variables payload if any
     let variables_payload: Option<Vec<serde_json::Value>> = if variables.is_empty() {

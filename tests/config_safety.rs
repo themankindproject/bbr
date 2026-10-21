@@ -117,3 +117,48 @@ fn config_save_failure_leaves_existing_directory_intact() {
 
     assert_eq!(fs::read_to_string(path.join("keep")).unwrap(), "unchanged");
 }
+
+#[test]
+fn config_set_ui_theme_empty_resets_the_preference() {
+    let home = tempdir().unwrap();
+    bbr(&home)
+        .args(["config", "set", "ui.theme", "dark"])
+        .assert()
+        .success();
+    let path = home.path().join("bbr/config.toml");
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(text.contains("theme = \"dark\""), "{text}");
+
+    bbr(&home)
+        .args(["config", "set", "ui.theme", "", "--json"])
+        .assert()
+        .success();
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("theme ="), "theme must be cleared: {text}");
+}
+
+#[test]
+fn config_set_preserves_unknown_keys() {
+    let home = tempdir().unwrap();
+    let dir = home.path().join("bbr");
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("config.toml");
+    fs::write(
+        &path,
+        "[future]\nflag = true\n\n[contexts.work]\nworkspace = \"w\"\nretention_days = 30\n",
+    )
+    .unwrap();
+
+    bbr(&home)
+        .args(["config", "set", "ui.theme", "light"])
+        .assert()
+        .success();
+
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(text.contains("flag = true"), "unknown section lost: {text}");
+    assert!(
+        text.contains("retention_days = 30"),
+        "unknown context key lost: {text}"
+    );
+    assert!(text.contains("theme = \"light\""), "{text}");
+}

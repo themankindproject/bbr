@@ -165,6 +165,105 @@ pub struct Participant {
     pub state: Option<String>,
 }
 
+/// A reviewer's effective state after merging the `reviewers` and
+/// `participants` arrays. Bitbucket puts approval state on participants; the
+/// `reviewers` array is the requested-reviewer list and may not carry it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReviewerSummary {
+    pub display_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uuid: Option<String>,
+    pub role: String,
+    pub approved: bool,
+    pub changes_requested: bool,
+    pub pending: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+}
+
+impl PullRequest {
+    /// Merge the requested reviewers with the participant records so approval
+    /// and changes-requested decisions are taken from the authoritative
+    /// `participants` array.
+    pub fn reviewer_summaries(&self) -> Vec<ReviewerSummary> {
+        struct Entry {
+            participant: Participant,
+            requested: bool,
+        }
+
+        let mut entries: Vec<Entry> = Vec::new();
+        let mut merge = |p: &Participant, requested: bool| {
+            if let Some(entry) = entries.iter_mut().find(|e| e.participant.same_person(p)) {
+                entry.requested |= requested;
+                entry.participant.approved |= p.approved;
+                if p.state.is_some() {
+                    entry.participant.state = p.state.clone();
+                }
+                if entry.participant.display_name.is_empty() {
+                    entry.participant.display_name = p.display_name.clone();
+                }
+                if entry.participant.uuid.is_none() {
+                    entry.participant.uuid = p.uuid.clone();
+                }
+                if entry.participant.nickname.is_none() {
+                    entry.participant.nickname = p.nickname.clone();
+                }
+                if !p.role.is_empty() {
+                    entry.participant.role = p.role.clone();
+                }
+            } else {
+                entries.push(Entry {
+                    participant: p.clone(),
+                    requested,
+                });
+            }
+        };
+
+        for r in &self.reviewers {
+            merge(r, true);
+        }
+        for p in &self.participants {
+            let matters = p.role.eq_ignore_ascii_case("REVIEWER")
+                || p.is_approved()
+                || p.is_changes_requested();
+            if matters {
+                merge(p, false);
+            }
+        }
+
+        entries
+            .into_iter()
+            .map(|entry| {
+                let p = entry.participant;
+                let approved = p.is_approved();
+                let changes_requested = p.is_changes_requested();
+                let name = if !p.display_name.is_empty() {
+                    p.display_name
+                } else if let Some(user) = &p.user {
+                    user.display_name.clone()
+                } else {
+                    p.nickname
+                        .clone()
+                        .unwrap_or_else(|| "(reviewer)".to_string())
+                };
+                ReviewerSummary {
+                    display_name: name,
+                    uuid: p.uuid,
+                    role: if p.role.is_empty() {
+                        "REVIEWER".to_string()
+                    } else {
+                        p.role
+                    },
+                    approved,
+                    changes_requested,
+                    pending: !approved && !changes_requested,
+                    state: p.state,
+                }
+            })
+            .collect()
+    }
+}
+
 impl Participant {
     /// True when the participant has approved (bool flag or Bitbucket `state`).
     pub fn is_approved(&self) -> bool {
@@ -372,6 +471,50 @@ impl BitbucketClient {
         sort: Option<&str>,
         order: Option<&str>,
     ) -> Result<Vec<PullRequest>> {
+        // The API's default (and only) unfiltered listing is OPEN. "all" must
+        // query every state explicitly and merge the results; otherwise
+        // merged/declined PRs are silently omitted.
+        if state == PrState::All {
+            let mut combined = Vec::new();
+            for concrete in [PrState::Open, PrState::Merged, PrState::Declined] {
+                combined.extend(
+                    Box::pin(self.list_prs(
+                        workspace,
+                        slug,
+                        concrete,
+                        limit,
+                        author,
+                        source_branch,
+                        reviewer,
+                        sort,
+                        order,
+                    ))
+                    .await?,
+                );
+            }
+            let mut seen = std::collections::HashSet::new();
+            combined.retain(|pr| seen.insert(pr.id));
+            let field = sort.unwrap_or("updated_on");
+            let ascending = order == Some("asc");
+            combined.sort_by(|a, b| {
+                let key = |pr: &PullRequest| {
+                    if field == "created_on" {
+                        pr.created_on.clone()
+                    } else {
+                        pr.updated_on.clone()
+                    }
+                };
+                let ordering = key(a).cmp(&key(b));
+                if ascending {
+                    ordering
+                } else {
+                    ordering.reverse()
+                }
+            });
+            combined.truncate(limit as usize);
+            return Ok(combined);
+        }
+
         let pagelen = limit.min(100);
         let sort_field = sort.unwrap_or("updated_on");
         let sort_prefix = if order == Some("asc") { "" } else { "-" };
@@ -427,7 +570,7 @@ impl BitbucketClient {
         // uuid fields are required by the dashboard's identity matching and by
         // reviewer add/remove round-trips.
         let fields = "values.id,values.state,values.title,values.draft,\
-             values.source.branch.name,values.destination.branch.name,\
+             values.source.branch.name,values.source.commit.hash,values.destination.branch.name,\
              values.author.display_name,values.author.uuid,values.links.html.href,\
              values.comment_count,values.task_count,values.close_source_branch,\
              values.updated_on,\
@@ -718,6 +861,9 @@ impl BitbucketClient {
     }
 
     /// `GET /repositories/{ws}/{slug}/pullrequests/{id}/diffstat`
+    ///
+    /// The endpoint redirects to the repository diffstat and is paginated;
+    /// fetching only the first page silently undercounted large PRs.
     pub async fn pr_diffstat(
         &self,
         workspace: &str,
@@ -725,7 +871,14 @@ impl BitbucketClient {
         id: u64,
     ) -> Result<serde_json::Value> {
         let path = format!("/repositories/{workspace}/{slug}/pullrequests/{id}/diffstat");
-        self.send(reqwest::Method::GET, &path, None).await
+        let page: super::Paginated<serde_json::Value> =
+            self.send(reqwest::Method::GET, &path, None).await?;
+        let total = page.size;
+        let values = self.paginate_from(page, &path, usize::MAX).await?;
+        Ok(serde_json::json!({
+            "size": if total == 0 { values.len() as u64 } else { total },
+            "values": values,
+        }))
     }
 
     /// `GET /repositories/{ws}/{slug}/pullrequests/{id}/patch`
@@ -1074,5 +1227,60 @@ mod tests {
         let json = r#"{"path":"src/main.rs","conflict_type":"merge"}"#;
         let conflict: PullRequestConflict = serde_json::from_str(json).unwrap();
         assert_eq!(conflict.path, "src/main.rs");
+    }
+
+    fn pr_with_reviewers(value: serde_json::Value) -> PullRequest {
+        let mut base = serde_json::json!({
+            "id": 1,
+            "source": {"branch": {"name": "feature"}},
+            "destination": {"branch": {"name": "main"}}
+        });
+        base.as_object_mut()
+            .unwrap()
+            .extend(value.as_object().unwrap().clone());
+        serde_json::from_value(base).unwrap()
+    }
+
+    #[test]
+    fn reviewer_summaries_take_approval_from_participants() {
+        let pr = pr_with_reviewers(serde_json::json!({
+            "reviewers": [{"display_name": "Alice", "uuid": "{alice}", "role": "REVIEWER"}],
+            "participants": [{
+                "display_name": "Alice", "uuid": "{alice}", "role": "REVIEWER",
+                "approved": true, "state": "approved"
+            }]
+        }));
+        let summaries = pr.reviewer_summaries();
+        assert_eq!(summaries.len(), 1, "same person must not be duplicated");
+        assert!(summaries[0].approved);
+        assert!(!summaries[0].pending);
+    }
+
+    #[test]
+    fn reviewer_summaries_surface_changes_requested_participants() {
+        let pr = pr_with_reviewers(serde_json::json!({
+            "reviewers": [],
+            "participants": [{
+                "display_name": "Bob", "uuid": "{bob}", "role": "PARTICIPANT",
+                "approved": false, "state": "changes_requested"
+            }]
+        }));
+        let summaries = pr.reviewer_summaries();
+        assert_eq!(summaries.len(), 1);
+        assert!(summaries[0].changes_requested);
+        assert!(!summaries[0].pending);
+    }
+
+    #[test]
+    fn reviewer_summaries_mark_unanswered_requested_reviewers_pending() {
+        let pr = pr_with_reviewers(serde_json::json!({
+            "reviewers": [{"display_name": "Carol", "uuid": "{carol}", "role": "REVIEWER"}],
+            "participants": []
+        }));
+        let summaries = pr.reviewer_summaries();
+        assert_eq!(summaries.len(), 1);
+        assert!(summaries[0].pending);
+        assert!(!summaries[0].approved);
+        assert!(!summaries[0].changes_requested);
     }
 }

@@ -87,17 +87,15 @@ fn finish_batch(g: &GlobalArgs, result: BatchResult, noun: &str) -> Result<()> {
     )))
 }
 
-/// Count distinct approvals: reviewers plus any approving participant,
+/// Count distinct approvals from the merged reviewer/participant view,
 /// deduplicated per person. Bitbucket records web-UI approvals from
 /// non-reviewers as role=PARTICIPANT, so counting reviewers only would miss
 /// them and skip approved PRs.
 fn approval_count(pr: &crate::api::pr::PullRequest) -> usize {
-    let reviewers = pr.reviewers.iter().filter(|r| r.is_approved()).count();
-    reviewers
-        + pr.participants
-            .iter()
-            .filter(|p| p.is_approved() && !pr.reviewers.iter().any(|r| r.same_person(p)))
-            .count()
+    pr.reviewer_summaries()
+        .iter()
+        .filter(|r| r.approved)
+        .count()
 }
 
 /// Re-check a planned merge against the PR's current state.
@@ -165,9 +163,9 @@ pub async fn merge_approved(
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Fetching open pull requests...");
 
-    // Fetch up to the --max cap (or 100) rather than a fixed page, so the
-    // cap is honored without throwing away results beyond the first page.
-    let fetch_limit = max.unwrap_or(100);
+    // --max caps the *actions*, not the candidate scan. Using it as the fetch
+    // limit hid approved PRs beyond the newest `max` open PRs.
+    let fetch_limit = max.map_or(1000, |m| m.max(1000)).min(10_000);
     let prs = client
         .list_prs(
             &repo.workspace,
@@ -497,44 +495,89 @@ pub async fn cleanup_merged_branches(
     crate::git::validate_repo_segment("repository slug", slug)?;
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
-    spinner.set_message("Listing remote branches...");
+    // The API's branch object has no `merged` flag. A branch is considered
+    // merged when a merged PR's source branch still points at the branch tip
+    // (the hash check avoids deleting a branch that was merged and then
+    // reused for new commits).
+    spinner.set_message("Listing merged pull requests...");
+    let merged_prs = client
+        .list_prs(
+            &repo.workspace,
+            slug,
+            PrState::Merged,
+            500,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await?;
+    let merged_heads: std::collections::HashMap<String, String> = merged_prs
+        .iter()
+        .filter_map(|pr| {
+            let branch = pr.source_branch();
+            let commit = pr.source.commit.as_ref()?.hash.clone();
+            (!branch.is_empty()).then(|| (branch.to_string(), commit))
+        })
+        .collect();
 
+    spinner.set_message("Listing remote branches...");
     let branches = client.list_branches(&repo.workspace, slug, 100).await?;
 
     let protected_branches = ["main", "master", "develop", "production"];
-
-    let mut cleanup_actions = Vec::new();
+    let mut merged_branches: Vec<String> = Vec::new();
     for branch in branches {
         let is_protected = protected_branches.iter().any(|&p| branch.name == p)
             || branch.name.starts_with("release/")
             || branch.name.starts_with("hotfix/");
-        if branch.merged && !is_protected {
-            cleanup_actions.push(CleanupAction {
-                branch_name: branch.name.clone(),
-                is_remote: false,
-            });
-            if remote {
-                cleanup_actions.push(CleanupAction {
-                    branch_name: branch.name.clone(),
-                    is_remote: true,
-                });
-            }
+        let Some(merged_hash) = merged_heads.get(&branch.name) else {
+            continue;
+        };
+        if is_protected {
+            continue;
+        }
+        let head_matches = branch
+            .target
+            .as_ref()
+            .map(|t| t.hash == *merged_hash)
+            .unwrap_or(true);
+        if head_matches {
+            merged_branches.push(branch.name);
         }
     }
 
     spinner.finish();
 
-    // Apply --max safety cap
+    // Apply --max safety cap to branches, then expand each branch into its
+    // local/remote actions together. Truncating the expanded list could delete
+    // the remote branch but not its local counterpart.
     if let Some(cap) = max {
-        if cleanup_actions.len() > cap {
-            let original = cleanup_actions.len();
-            cleanup_actions.truncate(cap);
+        if merged_branches.len() > cap {
+            let original = merged_branches.len();
+            merged_branches.truncate(cap);
             if !g.json {
                 eprintln!(
-                    "  Note: {} branch actions found, capped to --max {}",
+                    "  Note: {} merged branches found, capped to --max {}",
                     original, cap
                 );
             }
+        }
+    }
+
+    let mut cleanup_actions = Vec::new();
+    for branch_name in merged_branches {
+        if crate::git::local_branch_exists(&branch_name) {
+            cleanup_actions.push(CleanupAction {
+                branch_name: branch_name.clone(),
+                is_remote: false,
+            });
+        }
+        if remote {
+            cleanup_actions.push(CleanupAction {
+                branch_name,
+                is_remote: true,
+            });
         }
     }
 
@@ -611,7 +654,7 @@ pub async fn cleanup_merged_branches(
             }
         } else {
             run_spinner.set_message(format!("Deleting local branch {}...", act.branch_name));
-            match crate::git::delete_branch_local_safe_async(&act.branch_name).await {
+            match crate::git::delete_local_branch_if_exists(&act.branch_name).await {
                 Ok(_) => succeeded.push(BatchActionOutcome {
                     id: format!("local/{}", act.branch_name),
                     description: format!("Deleted local branch {}", act.branch_name),

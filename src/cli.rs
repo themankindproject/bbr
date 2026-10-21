@@ -296,8 +296,10 @@ pub enum VariableAction {
         #[arg(long)]
         stdin: bool,
         /// Mark variable as secured/encrypted (value hidden after creation).
-        #[arg(long)]
-        secured: bool,
+        /// Omit on update to preserve the variable's current setting; pass
+        /// `--secured=false` to explicitly downgrade it.
+        #[arg(long, num_args = 0..=1, default_missing_value = "true", require_equals = true)]
+        secured: Option<bool>,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -628,7 +630,7 @@ pub enum PrAction {
         #[arg(long)]
         raw: bool,
         /// Use side-by-side view instead of unified.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "raw")]
         side_by_side: bool,
         /// Number of context lines around changes (default: 3).
         #[arg(long, default_value_t = 3)]
@@ -795,7 +797,9 @@ pub enum CiAction {
         /// Prefix streamed log lines with line numbers (with --logs).
         #[arg(long)]
         line_numbers: bool,
-        /// Resume streaming from a byte offset (reconnect after a dropped watch).
+        /// Resume streaming from a byte offset (reconnect after a dropped
+        /// watch). Line numbers restart at 1 because the skipped prefix is
+        /// counted in bytes, not lines.
         #[arg(long, value_name = "BYTES", default_value_t = 0)]
         from_offset: u64,
         /// Give up after this many seconds (0 = no limit). A timeout exits 1
@@ -831,7 +835,9 @@ pub enum CiAction {
         /// Prefix streamed log lines with line numbers.
         #[arg(long)]
         line_numbers: bool,
-        /// Resume streaming from a byte offset (reconnect after a dropped tail).
+        /// Resume streaming from a byte offset (reconnect after a dropped
+        /// tail). Line numbers restart at 1 because the skipped prefix is
+        /// counted in bytes, not lines.
         #[arg(long, value_name = "BYTES", default_value_t = 0)]
         from_offset: u64,
         #[command(flatten)]
@@ -1076,6 +1082,9 @@ pub enum DefaultReviewersAction {
     Remove {
         /// Username or account UUID.
         user: String,
+        /// Skip confirmation prompt.
+        #[arg(long, short)]
+        yes: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -1288,6 +1297,9 @@ pub enum ContextAction {
     Delete {
         /// Context name to delete.
         name: String,
+        /// Skip confirmation prompt.
+        #[arg(long, short)]
+        yes: bool,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -1506,9 +1518,10 @@ pub enum DeployEnvVarsAction {
         /// out of `ps` output and shell history).
         #[arg(long, conflicts_with = "value")]
         stdin: bool,
-        /// Mark variable as secured/encrypted.
-        #[arg(long)]
-        secured: bool,
+        /// Mark variable as secured/encrypted. Omit on update to preserve
+        /// the current setting; pass `--secured=false` to downgrade.
+        #[arg(long, num_args = 0..=1, default_missing_value = "true", require_equals = true)]
+        secured: Option<bool>,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -1544,9 +1557,10 @@ pub enum CiVarsAction {
         /// out of `ps` output and shell history).
         #[arg(long)]
         stdin: bool,
-        /// Mark variable as secured/encrypted.
-        #[arg(long)]
-        secured: bool,
+        /// Mark variable as secured/encrypted. Omit on update to preserve
+        /// the current setting; pass `--secured=false` to downgrade.
+        #[arg(long, num_args = 0..=1, default_missing_value = "true", require_equals = true)]
+        secured: Option<bool>,
         #[command(flatten)]
         g: GlobalArgs,
     },
@@ -1820,7 +1834,7 @@ pub fn parse_args() -> std::result::Result<Cli, ExitCode> {
 /// few call sites that need to block on an async helper).
 pub fn run(cli: Cli, rt: &tokio::runtime::Runtime) -> ExitCode {
     let _guard = rt.enter();
-    init_tracing(cli.global.verbose);
+    init_tracing(cli.global.verbose, cli.global.quiet);
 
     // Set color override before any Theme access.
     // --no-color takes precedence over --color.
@@ -1852,8 +1866,11 @@ pub fn run(cli: Cli, rt: &tokio::runtime::Runtime) -> ExitCode {
     }
 }
 
-fn init_tracing(verbose: u8) {
+fn init_tracing(verbose: u8, quiet: bool) {
     crate::logging::init(verbose);
+    if quiet {
+        crate::logging::silence();
+    }
 }
 
 #[cfg(test)]

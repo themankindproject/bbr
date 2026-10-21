@@ -48,13 +48,14 @@ impl Preset {
     /// Best-effort background detection from `COLORFGBG="<fg>;<bg>"`.
     ///
     /// Convention (rxvt/screen lineage): background codes 6 and 7 (cyan /
-    /// white ranges) and above usually indicate a light terminal background.
+    /// white) and the bright variants 9-15 indicate a light background.
+    /// Code 8 is bright black / dark gray and must stay dark.
     /// Detection is unreliable outside those emulators — users should prefer
     /// an explicit `ui.theme` setting; this only powers the `auto` default.
     fn from_env() -> Option<Self> {
         let fgbg = std::env::var("COLORFGBG").ok()?;
         let bg = fgbg.rsplit(';').next()?.trim().parse::<u8>().ok()?;
-        Some(if (6..=15).contains(&bg) {
+        Some(if matches!(bg, 6 | 7 | 9..=15) {
             Preset::Light
         } else {
             Preset::Dark
@@ -621,6 +622,8 @@ mod tests {
         std::env::set_var("COLORFGBG", "0;15"); // white bg → light
         assert_eq!(Preset::resolve(None), Preset::Light);
         std::env::set_var("COLORFGBG", "15;0"); // black bg → dark
+        assert_eq!(Preset::resolve(None), Preset::Dark);
+        std::env::set_var("COLORFGBG", "15;8"); // bright black / dark gray → dark
         assert_eq!(Preset::resolve(None), Preset::Dark);
         std::env::remove_var("COLORFGBG");
     }

@@ -75,10 +75,25 @@ pub async fn run_audit(g: &GlobalArgs, slug_arg: Option<&str>) -> Result<()> {
                     client.list_default_reviewers(&ws, &slug)
                 );
 
-                let restrictions = restrictions_res.unwrap_or_default();
-                let reviewers = reviewers_res.unwrap_or_default();
-
-                audit_repo(&slug, &restrictions, &reviewers)
+                // A failed fetch must not look like "no restrictions / no
+                // reviewers" — that is the most alarming audit result for the
+                // wrong reason.
+                let restrictions = restrictions_res.as_ref().cloned().unwrap_or_default();
+                let reviewers = reviewers_res.as_ref().cloned().unwrap_or_default();
+                let mut audit = audit_repo(&slug, &restrictions, &reviewers);
+                if let Err(e) = &restrictions_res {
+                    audit.issues.push(AuditIssue {
+                        severity: "error".into(),
+                        message: format!("could not fetch branch restrictions: {e}"),
+                    });
+                }
+                if let Err(e) = &reviewers_res {
+                    audit.issues.push(AuditIssue {
+                        severity: "error".into(),
+                        message: format!("could not fetch default reviewers: {e}"),
+                    });
+                }
+                audit
             }
         })
         .collect();

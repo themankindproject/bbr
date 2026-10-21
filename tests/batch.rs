@@ -67,6 +67,62 @@ fn merge_posts(requests: &[wiremock::Request]) -> Vec<String> {
 }
 
 #[tokio::test]
+async fn cleanup_uses_merged_pr_heads_not_a_nonexistent_branch_flag() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/ws/repo/pullrequests"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "values": [{
+                "id": 5,
+                "state": "MERGED",
+                "title": "merged",
+                "source": {"branch": {"name": "feature-5"}, "commit": {"hash": "abc"}},
+                "destination": {"branch": {"name": "main"}}
+            }, {
+                "id": 6,
+                "state": "MERGED",
+                "title": "reused branch",
+                "source": {"branch": {"name": "feature-6"}, "commit": {"hash": "old"}},
+                "destination": {"branch": {"name": "main"}}
+            }]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repositories/ws/repo/refs/branches"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "values": [
+                {"name": "feature-5", "target": {"hash": "abc"}},
+                {"name": "feature-6", "target": {"hash": "new-commits"}},
+                {"name": "main", "target": {"hash": "abc"}}
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let out = bbr(
+        &server,
+        &[
+            "batch",
+            "cleanup-merged-branches",
+            "--dry-run",
+            "--remote",
+            "--json",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let plan: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let actions = plan["actions"].as_array().unwrap();
+    assert_eq!(actions.len(), 1, "{plan}");
+    assert_eq!(actions[0]["branch_name"], "feature-5");
+    assert_eq!(actions[0]["is_remote"], true);
+}
+
+#[tokio::test]
 async fn failed_merges_exit_nonzero_but_keep_the_receipt() {
     let server = MockServer::start().await;
     mount_list(&server, vec![approved_pr(5), approved_pr(6)]).await;

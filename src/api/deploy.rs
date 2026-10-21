@@ -1,6 +1,6 @@
 //! Deployment, environment, and deploy-key endpoints.
 use super::BitbucketClient;
-use crate::error::Result;
+use crate::error::{BitbucketError, Result};
 use serde::{Deserialize, Serialize};
 
 // ---- Deploy Keys ----------------------------------------------------------
@@ -118,6 +118,19 @@ pub struct EnvVariable {
     pub secured: bool,
 }
 
+/// Add actionable context to a 404 from the environment-deployment
+/// endpoints. These paths are used by the Bitbucket UI but are absent from
+/// the published REST API; when they disappear the bare "not found" is
+/// misleading.
+fn deployment_endpoint_error(error: BitbucketError) -> BitbucketError {
+    match error {
+        BitbucketError::NotFound(message) => BitbucketError::NotFound(format!(
+            "{message}; the deployments_config environment endpoint is not part of Bitbucket's published REST API. Verify the environment UUID, or trigger the deployment pipeline with `bbr ci trigger`"
+        )),
+        other => other,
+    }
+}
+
 impl BitbucketClient {
     pub async fn list_deployments(
         &self,
@@ -167,6 +180,7 @@ impl BitbucketClient {
         slug: &str,
         env_uuid: &str,
     ) -> Result<Vec<EnvVariable>> {
+        let env_uuid = crate::api::pipeline::uuid_path(env_uuid);
         let path = format!("/repositories/{workspace}/{slug}/deployments_config/environments/{env_uuid}/variables?pagelen=100");
         self.fetch_all_pages(&path, usize::MAX).await
     }
@@ -180,6 +194,7 @@ impl BitbucketClient {
         value: &str,
         secured: bool,
     ) -> Result<EnvVariable> {
+        let env_uuid = crate::api::pipeline::uuid_path(env_uuid);
         let path = format!(
             "/repositories/{workspace}/{slug}/deployments_config/environments/{env_uuid}/variables"
         );
@@ -197,6 +212,8 @@ impl BitbucketClient {
         value: &str,
         secured: bool,
     ) -> Result<EnvVariable> {
+        let env_uuid = crate::api::pipeline::uuid_path(env_uuid);
+        let var_uuid = crate::api::pipeline::uuid_path(var_uuid);
         let path = format!("/repositories/{workspace}/{slug}/deployments_config/environments/{env_uuid}/variables/{var_uuid}");
         let body = serde_json::json!({"key": key, "value": value, "secured": secured});
         let raw = serde_json::to_string(&body)?;
@@ -210,6 +227,8 @@ impl BitbucketClient {
         env_uuid: &str,
         var_uuid: &str,
     ) -> Result<()> {
+        let env_uuid = crate::api::pipeline::uuid_path(env_uuid);
+        let var_uuid = crate::api::pipeline::uuid_path(var_uuid);
         let path = format!("/repositories/{workspace}/{slug}/deployments_config/environments/{env_uuid}/variables/{var_uuid}");
         self.send_empty(reqwest::Method::DELETE, &path, None).await
     }
@@ -221,6 +240,7 @@ impl BitbucketClient {
         env_uuid: &str,
         commit: &str,
     ) -> Result<Deployment> {
+        let env_uuid = crate::api::pipeline::uuid_path(env_uuid);
         let path = format!(
             "/repositories/{workspace}/{slug}/deployments_config/environments/{env_uuid}/changes"
         );
@@ -229,7 +249,9 @@ impl BitbucketClient {
                 "hash": commit
             }
         });
-        self.post(&path, &body).await
+        self.post(&path, &body)
+            .await
+            .map_err(deployment_endpoint_error)
     }
 
     /// Fetch a single deployment by UUID (`GET /deployments/{uuid}`).
@@ -242,7 +264,7 @@ impl BitbucketClient {
         slug: &str,
         deployment_uuid: &str,
     ) -> Result<Deployment> {
-        let uuid = crate::api::pipeline::ensure_uuid_braces(deployment_uuid);
+        let uuid = crate::api::pipeline::uuid_path_braced(deployment_uuid);
         let path = format!("/repositories/{workspace}/{slug}/deployments/{uuid}");
         self.send(reqwest::Method::GET, &path, None).await
     }
@@ -260,13 +282,15 @@ impl BitbucketClient {
         env_uuid: &str,
         limit: u32,
     ) -> Result<Vec<Deployment>> {
+        let env_uuid = crate::api::pipeline::uuid_path(env_uuid);
         let pagelen = limit.clamp(1, 100);
         let path = format!(
             "/repositories/{workspace}/{slug}/deployments_config/environments/{env_uuid}/changes?pagelen={pagelen}"
         );
         let all = self
             .fetch_all_pages::<Deployment>(&path, limit as usize)
-            .await?;
+            .await
+            .map_err(deployment_endpoint_error)?;
         Ok(all)
     }
 

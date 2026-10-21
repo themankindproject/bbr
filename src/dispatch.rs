@@ -107,7 +107,7 @@ pub(crate) async fn dispatch(cli: Cli) -> Result<()> {
             ConfigAction::Show { g } => commands::config::run_show(&g),
             ConfigAction::Set { key, value, g } => commands::config::run_set(&g, &key, &value),
         },
-        Some(Command::Context { action }) => dispatch_context(action),
+        Some(Command::Context { action }) => dispatch_context(action).await,
         Some(Command::Api {
             method,
             path,
@@ -586,8 +586,8 @@ async fn dispatch_repo(action: RepoAction) -> Result<()> {
             crate::cli::DefaultReviewersAction::Add { user, g } => {
                 commands::repo::add_default_reviewer(&g, &user).await
             }
-            crate::cli::DefaultReviewersAction::Remove { user, g } => {
-                commands::repo::remove_default_reviewer(&g, &user).await
+            crate::cli::DefaultReviewersAction::Remove { user, yes, g } => {
+                commands::repo::remove_default_reviewer(&g, &user, yes).await
             }
         },
     }
@@ -886,7 +886,7 @@ async fn dispatch_deploy_keys(action: DeployKeysAction) -> Result<()> {
     }
 }
 
-fn dispatch_context(action: ContextAction) -> Result<()> {
+async fn dispatch_context(action: ContextAction) -> Result<()> {
     match action {
         ContextAction::Create {
             name,
@@ -897,7 +897,7 @@ fn dispatch_context(action: ContextAction) -> Result<()> {
         } => commands::context::create(&g, &name, &workspace, slug.as_deref(), set_active),
         ContextAction::List { g } => commands::context::list(&g),
         ContextAction::Use { name, g } => commands::context::use_context(&g, &name),
-        ContextAction::Delete { name, g } => commands::context::delete(&g, &name),
+        ContextAction::Delete { name, yes, g } => commands::context::delete(&g, &name, yes).await,
     }
 }
 

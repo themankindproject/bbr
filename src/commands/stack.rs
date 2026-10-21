@@ -4,7 +4,7 @@ use crate::api::pr::{CreateBranchRef, CreateNamed, CreatePrRequest, MergePrReque
 use crate::cli::GlobalArgs;
 use crate::commands::{
     aborted, client, confirm_destructive, current_head, make_formatter, make_spinner, resolve_repo,
-    SpinnerGuard,
+    truncate, SpinnerGuard,
 };
 use crate::error::{BitbucketError, Result};
 use crate::output::theme::Theme;
@@ -40,6 +40,8 @@ pub struct StackPrStatus {
     pub state: Option<String>,
     pub parent_branch: String,
     pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -225,16 +227,16 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
         let ws = repo.workspace.clone();
         let slug = repo.slug.clone();
         async move {
-            let (state, url) = if let Some(id) = pr.pr_id {
+            let (state, url, error) = if let Some(id) = pr.pr_id {
                 match client.get_pr(&ws, &slug, id).await {
                     Ok(full_pr) => {
                         let url = full_pr.web_url().map(|u| u.to_string());
-                        (Some(full_pr.state), url)
+                        (Some(full_pr.state), url, None)
                     }
-                    Err(_) => (Some("UNKNOWN".to_string()), None),
+                    Err(e) => (None, None, Some(e.to_string())),
                 }
             } else {
-                (None, None)
+                (None, None, None)
             };
             StackPrStatus {
                 branch: pr.branch.clone(),
@@ -242,6 +244,7 @@ pub async fn list(g: &GlobalArgs) -> Result<()> {
                 state,
                 parent_branch: pr.parent_branch.clone(),
                 url,
+                error,
             }
         }
     });
@@ -838,7 +841,11 @@ fn render_stack_list(out: &StackListOut) -> String {
                 .pr_id
                 .map(|id| format!("PR #{}", id))
                 .unwrap_or_else(|| "No PR".to_string());
-            let state_str = pr.state.as_deref().unwrap_or("PENDING");
+            let state_str = match (&pr.error, pr.state.as_deref()) {
+                (Some(error), _) => format!("ERROR: {}", truncate(error, 40)),
+                (None, Some(state)) => state.to_string(),
+                (None, None) => "PENDING".to_string(),
+            };
             let arrow = if theme.unicode_enabled() { "→" } else { "->" };
             s.push_str(&format!(
                 "  {}. {:<16}  {:<8}  {:<10}  {arrow} {}\n",

@@ -1,0 +1,53 @@
+# Bitbucket Cloud OpenAPI evidence (swagger.v3.json, v2.300.201)
+
+## pullrequest.properties.reviewers (items are account, no approved/state)
+{"type":"array","description":"The list of users that were added as reviewers on this pull request when it was created. For performance reasons, the API only includes this list on a pull request's `self` URL.","items":{"$ref":"#/components/schemas/account"}}
+
+## pullrequest.properties.participants (items are participant, with approved/state)
+{"type":"array","description":"        The list of users that are collaborating on this pull request.\n        Collaborators are user that:\n\n        * are added to the pull request as a reviewer (part of the reviewers\n          list)\n        * are not explicit reviewers, but have commented on the pull request\n        * are not explicit reviewers, but have approved the pull request\n\n        Each user is wrapped in an object that indicates the user's role and\n        whether they have approved the pull request. For performance reasons,\n        the API only returns this list when an API requests a pull request by\n        id.\n        ","items":{"$ref":"#/components/schemas/participant"}}
+
+## participant schema
+{"allOf":[{"$ref":"#/components/schemas/object"},{"type":"object","title":"Participant","description":"Object describing a user's role on resources like commits or pull requests.","properties":{"user":{"$ref":"#/components/schemas/account"},"role":{"type":"string","enum":["PARTICIPANT","REVIEWER"]},"approved":{"type":"boolean"},"state":{"type":"string","enum":["approved","changes_requested",null]},"participated_on":{"type":"string","description":"The ISO8601 timestamp of the participant's action. For approvers, this is the time of their approval. For commenters and pull request reviewers who are not approvers, this is the time they last commented, or null if they have not commented.","format":"date-time"}},"additionalProperties":true}]}
+
+## branch schema (no merged property; ref schema also has none)
+{"allOf":[{"$ref":"#/components/schemas/ref"},{"type":"object","title":"Branch","description":"A branch object, representing a branch in a repository.","properties":{"merge_strategies":{"type":"array","description":"Available merge strategies for pull requests targeting this branch.","items":{"type":"string","enum":["merge_commit","squash","fast_forward","squash_fast_forward","rebase_fast_forward","rebase_merge"]}},"default_merge_strategy":{"type":"string","description":"The default merge strategy for pull requests targeting this branch."}},"additionalProperties":true}]}
+
+## ref schema
+{"type":"object","title":"Ref","description":"A ref object, representing a branch or tag in a repository.","properties":{"type":{"type":"string"},"links":{"type":"object","properties":{"self":{"type":"object","title":"Link","description":"A link to a resource related to this object.","properties":{"href":{"type":"string","format":"uri"},"name":{"type":"string"}},"additionalProperties":false},"commits":{"type":"object","title":"Link","description":"A link to a resource related to this object.","properties":{"href":{"type":"string","format":"uri"},"name":{"type":"string"}},"additionalProperties":false},"html":{"type":"object","title":"Link","description":"A link to a resource related to this object.","properties":{"href":{"type":"string","format":"uri"},"name":{"type":"string"}},"additionalProperties":false}},"additionalProperties":false},"name":{"type":"string","description":"The name of the ref."},"target":{"$ref":"#/components/schemas/commit"}},"required":["type"],"additionalProperties":true}
+
+## paths containing deploy (no deployments_config/.../changes)
+/repositories/{workspace}/{repo_slug}/deploy-keys
+/repositories/{workspace}/{repo_slug}/deploy-keys/{key_id}
+/repositories/{workspace}/{repo_slug}/deployments
+/repositories/{workspace}/{repo_slug}/deployments/{deployment_uuid}
+/repositories/{workspace}/{repo_slug}/deployments_config/environments/{environment_uuid}/variables
+/repositories/{workspace}/{repo_slug}/deployments_config/environments/{environment_uuid}/variables/{variable_uuid}
+/workspaces/{workspace}/projects/{project_key}/deploy-keys
+/workspaces/{workspace}/projects/{project_key}/deploy-keys/{key_id}
+
+## paths containing changes
+/repositories/{workspace}/{repo_slug}/environments/{environment_uuid}/changes
+/repositories/{workspace}/{repo_slug}/pullrequests/{pull_request_id}/request-changes
+
+## environments/{uuid}/changes operation
+{"summary":"Update an environment","description":"Update an environment","hasRequestBody":false,"responses":["202","404"]}
+
+## diffstat response schema (paginated)
+{"path":"/repositories/{workspace}/{repo_slug}/diffstat/{spec}","get":{"$ref":"#/components/schemas/paginated_diffstats"}}
+{"path":"/repositories/{workspace}/{repo_slug}/pullrequests/{pull_request_id}/diffstat","get":null}
+
+## pipeline_selector.type enum
+{"enum":["branches","tags","bookmarks","default","custom"],"type":"string","description":"The type of selector."}
+
+## pipeline_schedule_post_request_body
+{"allOf":[{"$ref":"#/components/schemas/object"},{"additionalProperties":true,"type":"object","title":"Request body for Pipeline Schedule POST request","properties":{"target":{"type":"object","description":"The target on which the schedule will be executed.","properties":{"selector":{"$ref":"#/components/schemas/pipeline_selector"},"ref_name":{"type":"string","description":"The name of the reference."},"ref_type":{"type":"string","description":"The type of reference (branch only).","enum":["branch"]}},"required":["selector","ref_name","ref_type"]},"enabled":{"type":"boolean","description":"Whether the schedule is enabled."},"cron_pattern":{"type":"string","description":"The cron expression with second precision (7 fields) that the schedule applies. For example, for expression: 0 0 12 * * ? *, will execute at 12pm UTC every day."}},"required":["target","cron_pattern"]}]}
+
+Deployment environment internal endpoints
+-----------------------------------------
+The published Pipelines API exposes only the environment *variables*
+(`/deployments_config/environments/{uuid}/variables`). Atlassian staff on the
+community forum: "we've released these to the public API now ... Our internal
+endpoints do not have a deprecation policy." bbr uses the internal
+`/deployments_config/environments/{uuid}/changes` endpoint for trigger/history;
+it is kept, and 404s now explain the dependency and point at `bbr ci trigger`.
+https://community.atlassian.com/forums/Bitbucket-questions/How-to-get-deployment-environments-variables/qaq-p/1193946

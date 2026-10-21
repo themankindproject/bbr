@@ -216,7 +216,7 @@ impl BitbucketClient {
         crate::log_debug!("updating issue {id} (GET-then-PUT, no ETag support)");
         let current = self.get_issue(workspace, slug, id).await?;
         let path = format!("/repositories/{workspace}/{slug}/issues/{id}");
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "title": title.unwrap_or(&current.title),
             "content": {
                 "raw": content.unwrap_or_else(|| {
@@ -227,11 +227,19 @@ impl BitbucketClient {
             "kind": kind.unwrap_or(&current.kind),
             "priority": priority.unwrap_or(&current.priority),
         });
-        if let Some(a) = assignee {
-            let mut b = body;
-            b["assignee"] = serde_json::json!({"nickname": a});
-            let raw = serde_json::to_string(&b)?;
-            return self.send(reqwest::Method::PUT, &path, Some(&raw)).await;
+        // Preserve the current assignee when the caller didn't change it.
+        // Omitting the field made a PUT clear it (depending on server
+        // semantics) while the command reported success.
+        let assignee_value = match assignee {
+            Some(a) => Some(serde_json::json!({"nickname": a})),
+            None => current.assignee.as_ref().map(|u| {
+                serde_json::json!({
+                    "nickname": u.nickname.as_deref().unwrap_or(&u.display_name)
+                })
+            }),
+        };
+        if let Some(value) = assignee_value {
+            body["assignee"] = value;
         }
         let raw = serde_json::to_string(&body)?;
         self.send(reqwest::Method::PUT, &path, Some(&raw)).await

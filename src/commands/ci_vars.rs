@@ -56,7 +56,7 @@ pub async fn set(
     key: &str,
     value: Option<&str>,
     from_stdin: bool,
-    secured: bool,
+    secured: Option<bool>,
 ) -> Result<()> {
     let repo = resolve_repo(g)?;
     let api = client(g)?;
@@ -80,6 +80,10 @@ pub async fn set(
 
     let fmt = make_formatter(g);
     if let Some(existing) = vars.iter().find(|v| v.key == key) {
+        // Preserve the current setting unless the caller explicitly supplied
+        // `--secured`/`--secured=false`. Sending the default `false` turned a
+        // secured variable into plaintext on every value update.
+        let secured = crate::commands::preserved_secured(secured, existing.secured);
         let spinner2 = SpinnerGuard::new(make_spinner(g.json, g.quiet));
         spinner2.set_message(format!("Updating {key}..."));
         api.update_pipeline_variable(
@@ -98,8 +102,14 @@ pub async fn set(
     } else {
         let spinner2 = SpinnerGuard::new(make_spinner(g.json, g.quiet));
         spinner2.set_message(format!("Creating {key}..."));
-        api.create_pipeline_variable(&repo.workspace, &repo.slug, key, value, secured)
-            .await?;
+        api.create_pipeline_variable(
+            &repo.workspace,
+            &repo.slug,
+            key,
+            value,
+            secured.unwrap_or(false),
+        )
+        .await?;
         spinner2.finish();
         let out = serde_json::json!({"action": "created", "key": key});
         let human = format!("Created {key}");

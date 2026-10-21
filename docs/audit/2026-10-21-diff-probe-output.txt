@@ -1,0 +1,43 @@
+
+running 8 tests
+
+PROBE 1: deletion line whose content starts with "-- "
+  file status=Modified old="old sql comment" new="q.sql" binary=false hunks=1 +1 -0
+    hunk[0] lines=2
+      kind=Context old=Some(1) new=Some(1) content="SELECT 1;"
+      kind=Addition old=None new=Some(2) content="SELECT 2;"
+.
+PROBE 2: context line whose content is "@@ -9,9 +9,9 @@"
+  file status=Modified old="doc.md" new="doc.md" binary=false hunks=2 +0 -0
+    hunk[0] lines=1
+      kind=Context old=Some(1) new=Some(1) content="context before"
+    hunk[1] lines=1
+      kind=Context old=Some(9) new=Some(9) content="context after"
+.
+PROBE 3: unquoted git header with a directory named b/
+  OBSERVED old="x" new="y" (expected new == "b/y")
+.
+PROBE 4: empty file added (git emits no ---/+++ lines)
+  file status=Added old="empty.txt" new="empty.txt" binary=true hunks=0 +0 -0
+.
+PROBE 5: --file 1 followed by a pathspec
+  OBSERVED selected=1 rebuilt_has_diff_git=false filtered_bytes=0 filtered_has_bar=false
+.
+PROBE 6: --context usize::MAX in the renderer
+
+thread 'probe_6_context_usize_max_overflows' (40560) panicked at src/diff/renderer.rs:2041:19:
+attempt to add with overflow
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+  OBSERVED panic=true
+.
+PROBE 7: hunk start at u32::MAX plus one body line
+
+thread 'probe_7_hunk_line_counter_overflows' (40561) panicked at src/diff/parser.rs:455:17:
+attempt to add with overflow
+  OBSERVED panic=true
+.
+PROBE 8: --file 0
+  OBSERVED selectors=0 selected=1 (empty selector list means 'show all')
+.
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

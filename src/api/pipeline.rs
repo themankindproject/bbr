@@ -234,7 +234,35 @@ pub fn ensure_uuid_braces(s: &str) -> String {
     }
 }
 
+/// A UUID normalized for use as a path segment: braces added and
+/// percent-encoded. UUIDs come from user input; interpolating them raw let a
+/// value such as `../variables` change the endpoint.
+pub fn uuid_path(s: &str) -> String {
+    // Accept already-encoded braces so re-normalizing a path is idempotent.
+    // Braces are not added: some endpoints accept plain UUIDs, and tests /
+    // callers may pass an opaque identifier. Encoding still prevents path
+    // traversal and query injection.
+    let normalized = s
+        .replace("%7B", "{")
+        .replace("%7b", "{")
+        .replace("%7D", "}")
+        .replace("%7d", "}");
+    crate::api::url_encode(normalized.trim())
+}
+
+/// Like [`uuid_path`], but adds braces first (endpoints such as
+/// `GET /deployments/{uuid}` require them).
+pub fn uuid_path_braced(s: &str) -> String {
+    let normalized = s
+        .replace("%7B", "{")
+        .replace("%7b", "{")
+        .replace("%7D", "}")
+        .replace("%7d", "}");
+    crate::api::url_encode(&ensure_uuid_braces(&normalized))
+}
+
 fn steps_path(workspace: &str, slug: &str, uuid: &str) -> String {
+    let uuid = uuid_path(uuid);
     format!(
         "/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/?\
          fields=values.uuid,values.name,values.state,values.duration_in_seconds,\
@@ -291,6 +319,7 @@ impl BitbucketClient {
     }
 
     pub async fn get_pipeline(&self, workspace: &str, slug: &str, uuid: &str) -> Result<Pipeline> {
+        let uuid = uuid_path(uuid);
         let path = format!(
             "/repositories/{workspace}/{slug}/pipelines/{uuid}?\
              fields=uuid,build_number,state,result,duration_in_seconds,\
@@ -347,6 +376,7 @@ impl BitbucketClient {
         uuid: &str,
         step: &str,
     ) -> Result<StepLog> {
+        let (uuid, step) = (uuid_path(uuid), uuid_path(step));
         let path = format!("/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/{step}/log");
         let text = self.send_raw(reqwest::Method::GET, &path, "*/*").await?;
         Ok(StepLog { text })
@@ -363,6 +393,7 @@ impl BitbucketClient {
         step: &str,
         start_byte: u64,
     ) -> Result<String> {
+        let (uuid, step) = (uuid_path(uuid), uuid_path(step));
         let path = format!("/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/{step}/log");
         self.send_raw_range(&path, start_byte).await
     }
@@ -379,6 +410,7 @@ impl BitbucketClient {
         step: &str,
         start_byte: u64,
     ) -> Result<(String, bool)> {
+        let (uuid, step) = (uuid_path(uuid), uuid_path(step));
         let path = format!("/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/{step}/log");
         self.send_raw_range_checked(&path, start_byte).await
     }
@@ -414,11 +446,13 @@ impl BitbucketClient {
         slug: &str,
         uuid: &str,
     ) -> Result<Pipeline> {
+        let uuid = uuid_path(uuid);
         let path = format!("/repositories/{workspace}/{slug}/pipelines/{uuid}/rerun");
         self.send(reqwest::Method::POST, &path, Some("null")).await
     }
 
     pub async fn stop_pipeline(&self, workspace: &str, slug: &str, uuid: &str) -> Result<()> {
+        let uuid = uuid_path(uuid);
         let path = format!("/repositories/{workspace}/{slug}/pipelines/{uuid}/stopPipeline");
         let _: serde_json::Value = self
             .send(reqwest::Method::POST, &path, Some("null"))
@@ -434,6 +468,7 @@ impl BitbucketClient {
         uuid: &str,
         step: &str,
     ) -> Result<TestReport> {
+        let (uuid, step) = (uuid_path(uuid), uuid_path(step));
         let path =
             format!("/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/{step}/test_reports");
         self.send(reqwest::Method::GET, &path, None).await
@@ -448,6 +483,7 @@ impl BitbucketClient {
         step: &str,
         limit: u32,
     ) -> Result<Vec<TestCase>> {
+        let (uuid, step) = (uuid_path(uuid), uuid_path(step));
         let pagelen = limit.min(100);
         let path = format!(
             "/repositories/{workspace}/{slug}/pipelines/{uuid}/steps/{step}/test_cases?\
@@ -488,6 +524,7 @@ impl BitbucketClient {
         value: &str,
         secured: bool,
     ) -> Result<PipelineVariable> {
+        let uuid = uuid_path(uuid);
         let path = format!("/repositories/{workspace}/{slug}/pipelines_config/variables/{uuid}");
         let body = serde_json::json!({"key": key, "value": value, "secured": secured});
         let raw = serde_json::to_string(&body)?;
@@ -500,6 +537,7 @@ impl BitbucketClient {
         slug: &str,
         uuid: &str,
     ) -> Result<()> {
+        let uuid = uuid_path(uuid);
         let path = format!("/repositories/{workspace}/{slug}/pipelines_config/variables/{uuid}");
         self.send_empty(reqwest::Method::DELETE, &path, None).await
     }
@@ -525,21 +563,26 @@ impl BitbucketClient {
         cron: &str,
         branch: &str,
         pipeline_name: Option<&str>,
+        enabled: bool,
     ) -> Result<PipelineSchedule> {
         let path = format!("/repositories/{workspace}/{slug}/pipelines_config/schedules/");
-        let mut target = serde_json::json!({
-            "ref_name": branch,
-            "ref_type": "branch",
-            "selector": {
-                "type": pipeline_name.unwrap_or("branches"),
-            }
+        // The selector `type` is an enum (branches/tags/bookmarks/default/
+        // custom); the pipeline name belongs in `pattern` with type `custom`.
+        // Putting the name in `type` made every `--pipeline` schedule invalid.
+        let mut selector = serde_json::json!({
+            "type": if pipeline_name.is_some() { "custom" } else { "branches" },
         });
         if let Some(pattern) = pipeline_name {
-            target["selector"]["pattern"] = serde_json::json!(pattern);
+            selector["pattern"] = serde_json::json!(pattern);
         }
+        let target = serde_json::json!({
+            "ref_name": branch,
+            "ref_type": "branch",
+            "selector": selector,
+        });
         let body = serde_json::json!({
             "target": target,
-            "enabled": true,
+            "enabled": enabled,
             "cron_pattern": cron,
         });
         self.post(&path, &body).await
@@ -552,6 +595,7 @@ impl BitbucketClient {
         slug: &str,
         uuid: &str,
     ) -> Result<PipelineSchedule> {
+        let uuid = uuid_path(uuid);
         let path = format!("/repositories/{workspace}/{slug}/pipelines_config/schedules/{uuid}");
         self.send(reqwest::Method::GET, &path, None).await
     }
@@ -565,6 +609,7 @@ impl BitbucketClient {
         cron: Option<&str>,
         enabled: Option<bool>,
     ) -> Result<PipelineSchedule> {
+        let uuid = uuid_path(uuid);
         let path = format!("/repositories/{workspace}/{slug}/pipelines_config/schedules/{uuid}");
         let mut body = serde_json::Map::new();
         if let Some(c) = cron {
@@ -582,6 +627,7 @@ impl BitbucketClient {
 
     /// `DELETE /repositories/{ws}/{slug}/pipelines_config/schedules/{uuid}`
     pub async fn delete_schedule(&self, workspace: &str, slug: &str, uuid: &str) -> Result<()> {
+        let uuid = uuid_path(uuid);
         let path = format!("/repositories/{workspace}/{slug}/pipelines_config/schedules/{uuid}");
         self.send_empty(reqwest::Method::DELETE, &path, None).await
     }
@@ -594,6 +640,7 @@ impl BitbucketClient {
         uuid: &str,
         limit: u32,
     ) -> Result<Vec<ScheduleExecution>> {
+        let uuid = uuid_path(uuid);
         let pagelen = limit.min(100);
         let path = format!(
             "/repositories/{workspace}/{slug}/pipelines_config/schedules/{uuid}/executions?\
@@ -845,6 +892,16 @@ mod tests {
     #[test]
     fn normalize_uuid_trims_whitespace() {
         assert_eq!(normalize_uuid("  {abc-123}  "), "abc-123");
+    }
+
+    #[test]
+    fn uuid_path_encodes_braces_and_is_idempotent() {
+        assert_eq!(uuid_path("abc"), "abc");
+        assert_eq!(uuid_path("{abc}"), "%7Babc%7D");
+        assert_eq!(uuid_path("%7Babc%7D"), "%7Babc%7D");
+        assert_eq!(uuid_path("  {abc}  "), "%7Babc%7D");
+        assert_eq!(uuid_path("../../variables"), "..%2F..%2Fvariables");
+        assert_eq!(uuid_path_braced("abc"), "%7Babc%7D");
     }
 
     #[test]

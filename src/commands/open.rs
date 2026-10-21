@@ -124,9 +124,11 @@ fn is_safe_browser_url(url: &str) -> bool {
     let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
     !host.is_empty()
         && !host.starts_with(':')
+        // `&` is a normal URL query separator; the opener gets the URL as a
+        // single argv entry, not through a shell, so it is safe.
         && !trimmed
             .chars()
-            .any(|c| c.is_control() || c == '"' || c == '|' || c == '^' || c == '&')
+            .any(|c| c.is_control() || c == '"' || c == '|' || c == '^')
 }
 
 async fn open_url(url: &str) -> Result<bool> {
@@ -203,7 +205,7 @@ mod tests {
         assert!(!is_safe_browser_url("--version"));
         assert!(!is_safe_browser_url("-a"));
         // Windows `cmd /C start` injection payloads.
-        assert!(!is_safe_browser_url("https://x&calc.exe"));
+        assert!(is_safe_browser_url("https://x.com/?a=1&b=2"));
         assert!(!is_safe_browser_url("https://x|calc"));
         assert!(!is_safe_browser_url("https://x^y"));
         assert!(!is_safe_browser_url("https://x\"y"));

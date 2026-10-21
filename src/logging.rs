@@ -57,6 +57,11 @@ fn parse_level(s: &str) -> Option<Level> {
     }
 }
 
+/// Silence all logging (set by `--quiet`).
+pub fn silence() {
+    MAX_LEVEL.store(Level::Off as u8, Ordering::Relaxed);
+}
+
 /// Configure the logger from the `-v` count, honouring `RUST_LOG`.
 ///
 /// `RUST_LOG` accepts a bare level (`debug`). The `target=level` directive

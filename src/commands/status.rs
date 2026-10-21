@@ -4,7 +4,7 @@ use serde::Serialize;
 use time::OffsetDateTime;
 
 use crate::api::pipeline::{Pipeline, PipelineStep, StepSummary};
-use crate::api::pr::{Participant, PrState, PullRequest};
+use crate::api::pr::{PrState, PullRequest};
 use crate::cli::GlobalArgs;
 use crate::commands::{
     client, current_head, human_duration, make_formatter, make_spinner, resolve_repo, truncate,
@@ -16,14 +16,17 @@ use crate::output::table::Table;
 use crate::output::theme::Theme;
 use futures::StreamExt;
 
-/// Cache type shared by `status --watch` ticks: PR id → (diffstat, conflicts).
+/// Cache type shared by `status --watch` ticks: PR id → (diffstat,
+/// conflicts, fetched_at).
 ///
-/// Diffstats and conflict sets are only re-fetched for PRs not seen in a
-/// previous tick. Without this, each 5s watch tick spends 2 extra API calls
-/// per open PR — roughly 1,400 requests/hour for a branch with two PRs,
-/// enough to exhaust Bitbucket's hourly quota on its own.
-type PrExtrasCache =
-    std::sync::Mutex<std::collections::HashMap<u64, (Option<serde_json::Value>, bool)>>;
+/// Diffstats and conflict sets are reused for [`PR_EXTRAS_TTL`]. Without a
+/// TTL, a PR that started conflicting after the first tick kept displaying
+/// "No conflicts" for the rest of the session. Failed fetches are not cached,
+/// so a transient error is retried on the next tick.
+const PR_EXTRAS_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+type PrExtrasCache = std::sync::Mutex<
+    std::collections::HashMap<u64, (Option<serde_json::Value>, Option<bool>, std::time::Instant)>,
+>;
 
 #[derive(Debug, Serialize)]
 pub struct BuildStatusSummary {
@@ -183,7 +186,7 @@ async fn fetch_branch_status(
         s.set_message("Fetching branch status...");
     }
 
-    let (prs, pipeline, commit_statuses_page) = tokio::try_join!(
+    let (prs, pipeline, commit_statuses) = tokio::try_join!(
         client.prs_for_branch(&repo_id.workspace, &repo_id.slug, &head.branch),
         client.latest_pipeline(&repo_id.workspace, &repo_id.slug, Some(&head.branch)),
         async {
@@ -192,7 +195,7 @@ async fn fetch_branch_status(
                 .await
             {
                 // Local HEAD may not exist on Bitbucket yet (unpushed / rewritten).
-                Err(BitbucketError::NotFound(_)) => Ok(crate::api::Paginated::default()),
+                Err(BitbucketError::NotFound(_)) => Ok(Vec::new()),
                 other => other,
             }
         },
@@ -206,11 +209,13 @@ async fn fetch_branch_status(
     let (raw_steps, pr_extras) = tokio::join!(
         async {
             match &pipeline {
-                Some(p) => client
-                    .list_all_steps(&repo_id.workspace, &repo_id.slug, &p.uuid)
-                    .await
-                    .unwrap_or_default(),
-                None => Vec::new(),
+                // A failed step listing must not look like "no steps".
+                Some(p) => {
+                    client
+                        .list_all_steps(&repo_id.workspace, &repo_id.slug, &p.uuid)
+                        .await
+                }
+                None => Ok(Vec::new()),
             }
         },
         async {
@@ -218,19 +223,21 @@ async fn fetch_branch_status(
             // extras cache; watch ticks reuse prior results. Fan-out is
             // bounded at 5 concurrent (mirrors the dashboard cap) instead of
             // an unbounded join_all.
+            let now = std::time::Instant::now();
             let cached_ids: std::collections::HashSet<u64> = match extras_cache {
                 Some(cache) => {
-                    let guard = match cache.lock() {
+                    let mut guard = match cache.lock() {
                         Ok(g) => g,
                         Err(e) => e.into_inner(),
                     };
+                    guard.retain(|_, (_, _, at)| now.duration_since(*at) < PR_EXTRAS_TTL);
                     guard.keys().copied().collect()
                 }
                 None => Default::default(),
             };
             let uncached: Vec<&crate::api::pr::PullRequest> =
                 prs.iter().filter(|p| !cached_ids.contains(&p.id)).collect();
-            let fetched: Vec<(u64, Option<serde_json::Value>, bool)> =
+            let fetched: Vec<(u64, Option<serde_json::Value>, Option<bool>)> =
                 futures::stream::iter(uncached.iter().map(|p| {
                     let client = &client;
                     let workspace = &repo_id.workspace;
@@ -241,49 +248,48 @@ async fn fetch_branch_status(
                             client.pr_diffstat(workspace, slug, id),
                             client.pr_conflicts(workspace, slug, id, 10),
                         );
-                        (
-                            id,
-                            diffstat.ok(),
-                            matches!(&conflicts, Ok(c) if !c.is_empty()),
-                        )
+                        (id, diffstat.ok(), conflicts.ok().map(|c| !c.is_empty()))
                     }
                 }))
                 .buffer_unordered(5)
                 .collect()
                 .await;
 
-            // Persist fresh results into the cache, then assemble per-PR rows.
+            // Persist only complete, successful results. A failed fetch stays
+            // uncached so the next tick retries it instead of showing a
+            // fabricated "No conflicts".
             if let Some(cache) = extras_cache {
                 let mut guard = match cache.lock() {
                     Ok(g) => g,
                     Err(e) => e.into_inner(),
                 };
                 for (id, stat, has_conflicts) in &fetched {
-                    guard.insert(*id, (stat.clone(), *has_conflicts));
+                    if stat.is_some() && has_conflicts.is_some() {
+                        guard.insert(*id, (stat.clone(), *has_conflicts, now));
+                    }
                 }
             }
-            let mut results: Vec<(u64, Option<serde_json::Value>, bool)> = Vec::new();
+            let mut results: Vec<(u64, Option<serde_json::Value>, Option<bool>)> = Vec::new();
             for p in &prs {
                 if let Some(cache) = extras_cache {
                     let guard = match cache.lock() {
                         Ok(g) => g,
                         Err(e) => e.into_inner(),
                     };
-                    if let Some((stat, has_conflicts)) = guard.get(&p.id) {
+                    if let Some((stat, has_conflicts, _)) = guard.get(&p.id) {
                         results.push((p.id, stat.clone(), *has_conflicts));
                         continue;
                     }
                 }
                 if let Some(row) = fetched.iter().find(|(id, _, _)| *id == p.id) {
                     results.push((row.0, row.1.clone(), row.2));
-                } else {
-                    // Cache-less mode with nothing fetched for this PR — skip.
                 }
             }
             results
         },
     );
 
+    let raw_steps = raw_steps?;
     let mut pr_summaries: Vec<BranchPrSummary> = prs.iter().map(pr_summary).collect();
     for summary in &mut pr_summaries {
         if let Some((_, diffstat, has_conflicts)) =
@@ -294,14 +300,13 @@ async fn fetch_branch_status(
                 summary.lines_added = Some(added);
                 summary.lines_removed = Some(removed);
             }
-            summary.conflicts = Some(*has_conflicts);
+            summary.conflicts = *has_conflicts;
         }
     }
 
     let pipeline_summary = pipeline.as_ref().map(|p| pipeline_summary(p, &raw_steps));
 
-    let commit_statuses: Vec<BuildStatusSummary> = commit_statuses_page
-        .values
+    let commit_statuses: Vec<BuildStatusSummary> = commit_statuses
         .iter()
         .map(|s| BuildStatusSummary {
             state: s.state.clone(),
@@ -335,8 +340,9 @@ pub async fn run_watch(g: &GlobalArgs, interval_secs: u64) -> Result<()> {
     let is_tty = io::stdout().is_terminal();
     loop {
         // Re-read branch/commit from git each tick so new commits and
-        // branch switches show up without restarting the watch loop.
-        let _ = crate::commands::refresh_head();
+        // branch switches show up without restarting the watch loop. A git
+        // failure is surfaced instead of silently keeping stale data.
+        crate::commands::refresh_head()?;
         // Run status and capture output
         let result = run_inner_with_cache(g, Some(&extras_cache)).await;
         match result {
@@ -505,7 +511,7 @@ async fn run_inner_with_cache(
             pipeline_summary,
             commit_statuses,
         },
-        _client,
+        client,
     ) = fetch_branch_status(g, Some(&spinner), extras_cache, None).await?;
 
     spinner.finish();
@@ -522,7 +528,7 @@ async fn run_inner_with_cache(
         pipeline: pipeline_summary,
         commit_statuses,
         suggested_commands,
-        rate_limit_remaining: None, // filled in by callers with a client
+        rate_limit_remaining: client.rate_limit_remaining(),
     })
 }
 
@@ -612,65 +618,12 @@ fn pr_summary(pr: &PullRequest) -> BranchPrSummary {
 }
 
 fn reviewers(pr: &PullRequest) -> Vec<ReviewerSummary> {
-    // Roll up everyone whose approval state matters:
-    // - formal reviewers (requested reviewers), always
-    // - any participant who approved or requested changes (Bitbucket marks
-    //   web-UI approvers as role=PARTICIPANT when they aren't a listed
-    //   reviewer — dropping them made PRs show "unapproved" after an
-    //   approval, and let batch merge-approved skip approved PRs)
-    //
-    // The same person can appear in BOTH lists with different field
-    // coverage; when merging, the approval/requested state from either
-    // entry wins over a bare "pending" reviewer entry.
-    let mut merged: Vec<(Participant, bool, Option<String>)> = Vec::new(); // (identity, approved, state)
-
-    let mut upsert = |p: &Participant| {
-        if let Some(entry) = merged.iter_mut().find(|(s, _, _)| s.same_person(p)) {
-            entry.1 |= p.is_approved();
-            if entry.2.is_none() {
-                entry.2 = p.state.clone();
-            }
-        } else {
-            merged.push((p.clone(), p.is_approved(), p.state.clone()));
-        }
-    };
-
-    for r in pr.reviewers.iter() {
-        upsert(r);
-    }
-    for p in pr.participants.iter() {
-        let matters =
-            p.role.eq_ignore_ascii_case("REVIEWER") || p.is_approved() || p.is_changes_requested();
-        if matters {
-            upsert(p);
-        }
-    }
-
-    merged
+    pr.reviewer_summaries()
         .into_iter()
-        .map(|(identity, approved, state)| ReviewerSummary {
-            display_name: {
-                let name = if identity.display_name.is_empty() {
-                    identity
-                        .user
-                        .as_ref()
-                        .map(|u| u.display_name.clone())
-                        .unwrap_or_default()
-                } else {
-                    identity.display_name
-                };
-                // Fields-filtered API responses can omit every name field;
-                // fall back to nickname, then a generic-but-honest label.
-                if name.is_empty() {
-                    identity
-                        .nickname
-                        .unwrap_or_else(|| "(reviewer)".to_string())
-                } else {
-                    name
-                }
-            },
-            approved,
-            state,
+        .map(|r| ReviewerSummary {
+            display_name: r.display_name,
+            approved: r.approved,
+            state: r.state,
         })
         .collect()
 }
@@ -965,7 +918,7 @@ fn render_pr_section(
         let conflict_colored = match pr.conflicts {
             Some(true) => theme.error("Conflicts detected").into_owned(),
             Some(false) => theme.success("No conflicts").into_owned(),
-            None => "No conflicts".to_string(),
+            None => theme.warn("Conflict status unknown").into_owned(),
         };
 
         s.push_str(&format!(
@@ -1801,6 +1754,44 @@ mod tests {
         let short = render_short(&out);
         assert!(short.contains("#1"));
         assert!(short.contains("SUCCESSFUL"));
+    }
+
+    #[test]
+    fn unknown_conflict_state_is_not_rendered_as_clean() {
+        let out = StatusOut {
+            repo: RepoSummary {
+                workspace: "w".into(),
+                slug: "r".into(),
+                full_name: "w/r".into(),
+            },
+            branch: "main".into(),
+            commit: "abc".into(),
+            pr: None,
+            open_prs: vec![BranchPrSummary {
+                id: 1,
+                state: "OPEN".into(),
+                title: "fix".into(),
+                source: "f".into(),
+                destination: "m".into(),
+                url: None,
+                author: None,
+                comment_count: 0,
+                task_count: 0,
+                reviewers: vec![],
+                lines_added: None,
+                lines_removed: None,
+                created_on: None,
+                description: None,
+                conflicts: None,
+            }],
+            pipeline: None,
+            commit_statuses: vec![],
+            suggested_commands: vec![],
+            rate_limit_remaining: None,
+        };
+        let human = render_human(&out);
+        assert!(human.contains("Conflict status unknown"), "{human}");
+        assert!(!human.contains("No conflicts"), "{human}");
     }
 
     #[test]

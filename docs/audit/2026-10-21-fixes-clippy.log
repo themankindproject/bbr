@@ -1,0 +1,3 @@
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.93s
+
+Summary: cargo fmt --check clean; cargo clippy -D warnings exit 0.

@@ -1,6 +1,6 @@
 //! Filesystem paths and credential/config file parsing.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -53,6 +53,9 @@ pub fn config_path() -> Option<PathBuf> {
 pub struct CredentialsFile {
     #[serde(default)]
     pub default: CredentialProfile,
+    /// Unknown top-level keys are preserved across reads and writes.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, toml::Value>,
 }
 
 /// A single credential profile (only `default` is used in v0.1).
@@ -67,6 +70,9 @@ pub struct CredentialProfile {
     /// Optional workspace override; otherwise inferred from git remote.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
+    /// Unknown profile keys (e.g. future auth methods) are preserved.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, toml::Value>,
 }
 
 impl CredentialProfile {
@@ -89,6 +95,8 @@ struct SerializableCredentialProfile<'a> {
     token: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     workspace: Option<&'a str>,
+    #[serde(flatten)]
+    extra: &'a BTreeMap<String, toml::Value>,
 }
 
 impl CredentialProfile {
@@ -97,6 +105,7 @@ impl CredentialProfile {
             username: &self.username,
             token: self.secret(),
             workspace: self.workspace.as_deref(),
+            extra: &self.extra,
         }
     }
 }
@@ -163,12 +172,15 @@ fn read_credentials_file(path: &Path) -> Result<CredentialsFile> {
 #[derive(Serialize)]
 struct SerializableCredentialsFile<'a> {
     default: SerializableCredentialProfile<'a>,
+    #[serde(flatten)]
+    extra: &'a BTreeMap<String, toml::Value>,
 }
 
 impl CredentialsFile {
     fn to_serializable(&self) -> SerializableCredentialsFile<'_> {
         SerializableCredentialsFile {
             default: self.default.to_serializable(),
+            extra: &self.extra,
         }
     }
 }
@@ -256,6 +268,9 @@ pub struct ConfigFile {
     /// UI preferences (theme, …). Optional so pre-existing configs parse.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui: Option<UiSection>,
+    /// Unknown top-level keys are preserved across writes.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, toml::Value>,
 }
 
 /// `[ui]` table in `config.toml`.
@@ -264,6 +279,8 @@ pub struct UiSection {
     /// Theme preset: `"dark"`, `"light"`, or `"auto"` (default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, toml::Value>,
 }
 
 impl ConfigFile {
@@ -279,6 +296,8 @@ pub struct ContextEntry {
     pub workspace: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, toml::Value>,
 }
 
 /// Cache for the parsed `config.toml`.
@@ -395,7 +414,9 @@ mod tests {
                 username: "u".into(),
                 token: Some(SecretString::from("t")),
                 workspace: None,
+                extra: Default::default(),
             },
+            extra: Default::default(),
         };
         let path = save_credentials(&creds).unwrap();
         let mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
@@ -431,12 +452,14 @@ mod tests {
             active_context: Some("work".into()),
             contexts: HashMap::new(),
             ui: None,
+            extra: Default::default(),
         };
         cfg.contexts.insert(
             "work".into(),
             ContextEntry {
                 workspace: "mycompany".into(),
                 slug: Some("main-repo".into()),
+                extra: Default::default(),
             },
         );
         cfg.contexts.insert(
@@ -444,6 +467,7 @@ mod tests {
             ContextEntry {
                 workspace: "myuser".into(),
                 slug: None,
+                extra: Default::default(),
             },
         );
 
@@ -512,10 +536,86 @@ workspace = "devteam"
     }
 
     #[test]
+    fn unknown_config_keys_survive_a_save() {
+        let _guard = env_lock();
+        let tmp = tempdir().unwrap();
+        let bb_dir = tmp.path().join(APP_NAME);
+        fs::create_dir_all(&bb_dir).unwrap();
+        let f = bb_dir.join(CONFIG_FILE);
+        std::fs::write(
+            &f,
+            r#"
+active_context = "work"
+
+[future]
+flag = true
+
+[ui]
+theme = "light"
+font = "mono"
+
+[contexts.work]
+workspace = "w"
+slug = "s"
+retention_days = 30
+"#,
+        )
+        .unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+
+        let mut cfg = load_config().unwrap();
+        cfg.active_context = Some("work".into());
+        save_config(&cfg).unwrap();
+
+        let raw = std::fs::read_to_string(&f).unwrap();
+        let saved: toml::Value = toml::from_str(&raw).unwrap();
+        assert_eq!(saved["future"]["flag"].as_bool(), Some(true));
+        assert_eq!(saved["ui"]["font"].as_str(), Some("mono"));
+        assert_eq!(
+            saved["contexts"]["work"]["retention_days"].as_integer(),
+            Some(30)
+        );
+        std::env::remove_var("XDG_CONFIG_HOME");
+    }
+
+    #[test]
+    fn unknown_credential_keys_survive_a_save() {
+        let _guard = env_lock();
+        let tmp = tempdir().unwrap();
+        let bb_dir = tmp.path().join(APP_NAME);
+        fs::create_dir_all(&bb_dir).unwrap();
+        let f = bb_dir.join(CREDENTIALS_FILE);
+        std::fs::write(
+            &f,
+            r#"
+[default]
+username = "u"
+token = "t"
+
+[future]
+mode = "sso"
+"#,
+        )
+        .unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+
+        let mut creds = load_credentials().unwrap().unwrap();
+        creds.default.username = "new-user".into();
+        save_credentials(&creds).unwrap();
+
+        let raw = std::fs::read_to_string(&f).unwrap();
+        let saved: toml::Value = toml::from_str(&raw).unwrap();
+        assert_eq!(saved["default"]["username"].as_str(), Some("new-user"));
+        assert_eq!(saved["future"]["mode"].as_str(), Some("sso"));
+        std::env::remove_var("XDG_CONFIG_HOME");
+    }
+
+    #[test]
     fn ui_section_survives_roundtrip() {
         let cfg = ConfigFile {
             ui: Some(UiSection {
                 theme: Some("light".into()),
+                extra: Default::default(),
             }),
             ..ConfigFile::default()
         };

@@ -8,7 +8,7 @@ use serde::Serialize;
 use crate::auth;
 use crate::cli::GlobalArgs;
 use crate::commands::{client, make_formatter};
-use crate::config::{self, CredentialProfile, CredentialsFile};
+use crate::config;
 use crate::error::{BitbucketError, Result};
 
 const API_TOKEN_URL: &str = "https://id.atlassian.com/manage-profile/security/api-tokens";
@@ -141,19 +141,20 @@ pub fn setup(
         return Err(BitbucketError::Usage("API token must not be empty".into()));
     }
 
-    let existing_workspace = if let Ok(Some(file)) = config::load_credentials() {
-        file.default.workspace.clone()
-    } else {
-        None
+    // Update the existing document rather than constructing a fresh one, so
+    // unknown keys (future auth methods, extra profiles) survive `auth setup`.
+    // A corrupt file is intentionally replaced: this command is the documented
+    // recovery path, and failing here would leave no way to repair it.
+    let mut creds = match config::load_credentials() {
+        Ok(Some(creds)) => creds,
+        Ok(None) => Default::default(),
+        Err(e) => {
+            crate::log_warn!("replacing unreadable credentials file: {e}");
+            Default::default()
+        }
     };
-
-    let profile = CredentialProfile {
-        username,
-        token: Some(SecretString::from(secret)),
-        workspace: existing_workspace,
-    };
-
-    let creds = CredentialsFile { default: profile };
+    creds.default.username = username;
+    creds.default.token = Some(SecretString::from(secret));
     let path = config::save_credentials(&creds)?;
     let out = serde_json::json!({
         "saved": true,

@@ -362,8 +362,10 @@ pub async fn permissions(g: &GlobalArgs) -> Result<()> {
         client.list_user_permissions(&repo.workspace, &repo.slug),
         client.list_group_permissions(&repo.workspace, &repo.slug),
     );
-    let users = users.unwrap_or_default();
-    let groups = groups.unwrap_or_default();
+    // Propagate failures: an empty permission table is indistinguishable
+    // from "nobody has access" and is a dangerous false negative.
+    let users = users?;
+    let groups = groups?;
     spinner.finish();
 
     let out = serde_json::json!({
@@ -468,7 +470,10 @@ pub async fn add_default_reviewer(g: &GlobalArgs, user: &str) -> Result<()> {
     make_formatter(g).print(&out, &format!("Added {user} as a default reviewer"))
 }
 
-pub async fn remove_default_reviewer(g: &GlobalArgs, user: &str) -> Result<()> {
+pub async fn remove_default_reviewer(g: &GlobalArgs, user: &str, yes: bool) -> Result<()> {
+    if !confirm_destructive(g, yes, &format!("Remove {user} from default reviewers?")).await? {
+        return aborted();
+    }
     let repo = resolve_repo(g)?;
     let client = client(g)?;
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));

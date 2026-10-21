@@ -680,22 +680,23 @@ pub async fn merge_check(g: &GlobalArgs, id: Option<u64>) -> Result<()> {
     )?;
     spinner.finish();
 
-    let approvals: Vec<String> = pr
-        .reviewers
+    // Approval state lives on `participants`; `reviewers` is the requested
+    // reviewer list. Merge them so a changes-requested participant blocks the
+    // merge even though it is not a reviewer entry.
+    let reviewer_states = pr.reviewer_summaries();
+    let approvals: Vec<String> = reviewer_states
         .iter()
-        .filter(|r| r.is_approved())
+        .filter(|r| r.approved)
         .map(|r| r.display_name.clone())
         .collect();
-    let pending_reviewers: Vec<String> = pr
-        .reviewers
+    let pending_reviewers: Vec<String> = reviewer_states
         .iter()
-        .filter(|r| !r.is_approved())
+        .filter(|r| r.pending)
         .map(|r| r.display_name.clone())
         .collect();
-    let changes_requested: Vec<String> = pr
-        .reviewers
+    let changes_requested: Vec<String> = reviewer_states
         .iter()
-        .filter(|r| r.is_changes_requested())
+        .filter(|r| r.changes_requested)
         .map(|r| r.display_name.clone())
         .collect();
 
@@ -998,11 +999,23 @@ pub async fn checkout(g: &GlobalArgs, id: u64) -> Result<()> {
         .map(|b| b.name.clone())
         .ok_or_else(|| BitbucketError::Other("PR has no source branch".into()))?;
 
+    // Fork PRs must be fetched from the source repository; `origin` only has
+    // a same-named branch by coincidence.
+    let source_repo = pr.source.repository.as_ref().map(|r| r.full_name.as_str());
+    let current_repo = format!("{}/{}", repo.workspace, repo.slug);
+    let fork = fork_remote_url(source_repo, &current_repo);
+
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message(format!("Fetching '{branch}'..."));
-    git::fetch_branch_async(&branch).await?;
-    spinner.set_message(format!("Checking out '{branch}'..."));
-    git::checkout_branch_async(&branch).await?;
+    if let Some(remote) = fork {
+        git::fetch_branch_from_async(remote, branch.clone()).await?;
+        spinner.set_message(format!("Checking out '{branch}' from the fork..."));
+        git::checkout_fetched_branch_async(&branch).await?;
+    } else {
+        git::fetch_branch_async(&branch).await?;
+        spinner.set_message(format!("Checking out '{branch}'..."));
+        git::checkout_branch_async(&branch).await?;
+    }
     spinner.finish();
 
     let fmt = make_formatter(g);
@@ -1076,6 +1089,13 @@ pub async fn diff(
     file_selectors: &[String],
     paths: &[String],
 ) -> Result<()> {
+    // Handled at runtime (not as a clap conflict) so `--json` errors still
+    // reach the structured JSON error reporter.
+    if g.json && raw {
+        return Err(BitbucketError::Usage(
+            "--raw cannot be combined with --json; omit one".into(),
+        ));
+    }
     let repo = resolve_repo(g)?;
     let client = client(g)?;
     let id = resolve_pr_id(&client, &repo.workspace, &repo.slug, id).await?;
@@ -1088,7 +1108,7 @@ pub async fn diff(
     // `--file` selectors resolve against the FULL file list first (so index
     // numbers match the file index shown by `pr view --diff`), then `--`
     // pathspecs filter the raw text as before.
-    let selectors = crate::diff::parse_file_selectors(file_selectors);
+    let selectors = crate::diff::parse_file_selectors(file_selectors)?;
     let body = if !selectors.is_empty() {
         let all = crate::diff::parser::parse(&body);
         if all.is_empty() {
@@ -1216,6 +1236,16 @@ pub async fn patch(g: &GlobalArgs, id: Option<u64>, output: Option<&str>) -> Res
 
 // ---- helpers --------------------------------------------------------------
 
+/// Remote URL for a fork PR's source repository, or `None` when the PR comes
+/// from the current repository.
+fn fork_remote_url(source_full_name: Option<&str>, current_full_name: &str) -> Option<String> {
+    let source = source_full_name?.trim();
+    if source.is_empty() || source.eq_ignore_ascii_case(current_full_name) {
+        return None;
+    }
+    Some(format!("https://bitbucket.org/{source}.git"))
+}
+
 fn summarize(pr: &PullRequest) -> PrSummary {
     PrSummary {
         id: pr.id,
@@ -1239,11 +1269,25 @@ async fn resolve_pr_id(
         return Ok(id);
     }
     let head = current_head()?;
-    client
-        .pr_for_branch_light(workspace, slug, &head.branch)
-        .await?
-        .map(|pr| pr.id)
-        .ok_or_else(|| BitbucketError::NotFound(format!("no open PR for branch '{}'", head.branch)))
+    let mut prs = client.prs_for_branch(workspace, slug, &head.branch).await?;
+    match prs.len() {
+        0 => Err(BitbucketError::NotFound(format!(
+            "no open PR for branch '{}'",
+            head.branch
+        ))),
+        1 => Ok(prs.remove(0).id),
+        _ => {
+            let ids = prs
+                .iter()
+                .map(|p| format!("#{}", p.id))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(BitbucketError::Usage(format!(
+                "multiple open PRs use branch '{}': {ids}; pass an explicit PR id",
+                head.branch
+            )))
+        }
+    }
 }
 
 fn comment_summary(comment: &PullRequestComment) -> PrCommentSummary {
@@ -1328,12 +1372,8 @@ async fn infer_default_branch(
     slug: &str,
     client: &crate::api::BitbucketClient,
 ) -> Result<String> {
-    static CACHE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    if let Some(cached) = CACHE.get() {
-        return Ok(cached.clone());
-    }
     let repo = client.get_repo(workspace, slug).await?;
-    let branch = repo
+    Ok(repo
         .mainbranch
         .and_then(|b| {
             if b.name.is_empty() {
@@ -1342,9 +1382,7 @@ async fn infer_default_branch(
                 Some(b.name)
             }
         })
-        .unwrap_or_else(|| "main".to_string());
-    let _ = CACHE.set(branch.clone());
-    Ok(branch)
+        .unwrap_or_else(|| "main".to_string()))
 }
 
 fn render_list(out: &PrListOut) -> String {
@@ -1728,5 +1766,16 @@ mod tests {
         // Non-Git errors never match.
         let other = BitbucketError::Other("boom".into());
         assert!(!is_non_fast_forward(&other));
+    }
+
+    #[test]
+    fn fork_remote_url_selects_only_other_repositories() {
+        assert_eq!(
+            fork_remote_url(Some("alice/repo"), "ws/repo").as_deref(),
+            Some("https://bitbucket.org/alice/repo.git")
+        );
+        assert_eq!(fork_remote_url(Some("WS/Repo"), "ws/repo"), None);
+        assert_eq!(fork_remote_url(Some("  "), "ws/repo"), None);
+        assert_eq!(fork_remote_url(None, "ws/repo"), None);
     }
 }

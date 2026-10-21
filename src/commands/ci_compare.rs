@@ -248,11 +248,11 @@ async fn compute_test_deltas(
     // Fetch test cases for both pipelines concurrently
     let cases_a_futs: Vec<_> = steps_a
         .iter()
-        .map(|step| client.test_cases(workspace, slug, &pipe_a.uuid, &step.uuid, 100))
+        .map(|step| client.test_cases(workspace, slug, &pipe_a.uuid, &step.uuid, 1000))
         .collect();
     let cases_b_futs: Vec<_> = steps_b
         .iter()
-        .map(|step| client.test_cases(workspace, slug, &pipe_b.uuid, &step.uuid, 100))
+        .map(|step| client.test_cases(workspace, slug, &pipe_b.uuid, &step.uuid, 1000))
         .collect();
 
     let (cases_a, cases_b): (Vec<_>, Vec<_>) = tokio::join!(
@@ -314,29 +314,38 @@ async fn compute_test_deltas(
 
 fn render_compare(out: &CiCompareOut) -> String {
     let theme = Theme::current();
+    let (dash, delta_sym, rule, arrow) = if theme.unicode_enabled() {
+        ("—", "Δ", "─", "←")
+    } else {
+        ("-", "d", "-", "<-")
+    };
     let mut s = String::new();
 
     let _ = writeln!(s, "{}", theme.bold("Pipeline Comparison"));
     let _ = writeln!(
         s,
-        "  A: #{} ({}) — {} — {}",
+        "  A: #{} ({}) {} {} {} {}",
         out.a.build_number,
         out.a.branch.as_deref().unwrap_or("unknown"),
+        dash,
         theme.status_glyph(&out.a.state),
+        dash,
         human_duration(out.a.duration_seconds)
     );
     let _ = writeln!(
         s,
-        "  B: #{} ({}) — {} — {}",
+        "  B: #{} ({}) {} {} {} {}",
         out.b.build_number,
         out.b.branch.as_deref().unwrap_or("unknown"),
+        dash,
         theme.status_glyph(&out.b.state),
+        dash,
         human_duration(out.b.duration_seconds)
     );
 
     let _ = writeln!(s, "{}", theme.bold("Step Duration Deltas"));
-    let _ = writeln!(s, "  Step              A       B       Δ");
-    let _ = writeln!(s, "  {}", "─".repeat(50));
+    let _ = writeln!(s, "  Step              A       B       {delta_sym}");
+    let _ = writeln!(s, "  {}", rule.repeat(50));
 
     let mut max_abs_delta = 0;
     let mut highlight_index = None;
@@ -354,11 +363,11 @@ fn render_compare(out: &CiCompareOut) -> String {
         let a_str = delta
             .duration_a
             .map(|d| format!("{}s", d))
-            .unwrap_or_else(|| "—".to_string());
+            .unwrap_or_else(|| dash.to_string());
         let b_str = delta
             .duration_b
             .map(|d| format!("{}s", d))
-            .unwrap_or_else(|| "—".to_string());
+            .unwrap_or_else(|| dash.to_string());
         let delta_str = match delta.duration_delta {
             Some(d) => {
                 if d > 0 {
@@ -367,13 +376,13 @@ fn render_compare(out: &CiCompareOut) -> String {
                     format!("{}s", d)
                 }
             }
-            None => "—".to_string(),
+            None => dash.to_string(),
         };
 
         let highlight = if Some(i) == highlight_index {
-            "  ←"
+            format!("  {arrow}")
         } else {
-            ""
+            String::new()
         };
 
         let _ = writeln!(

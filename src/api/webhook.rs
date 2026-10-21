@@ -29,6 +29,7 @@ impl BitbucketClient {
     }
 
     pub async fn get_webhook(&self, workspace: &str, slug: &str, uid: &str) -> Result<Webhook> {
+        let uid = crate::api::pipeline::uuid_path(uid);
         let path = format!("/repositories/{workspace}/{slug}/hooks/{uid}");
         self.send(reqwest::Method::GET, &path, None).await
     }
@@ -74,6 +75,7 @@ impl BitbucketClient {
         // Concurrent modifications between GET and PUT will be lost.
         crate::log_debug!("updating webhook {uid} (GET-then-PUT, no ETag support)");
         let current = self.get_webhook(workspace, slug, uid).await?;
+        let uid = crate::api::pipeline::uuid_path(uid);
         let path = format!("/repositories/{workspace}/{slug}/hooks/{uid}");
         let body = serde_json::json!({
             "url": url.unwrap_or(&current.url),
@@ -86,6 +88,7 @@ impl BitbucketClient {
     }
 
     pub async fn delete_webhook(&self, workspace: &str, slug: &str, uid: &str) -> Result<()> {
+        let uid = crate::api::pipeline::uuid_path(uid);
         let path = format!("/repositories/{workspace}/{slug}/hooks/{uid}");
         self.send_empty(reqwest::Method::DELETE, &path, None).await
     }

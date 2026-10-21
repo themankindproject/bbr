@@ -92,10 +92,10 @@ pub fn parse_diff_git_paths(line: &str) -> (String, String) {
     if let Some(after_a) = rest.strip_prefix("a/") {
         if let Some(idx) = after_a.find(" b/") {
             let old = &after_a[..idx];
-            // after " b/" comes "b/<new>" in the full string; after_a slice
-            // starts at old path, so idx+3 points at 'b' of "b/<new>".
-            let new_part = &after_a[idx + 3..]; // "b/<new>"
-            let new_path = new_part.strip_prefix("b/").unwrap_or(new_part);
+            // `idx + 3` skips the separator and the `b/` prefix, so this is
+            // already the new path. Stripping `b/` again corrupted a real
+            // directory named `b/` (`a/x b/b/y` became `y`).
+            let new_path = &after_a[idx + 3..];
             return (old.to_string(), new_path.to_string());
         }
     }
@@ -262,7 +262,22 @@ pub fn parse(raw: &str) -> Vec<DiffFile> {
         // File mode / index / new-file / deleted-file / rename-from / rename-to lines
         // We skip these but they indicate file status
         if let Some(ref mut file) = current_file {
-            if line.starts_with("+++ ") || line.starts_with("--- ") {
+            // Inside a hunk, `--- ` / `+++ ` can be real content: a deletion
+            // of a line beginning `-- ` becomes `--- …`. Treat the line as a
+            // header only when the hunk is not still expecting the
+            // corresponding side's lines.
+            let deletion_content = line.starts_with("--- ")
+                && current_hunk
+                    .as_ref()
+                    .is_some_and(DiffHunkBuilder::expects_old);
+            let addition_content = line.starts_with("+++ ")
+                && current_hunk
+                    .as_ref()
+                    .is_some_and(DiffHunkBuilder::expects_new);
+            if (line.starts_with("+++ ") || line.starts_with("--- "))
+                && !deletion_content
+                && !addition_content
+            {
                 file.set_paths(line);
                 continue;
             }
@@ -278,11 +293,16 @@ pub fn parse(raw: &str) -> Vec<DiffFile> {
                 file.status = FileStatus::Deleted;
                 continue;
             }
-            if line.starts_with("index ")
-                || line.starts_with("new mode ")
-                || line.starts_with("old mode ")
-                || line.starts_with("similarity index ")
-            {
+            if line.starts_with("old mode ") || line.starts_with("new mode ") {
+                file.mode_changed = true;
+                continue;
+            }
+            if let Some((old_blob, new_blob)) = parse_index_hashes(line) {
+                file.old_blob = Some(old_blob.to_string());
+                file.new_blob = Some(new_blob.to_string());
+                continue;
+            }
+            if line.starts_with("index ") || line.starts_with("similarity index ") {
                 continue;
             }
         } else {
@@ -348,7 +368,9 @@ pub fn parse(raw: &str) -> Vec<DiffFile> {
 
 /// Parse `@@ -old_start,old_lines +new_start,new_lines @@ header` from a hunk line.
 fn parse_hunk_header(line: &str) -> Option<HunkHeader> {
-    let line = line.trim();
+    // Do not trim: a context line is prefixed with a space, so a line such as
+    // " @@ -1,3 +1,4 @@" is content, not a new hunk. Unified hunk headers are
+    // always at column zero.
     if !line.starts_with("@@ ") {
         return None;
     }
@@ -409,6 +431,21 @@ struct DiffHunkBuilder {
     /// Running line numbers
     old_lineno: u32,
     new_lineno: u32,
+    /// Lines still expected by the hunk header. Used to tell a real
+    /// `---`/`+++` file header from a deletion/addition whose content begins
+    /// with `--`/`++`.
+    old_remaining: u32,
+    new_remaining: u32,
+}
+
+impl DiffHunkBuilder {
+    fn expects_old(&self) -> bool {
+        self.old_remaining > 0
+    }
+
+    fn expects_new(&self) -> bool {
+        self.new_remaining > 0
+    }
 }
 
 impl DiffHunkBuilder {
@@ -422,6 +459,8 @@ impl DiffHunkBuilder {
             lines: Vec::new(),
             old_lineno: h.old_start,
             new_lineno: h.new_start,
+            old_remaining: h.old_lines,
+            new_remaining: h.new_lines,
         }
     }
 
@@ -441,18 +480,22 @@ impl DiffHunkBuilder {
             DiffLineKind::Context => {
                 let o = self.old_lineno;
                 let n = self.new_lineno;
-                self.old_lineno += 1;
-                self.new_lineno += 1;
+                self.old_lineno = self.old_lineno.saturating_add(1);
+                self.new_lineno = self.new_lineno.saturating_add(1);
+                self.old_remaining = self.old_remaining.saturating_sub(1);
+                self.new_remaining = self.new_remaining.saturating_sub(1);
                 (Some(o), Some(n))
             }
             DiffLineKind::Addition => {
                 let n = self.new_lineno;
-                self.new_lineno += 1;
+                self.new_lineno = self.new_lineno.saturating_add(1);
+                self.new_remaining = self.new_remaining.saturating_sub(1);
                 (None, Some(n))
             }
             DiffLineKind::Deletion => {
                 let o = self.old_lineno;
-                self.old_lineno += 1;
+                self.old_lineno = self.old_lineno.saturating_add(1);
+                self.old_remaining = self.old_remaining.saturating_sub(1);
                 (Some(o), None)
             }
         };
@@ -535,6 +578,21 @@ fn rename_context(line: &str) -> Option<RenameCtx> {
         })
 }
 
+/// Parse the blob hashes from `index <old>..<new>[ mode]`.
+fn parse_index_hashes(line: &str) -> Option<(&str, &str)> {
+    let rest = line.strip_prefix("index ")?;
+    let (old, tail) = rest.split_once("..")?;
+    let new = tail.split_whitespace().next().unwrap_or(tail);
+    (!old.is_empty() && !new.is_empty()).then_some((old, new))
+}
+
+/// Git's empty-blob hash for SHA-1 and SHA-256 repositories. An empty file
+/// change has no hunks, so without this it was indistinguishable from a
+/// binary file.
+fn is_empty_blob(hash: &str) -> bool {
+    hash.starts_with("e69de29") || hash.starts_with("473a0f4c")
+}
+
 enum RenameCtx {
     From(String),
     To(String),
@@ -550,6 +608,13 @@ struct DiffFileBuilder {
     deletions: u32,
     rename_from: Option<String>,
     rename_to: Option<String>,
+    /// Set by `old mode` / `new mode`. A mode-only change has no hunks and
+    /// must not be mistaken for a binary file.
+    mode_changed: bool,
+    /// Blob hashes from the `index <old>..<new>` line. Git's empty blob hashes
+    /// identify an empty added/deleted text file, which also has no hunks.
+    old_blob: Option<String>,
+    new_blob: Option<String>,
 }
 
 impl DiffFileBuilder {
@@ -572,6 +637,9 @@ impl DiffFileBuilder {
             deletions: 0,
             rename_from: None,
             rename_to: None,
+            mode_changed: false,
+            old_blob: None,
+            new_blob: None,
         }
     }
 
@@ -599,6 +667,9 @@ impl DiffFileBuilder {
             deletions: 0,
             rename_from: None,
             rename_to: None,
+            mode_changed: false,
+            old_blob: None,
+            new_blob: None,
         }
     }
 
@@ -613,6 +684,9 @@ impl DiffFileBuilder {
             deletions: 0,
             rename_from: None,
             rename_to: None,
+            mode_changed: false,
+            old_blob: None,
+            new_blob: None,
         }
     }
 
@@ -699,13 +773,18 @@ impl DiffFileBuilder {
 
         // Bitbucket's diff omits the "Binary files ... differ" marker: a
         // changed file that carries no hunks and no line counts is binary
-        // (the API only lists files that actually changed). Pure renames also
-        // have no hunks, so they are excluded.
+        // (the API only lists files that actually changed). Pure renames,
+        // mode-only changes, and empty files (identified by Git's empty blob
+        // hash) also have no hunks, so they are excluded.
+        let empty_file = self.old_blob.as_deref().is_some_and(is_empty_blob)
+            || self.new_blob.as_deref().is_some_and(is_empty_blob);
         if !self.binary
             && self.hunks.is_empty()
             && self.additions == 0
             && self.deletions == 0
             && self.status != FileStatus::Renamed
+            && !self.mode_changed
+            && !empty_file
         {
             self.binary = true;
         }
@@ -1215,5 +1294,67 @@ diff --git a/b.rs b/b.rs
                 let _ = sanitize_terminal_escapes(&hostile[..end]);
             }
         }
+    }
+
+    #[test]
+    fn deleted_line_starting_with_dashes_is_content_not_a_header() {
+        let raw = "diff --git a/q.sql b/q.sql\n--- a/q.sql\n+++ b/q.sql\n@@ -1,2 +1,2 @@\n context\n--- old sql comment\n+new line\n";
+        let files = parse(raw);
+        assert_eq!(files.len(), 1);
+        let f = &files[0];
+        assert_eq!(f.old_path, "q.sql");
+        assert_eq!(f.new_path, "q.sql");
+        assert_eq!(f.hunks.len(), 1);
+        assert_eq!(f.deletions, 1);
+        assert_eq!(f.additions, 1);
+        let contents: Vec<&str> = f.hunks[0]
+            .lines
+            .iter()
+            .map(|l| l.content.as_str())
+            .collect();
+        assert!(contents.contains(&"-- old sql comment"));
+        assert!(contents.contains(&"new line"));
+    }
+
+    #[test]
+    fn context_line_that_looks_like_a_hunk_header_stays_context() {
+        let raw =
+            "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,2 +1,2 @@\n @@ -9,9 +9,9 @@\n-old\n+new\n";
+        let files = parse(raw);
+        assert_eq!(files[0].hunks.len(), 1);
+        assert_eq!(files[0].hunks[0].lines[0].content, "@@ -9,9 +9,9 @@");
+    }
+
+    #[test]
+    fn b_directory_component_is_preserved() {
+        assert_eq!(
+            parse_diff_git_paths("diff --git a/x b/b/y"),
+            ("x".into(), "b/y".into())
+        );
+    }
+
+    #[test]
+    fn empty_added_file_is_not_binary() {
+        let raw =
+            "diff --git a/empty.txt b/empty.txt\nnew file mode 100644\nindex 0000000..e69de29\n";
+        let files = parse(raw);
+        assert_eq!(files[0].status, FileStatus::Added);
+        assert!(!files[0].binary, "empty added file must render as text");
+    }
+
+    #[test]
+    fn mode_only_change_is_not_binary() {
+        let raw = "diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n";
+        let files = parse(raw);
+        assert!(!files[0].binary, "mode-only change must not be binary");
+    }
+
+    #[test]
+    fn huge_hunk_line_numbers_saturate_instead_of_panicking() {
+        let raw =
+            "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -4294967295,1 +4294967295,1 @@\n-a\n+b\n";
+        let files = parse(raw);
+        assert_eq!(files[0].hunks.len(), 1);
+        assert_eq!(files[0].deletions, 1);
     }
 }

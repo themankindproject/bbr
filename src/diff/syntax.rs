@@ -41,15 +41,14 @@ fn theme() -> &'static Theme {
 
 fn syntax_for_path(path: &str) -> &'static syntect::parsing::SyntaxReference {
     let ss = syntax_set();
-    ss.find_syntax_for_file(Path::new(path))
-        .ok()
-        .flatten()
-        .or_else(|| {
-            Path::new(path)
-                .extension()
-                .and_then(|e| e.to_str())
-                .and_then(|ext| ss.find_syntax_by_extension(ext))
-        })
+    // Do not use `find_syntax_for_file`: it opens the path when the extension
+    // is unknown. The path comes from the remote diff, so that would touch
+    // (and potentially block on) a local FIFO/device. Extension lookup is
+    // sufficient and never performs I/O.
+    Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .and_then(|ext| ss.find_syntax_by_extension(ext))
         .unwrap_or_else(|| ss.find_syntax_plain_text())
 }
 

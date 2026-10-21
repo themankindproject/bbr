@@ -108,6 +108,39 @@ async fn expired_pipeline_finishes_with_failure_exit() {
 }
 
 #[tokio::test]
+async fn json_logs_are_attached_to_the_receipt() {
+    let server = MockServer::start().await;
+    mount_pipeline(&server, |_| completed("SUCCESSFUL")).await;
+    mount_steps(
+        &server,
+        json!([step("{s1}", "build", completed("SUCCESSFUL"))]),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/repositories/ws/repo/pipelines/%7Bp1%7D/steps/%7Bs1%7D/log",
+        ))
+        // The final line deliberately has no trailing newline: a terminal
+        // step's last partial line must still be flushed.
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string("first line\nsecond line\nthird line"),
+        )
+        .mount(&server)
+        .await;
+
+    let out = watch(&server, &["--json", "--logs"]);
+    assert!(out.status.success());
+    let r = receipt(&out);
+    let logs = r["logs"].as_array().expect("logs array");
+    assert_eq!(logs.len(), 3, "{r}");
+    assert_eq!(logs[0]["step"], "build");
+    assert_eq!(logs[0]["line_number"], 1);
+    assert_eq!(logs[0]["text"], "first line");
+    assert_eq!(logs[1]["line_number"], 2);
+    assert_eq!(logs[2]["text"], "third line");
+}
+
+#[tokio::test]
 async fn paused_pipeline_stops_watching_with_explicit_outcome() {
     let server = MockServer::start().await;
     mount_pipeline(

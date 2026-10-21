@@ -1,7 +1,7 @@
 use serde::Serialize;
 
 use crate::cli::GlobalArgs;
-use crate::commands::make_formatter;
+use crate::commands::{aborted, confirm_destructive, make_formatter};
 use crate::config::{self, ContextEntry};
 use crate::error::{BitbucketError, Result};
 
@@ -63,6 +63,7 @@ pub fn create(
         ContextEntry {
             workspace: workspace.to_string(),
             slug: slug.map(|s| s.to_string()),
+            extra: Default::default(),
         },
     );
     if set_active {
@@ -159,7 +160,10 @@ pub fn use_context(g: &GlobalArgs, name: &str) -> Result<()> {
     make_formatter(g).print(&switched, &human)
 }
 
-pub fn delete(g: &GlobalArgs, name: &str) -> Result<()> {
+pub async fn delete(g: &GlobalArgs, name: &str, yes: bool) -> Result<()> {
+    if !confirm_destructive(g, yes, &format!("Delete context \"{name}\"?")).await? {
+        return aborted();
+    }
     let mut cfg = config::load_config()?;
     if !cfg.contexts.contains_key(name) {
         return Err(BitbucketError::Other(format!(

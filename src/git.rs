@@ -257,6 +257,36 @@ pub fn fetch_branch(branch: &str) -> Result<()> {
     Ok(())
 }
 
+/// Fetch a branch from an explicit remote URL (used to check out PRs from
+/// forks, which do not live on `origin`).
+pub fn fetch_branch_from(remote: &str, branch: &str) -> Result<()> {
+    git_with_timeout(&["fetch", remote, "--", branch], GIT_WRITE_TIMEOUT)?;
+    Ok(())
+}
+
+/// Check out `FETCH_HEAD` as `branch`, creating the branch if needed.
+///
+/// An existing local branch is fast-forwarded only; a diverged branch is an
+/// error rather than being reset, so local work is never discarded.
+pub fn checkout_fetched_branch(branch: &str) -> Result<()> {
+    let exists = git(&["rev-parse", "--verify", "--", branch]).is_ok();
+    if exists {
+        git(&["switch", "--", branch])?;
+        git_with_timeout(&["merge", "--ff-only", "FETCH_HEAD"], GIT_WRITE_TIMEOUT)?;
+    } else {
+        git_with_timeout(
+            &["switch", "-c", branch, "--", "FETCH_HEAD"],
+            GIT_WRITE_TIMEOUT,
+        )?;
+    }
+    Ok(())
+}
+
+/// Whether a local branch exists.
+pub fn local_branch_exists(branch: &str) -> bool {
+    git(&["rev-parse", "--verify", "--", branch]).is_ok()
+}
+
 /// Checkout a local branch (creating it if it doesn't exist).
 pub fn checkout_branch(branch: &str) -> Result<()> {
     // First check if branch exists locally (locale-independent)
@@ -405,6 +435,21 @@ pub async fn fetch_branch_async(branch: &str) -> Result<()> {
 pub async fn checkout_branch_async(branch: &str) -> Result<()> {
     let branch = branch.to_string();
     tokio::task::spawn_blocking(move || checkout_branch(&branch))
+        .await
+        .map_err(|e| BitbucketError::Git(format!("spawn_blocking join error: {e}")))?
+}
+
+/// Async version of [`fetch_branch_from`] — runs on the blocking thread pool.
+pub async fn fetch_branch_from_async(remote: String, branch: String) -> Result<()> {
+    tokio::task::spawn_blocking(move || fetch_branch_from(&remote, &branch))
+        .await
+        .map_err(|e| BitbucketError::Git(format!("spawn_blocking join error: {e}")))?
+}
+
+/// Async version of [`checkout_fetched_branch`].
+pub async fn checkout_fetched_branch_async(branch: &str) -> Result<()> {
+    let branch = branch.to_string();
+    tokio::task::spawn_blocking(move || checkout_fetched_branch(&branch))
         .await
         .map_err(|e| BitbucketError::Git(format!("spawn_blocking join error: {e}")))?
 }

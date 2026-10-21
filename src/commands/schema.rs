@@ -187,6 +187,26 @@ const SCHEMAS: &[(&str, &str, &str)] = &[
 }"#,
     ),
     (
+        "repo",
+        "JSON schema for `bbr repo info --json` output",
+        r#"{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RepoInfoOut",
+  "type": "object",
+  "required": ["workspace", "slug", "full_name", "scm", "private", "language", "description", "web_url"],
+  "properties": {
+    "workspace": { "type": "string" },
+    "slug": { "type": "string" },
+    "full_name": { "type": "string" },
+    "scm": { "type": "string" },
+    "private": { "type": "boolean" },
+    "language": { "type": "string" },
+    "description": { "type": ["string", "null"] },
+    "web_url": { "type": ["string", "null"] }
+  }
+}"#,
+    ),
+    (
         "src",
         "JSON schema for `bbr src ls --json` output",
         r#"{

@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-21
+
+### Fixed
+
+- **Diff engine correctness.** Lines beginning `--- ` or `+++ ` inside a hunk
+  are content again (deleted `--` comments no longer rewrite file headers),
+  `@@`-looking context lines stay in their hunk, `b/<dir>` paths keep the
+  directory component, empty and mode-only files are no longer rendered as
+  binary, and `--file` plus a pathspec no longer produces an empty diff.
+  Huge `--context` values and hunk counters saturate instead of panicking;
+  invalid selectors are usage errors. Side-by-side rows fit the terminal,
+  alignment is bounded, and syntax detection no longer opens local paths.
+- **Pull requests.** The merge gate derives approvals and changes-requested
+  from `participants` instead of account-only `reviewers`, so a requested
+  change blocks `can_merge`. `pr list --state all` queries every state,
+  diffstat follows pagination, fork PRs are fetched from their source
+  repository, ambiguous branch lookups error with the candidate IDs, and
+  `pr diff --raw --json` is rejected instead of silently choosing JSON.
+- **Pipelines.** `ci list` keeps steps attached to their pipeline when
+  fetches complete out of order; `ci watch --json --logs` includes log lines
+  and flushes a final unterminated line; `ci tail` numbers lines continuously
+  across auto-advanced steps and honors `--notify` in JSON mode; malformed
+  `--var` values are usage errors; `--pipeline` schedules use a `custom`
+  selector; step-list failures are reported instead of rendering as empty.
+- **Deployments.** Rollback sorts history, skips the current deployment and
+  requires a successful deployment with a commit; secured environment
+  variables stay secured on update; 404s from the internal deployment
+  endpoint now explain the dependency.
+- **Status, dashboard and batch.** Conflict-fetch failures render as unknown
+  (not "No conflicts") and are retried, the watch cache expires after 60s,
+  the quota footer is populated, `--repos` raises the dashboard scan cap,
+  per-repo failures are returned, merged branches are selected from merged
+  PR source heads (the API has no `Branch.merged` field), `--max` applies
+  after approval filtering, and missing local branches are no-ops.
+- **Config and auth.** Saving config and credentials preserves unknown keys
+  and profiles; `auth setup` repairs an unreadable file; secrets read from
+  stdin lose only the final line ending; an empty `ui.theme` resets the
+  preference; `schema repo` exists.
+- **Safety and UX.** `context delete` and `repo default-reviewers remove`
+  require `--yes`; UUID path segments are percent-encoded; `open` accepts
+  `&` in query strings; `COLORFGBG` no longer treats bright black as a light
+  background; commit statuses follow pagination; issue updates preserve the
+  assignee.
+
+### Changed
+
+- `context delete` and default-reviewer removal now require `--yes` in
+  non-interactive use.
+- `pr diff --raw --json` now returns a usage error instead of ignoring
+  `--raw`.
+
 ## [0.3.2] - 2026-10-06
 
 ### Fixed
@@ -1463,7 +1514,9 @@ GitHub release is marked as a pre-release because its Linux archives and
 - Credentials file opened with mode `0o600` at creation time on Unix, closing TOCTOU window.
 - No system keyring dependency (avoids 671 MB texlive pull).
 
-[Unreleased]: https://github.com/themankindproject/bbr/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/themankindproject/bbr/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/themankindproject/bbr/compare/v0.3.2...v0.4.0
+[0.3.2]: https://github.com/themankindproject/bbr/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/themankindproject/bbr/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/themankindproject/bbr/compare/v0.2.5...v0.3.0
 [0.2.0]: https://github.com/themankindproject/bbr/compare/v0.1.9...v0.2.0

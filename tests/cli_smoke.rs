@@ -231,6 +231,36 @@ fn schema_prints_specific_model() {
 }
 
 #[test]
+fn ci_trigger_rejects_malformed_variables() {
+    let output = Command::cargo_bin("bbr")
+        .unwrap()
+        .env("BITBUCKET_API_BASE", "http://127.0.0.1:1")
+        .env("BITBUCKET_USERNAME", "u")
+        .env("BITBUCKET_TOKEN", "t")
+        .env("BB_WORKSPACE", "ws")
+        .env("BB_SLUG", "repo")
+        .args([
+            "ci", "trigger", "--branch", "main", "--var", "BROKEN", "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(64));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("KEY=VALUE"), "{stderr}");
+}
+
+#[test]
+fn schema_repo_model_is_available() {
+    Command::cargo_bin("bbr")
+        .unwrap()
+        .args(["schema", "repo"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"title\": \"RepoInfoOut\""))
+        .stdout(predicate::str::contains("\"web_url\""));
+}
+
+#[test]
 fn pr_stack_help_lists_use() {
     Command::cargo_bin("bbr")
         .unwrap()

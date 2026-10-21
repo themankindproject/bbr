@@ -23,10 +23,20 @@ pub enum AlignedRow<'a> {
     AddOnly(&'a DiffLine),
 }
 
+/// Upper bound on similarity comparisons for one change block. Beyond this,
+/// positional pairing is used: a quadratic similarity pass on a large
+/// rewrite otherwise dominates rendering time.
+const MAX_ALIGN_PAIRS: usize = 40_000;
+
 /// Align a contiguous run of deletions followed by additions.
+///
+/// `use_similarity` is false when word-diff highlighting is disabled; the
+/// renderer cannot use similarity matches in that case, so skip the
+/// quadratic work entirely.
 pub fn align_change_block<'a>(
     deletions: &[&'a DiffLine],
     additions: &[&'a DiffLine],
+    use_similarity: bool,
 ) -> Vec<AlignedRow<'a>> {
     if deletions.is_empty() {
         return additions.iter().copied().map(AlignedRow::AddOnly).collect();
@@ -38,7 +48,27 @@ pub fn align_change_block<'a>(
             .map(AlignedRow::DeleteOnly)
             .collect();
     }
+    if !use_similarity || deletions.len().saturating_mul(additions.len()) > MAX_ALIGN_PAIRS {
+        return positional_pair(deletions, additions);
+    }
     align_by_similarity_then_position(deletions, additions)
+}
+
+/// Pair lines in display order without computing similarity.
+fn positional_pair<'a>(
+    deletions: &[&'a DiffLine],
+    additions: &[&'a DiffLine],
+) -> Vec<AlignedRow<'a>> {
+    let mut rows = Vec::with_capacity(deletions.len().max(additions.len()));
+    for i in 0..deletions.len().max(additions.len()) {
+        match (deletions.get(i), additions.get(i)) {
+            (Some(d), Some(a)) => rows.push(AlignedRow::Pair(d, a)),
+            (Some(d), None) => rows.push(AlignedRow::DeleteOnly(d)),
+            (None, Some(a)) => rows.push(AlignedRow::AddOnly(a)),
+            (None, None) => {}
+        }
+    }
+    rows
 }
 
 fn align_by_similarity_then_position<'a>(
@@ -124,7 +154,7 @@ mod tests {
         let a0 = line(DiffLineKind::Addition, "same");
         let d1 = line(DiffLineKind::Deletion, "other");
         let a1 = line(DiffLineKind::Addition, "other");
-        let rows = align_change_block(&[&d0, &d1], &[&a0, &a1]);
+        let rows = align_change_block(&[&d0, &d1], &[&a0, &a1], true);
         assert_eq!(rows.len(), 2);
         assert!(matches!(rows[0], AlignedRow::Pair(_, _)));
         assert!(matches!(rows[1], AlignedRow::Pair(_, _)));
@@ -136,7 +166,7 @@ mod tests {
         let d1 = line(DiffLineKind::Deletion, "gamma one two three");
         let a0 = line(DiffLineKind::Addition, "gamma one two three!");
         let a1 = line(DiffLineKind::Addition, "alpha one two three!");
-        let rows = align_change_block(&[&d0, &d1], &[&a0, &a1]);
+        let rows = align_change_block(&[&d0, &d1], &[&a0, &a1], true);
 
         let mut paired_contents = Vec::new();
         for row in &rows {
@@ -172,7 +202,7 @@ mod tests {
         ];
         let dels: Vec<_> = d.iter().collect();
         let adds: Vec<_> = a.iter().collect();
-        let rows = align_change_block(&dels, &adds);
+        let rows = align_change_block(&dels, &adds, true);
         assert_eq!(rows.len(), 3);
         assert!(matches!(
             rows[0],
@@ -194,14 +224,14 @@ mod tests {
     #[test]
     fn pure_inserts_are_add_only() {
         let a0 = line(DiffLineKind::Addition, "new");
-        let rows = align_change_block(&[], &[&a0]);
+        let rows = align_change_block(&[], &[&a0], true);
         assert!(matches!(rows.as_slice(), [AlignedRow::AddOnly(_)]));
     }
 
     #[test]
     fn pure_deletes_are_delete_only() {
         let d0 = line(DiffLineKind::Deletion, "old");
-        let rows = align_change_block(&[&d0], &[]);
+        let rows = align_change_block(&[&d0], &[], true);
         assert!(matches!(rows.as_slice(), [AlignedRow::DeleteOnly(_)]));
     }
 
@@ -209,7 +239,7 @@ mod tests {
     fn unrelated_lines_still_pair_positionally_for_display() {
         let d0 = line(DiffLineKind::Deletion, "aaaaaaaaaaaaaaaaaaaa");
         let a0 = line(DiffLineKind::Addition, "bbbbbbbbbbbbbbbbbbbb");
-        let rows = align_change_block(&[&d0], &[&a0]);
+        let rows = align_change_block(&[&d0], &[&a0], true);
         // Positional fallback pairs for interleaved display; word-diff remains
         // gated by WORD_DIFF_THRESHOLD in the renderer.
         assert!(matches!(rows.as_slice(), [AlignedRow::Pair(_, _)]));
@@ -221,7 +251,7 @@ mod tests {
         let d0 = line(DiffLineKind::Deletion, "only_del");
         let d1 = line(DiffLineKind::Deletion, "shared_line_here");
         let a0 = line(DiffLineKind::Addition, "shared_line_here!");
-        let rows = align_change_block(&[&d0, &d1], &[&a0]);
+        let rows = align_change_block(&[&d0, &d1], &[&a0], true);
         assert!(rows.iter().any(|r| matches!(r, AlignedRow::DeleteOnly(_))));
         assert!(rows.iter().any(|r| matches!(r, AlignedRow::Pair(_, _))));
     }

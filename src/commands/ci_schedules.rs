@@ -80,21 +80,11 @@ pub async fn create(
 
     let spinner = SpinnerGuard::new(make_spinner(g.json, g.quiet));
     spinner.set_message("Creating schedule...");
-    let mut schedule = api
-        .create_schedule(&repo.workspace, &repo.slug, cron, branch, pipeline)
+    // `enabled` is part of the create body, so `--enabled=false` never leaves
+    // a live schedule behind if a follow-up request fails.
+    let schedule = api
+        .create_schedule(&repo.workspace, &repo.slug, cron, branch, pipeline, enabled)
         .await?;
-    // If caller specified --enabled=false, update immediately after creation
-    if !enabled {
-        schedule = api
-            .update_schedule(
-                &repo.workspace,
-                &repo.slug,
-                &schedule.uuid,
-                None,
-                Some(false),
-            )
-            .await?;
-    }
     spinner.finish();
 
     let out = ScheduleOut::from(schedule);

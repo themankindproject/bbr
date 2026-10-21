@@ -36,9 +36,9 @@ async fn lists_commit_statuses() {
         .await;
 
     let c = client(&server.uri()).await;
-    let page = c.commit_statuses("sdadev", "bvrm", "abc123").await.unwrap();
-    assert_eq!(page.values.len(), 1);
-    assert_eq!(page.values[0].key, "lint");
+    let statuses = c.commit_statuses("sdadev", "bvrm", "abc123").await.unwrap();
+    assert_eq!(statuses.len(), 1);
+    assert_eq!(statuses[0].key, "lint");
 }
 
 #[tokio::test]

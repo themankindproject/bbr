@@ -1,0 +1,935 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.24s
+     Running unittests src/lib.rs (target/debug/deps/bbr-d9ae085a2a82beef)
+
+running 436 tests
+test api::issue::tests::build_query_multiple ... ok
+test api::issue::tests::build_query_empty ... ok
+test api::issue::tests::build_query_single ... ok
+test api::issue::tests::build_query_rejects_quotes_in_assignee ... ok
+test api::issue::tests::build_query_rejects_double_quotes ... ok
+test api::issue::tests::build_query_rejects_quotes_in_kind ... ok
+test api::issue::tests::issue_default_derives ... ok
+test api::pipeline::tests::expired_and_any_completed_pipeline_is_terminal ... ok
+test api::pipeline::tests::ensure_uuid_braces_preserves_existing ... ok
+test api::pipeline::tests::ensure_uuid_braces_trims_whitespace ... ok
+test api::pipeline::tests::normalize_uuid_strips_braces ... ok
+test api::pipeline::tests::normalize_uuid_handles_no_braces ... ok
+test api::pipeline::tests::normalize_uuid_trims_whitespace ... ok
+test api::pipeline::tests::ensure_uuid_braces_adds_when_missing ... ok
+test api::pipeline::tests::ensure_uuid_braces_fixes_partial_braces ... ok
+test api::pipeline::tests::pipeline_is_not_terminal_when_in_progress ... ok
+test api::pipeline::tests::pipeline_is_terminal_when_result_is_terminal ... ok
+test api::pipeline::tests::pipeline_step_is_failed_for_failure_states ... ok
+test api::pipeline::tests::pipeline_step_is_not_failed_for_success ... ok
+test api::pipeline::tests::pipeline_state_name_falls_back_to_state_name ... ok
+test api::pipeline::tests::pipeline_state_name_returns_result_name_when_present ... ok
+test api::pipeline::tests::pipeline_state_name_uses_nested_result ... ok
+test api::pipeline::tests::not_run_and_expired_steps_are_terminal_but_not_failed ... ok
+test api::pipeline::tests::step_state_name_falls_back_to_state ... ok
+test api::pipeline::tests::paused_stage_is_reported_and_not_terminal ... ok
+test api::pipeline::tests::step_state_name_uses_result_when_present ... ok
+test api::pipeline::tests::test_report_deserializes ... ok
+test api::pr::tests::merge_pr_request_serializes ... ok
+test api::pr::tests::participant_is_approved_from_bool_or_state ... ok
+test api::pr::tests::pr_state_as_query ... ok
+test api::pr::tests::pr_state_parse_case_insensitive ... ok
+test api::pr::tests::create_pr_request_skips_optional_fields ... ok
+test api::pr::tests::create_pr_request_serializes_correctly ... ok
+test api::pipeline::tests::test_case_deserializes ... ok
+test api::pr::tests::pr_state_parse_invalid ... ok
+test api::pr::tests::pr_state_parse_valid ... ok
+test api::pr::tests::pull_request_branch_fallback_empty ... ok
+test api::pr::tests::pull_request_comment_deserializes ... ok
+test api::pr::tests::pull_request_conflict_deserializes ... ok
+test api::pr::tests::pull_request_destination_branch ... ok
+test api::pr::tests::pull_request_source_branch ... ok
+test api::pr::tests::pull_request_task_deserializes ... ok
+test api::pr::tests::update_pr_request_serializes ... ok
+test api::pr::tests::web_url_returns_none_when_no_html_link ... ok
+test api::pr::tests::url_encode_encodes_quotes ... ok
+test api::pr::tests::url_encode_does_not_change_alphanumeric ... ok
+test api::pr::tests::url_encode_encodes_special_chars ... ok
+test api::repo::tests::repository_deserializes_minimal ... ok
+test api::repo::tests::repository_deserializes_full ... ok
+test api::repo::tests::branch_deserializes ... ok
+test api::repo::tests::tag_deserializes ... ok
+test api::status::tests::build_status_deserializes ... ok
+test api::tests::base64_roundtrip_basic ... ok
+test api::status::tests::build_status_defaults_on_empty ... ok
+test api::tests::map_error_429_is_retryable_for_post ... ok
+test api::tests::map_error_400_is_not_retryable ... ok
+test api::status::tests::build_status_page_deserializes ... ok
+test api::tests::map_error_500_is_retryable_for_get ... ok
+test api::tests::map_error_503_is_retryable_for_get ... ok
+test api::tests::map_error_5xx_is_not_retryable_for_post ... ok
+test api::tests::map_error_5xx_becomes_structured_server_variant ... ok
+test api::tests::map_error_auth_failed ... ok
+test api::tests::map_error_falls_back_to_raw_body_when_not_json ... ok
+test api::tests::map_error_includes_path ... ok
+test api::tests::map_error_not_found ... ok
+test api::tests::map_error_other_status ... ok
+test api::tests::map_error_rate_limit ... ok
+test api::tests::one_line_replaces_newlines ... ok
+test api::tests::paginated_deserializes_basic ... ok
+test api::tests::paginated_handles_missing_fields ... ok
+test api::tests::one_line_truncates_to_300_chars ... ok
+test api::tests::map_error_includes_scope_table ... ok
+test api::tests::retry_after_is_capped ... ok
+test api::tests::retry_after_accepts_seconds_and_http_dates ... ok
+test api::tests::strip_base_errors_on_mismatch ... ok
+test api::tests::strip_base_works ... ok
+test auth::tests::credential_source_names_are_stable ... ok
+WARN bbr: BITBUCKET_TOKEN is set but empty or whitespace-only; ignoring environment credentials. Set a valid Atlassian API token from https://id.atlassian.com/manage-profile/security/api-tokens
+test auth::tests::env_returns_none_with_empty_token ... ok
+test auth::tests::env_returns_none_without_username ... ok
+test auth::tests::env_token_resolves_to_api_token ... ok
+test cli::tests::timeout_must_be_a_positive_bounded_number_of_seconds ... ok
+test cli::tests::usage_error_exit_is_distinct_from_generic ... ok
+test commands::ci::tests::all_formatters_are_no_newline ... ok
+test commands::ci::tests::classify_error_lines ... ok
+test commands::ci::tests::classify_ignores_zero_count_summaries ... ok
+test commands::ci::tests::classify_normal_lines ... ok
+test commands::ci::tests::classify_warn_lines ... ok
+test commands::ci::tests::failure_context_appends_tail_when_error_is_early ... ok
+test commands::ci::tests::failure_context_clamps_window_at_log_start ... ok
+test commands::ci::tests::failure_context_finds_first_error_with_window ... ok
+test commands::ci::tests::failure_context_none_when_no_error_lines ... ok
+test api::tests::url_appends_path_to_base ... ok
+test api::tests::pre_mutation_get_cannot_repopulate_invalidated_cache ... ok
+test commands::ci::tests::full_log_response_emits_only_unseen_suffix ... ok
+test commands::ci::tests::highlight_chunk_preserves_bytes_when_no_colors ... ok
+test commands::ci::tests::highlight_chunk_preserves_trailing_partial_line ... ok
+test commands::ci::tests::invalid_utf8_boundary_resets_without_panicking ... ok
+test commands::ci::tests::last_lines_handles_empty_string ... ok
+test commands::ci::tests::last_lines_returns_last_n_lines ... ok
+test commands::ci::tests::last_lines_single_line ... ok
+test commands::ci::tests::last_lines_returns_all_when_fewer_lines_than_n ... ok
+test api::tests::in_flight_snapshot_survives_eviction_with_its_exact_body ... ok
+test commands::ci::tests::numbered_chunk_continues_across_boundaries ... ok
+test commands::ci::tests::numbered_chunk_no_number_for_partial_line_continuation ... ok
+test commands::ci::tests::numbered_chunk_numbers_each_line ... ok
+test commands::ci::tests::numbered_chunk_preserves_bytes_when_no_colors ... ok
+test commands::ci::tests::pipeline_elapsed_falls_back_to_watch_duration ... ok
+test commands::ci::tests::pipeline_elapsed_uses_created_on ... ok
+test commands::ci::tests::range_response_is_already_unseen ... ok
+test commands::ci::tests::select_step_errors_on_empty ... ok
+test commands::ci::tests::select_step_errors_on_unknown_selector ... ok
+test commands::ci::tests::select_step_failed_flag_errors_when_no_failed ... ok
+test commands::ci::tests::select_step_returns_first_when_no_flags ... ok
+test commands::ci::tests::select_step_returns_last_when_latest ... ok
+test commands::ci::tests::selector_matches_uuid_without_braces_or_name ... ok
+test commands::ci::tests::selects_failed_step_first_for_smart_logs ... ok
+test commands::ci::tests::step_out_transforms_step ... ok
+test commands::ci::tests::step_transition_excludes_newline ... ok
+test commands::ci::tests::step_transition_shows_old_then_new_state ... ok
+test commands::ci::tests::step_transition_with_name_includes_step_name ... ok
+test commands::ci::tests::step_transition_without_name_excludes_step_name ... ok
+test commands::ci::tests::tail_exit_summary_handles_exact_one_second ... ok
+test commands::ci::tests::tail_exit_summary_handles_sub_second ... ok
+test commands::ci::tests::tail_exit_summary_includes_step_and_state_and_elapsed ... ok
+test commands::ci::tests::tail_exit_summary_starts_with_dash_prefix ... ok
+test commands::ci::tests::tail_header_excludes_newline ... ok
+test commands::ci::tests::tail_header_includes_step_name_and_build_number ... ok
+test commands::ci::tests::step_tag_truncates_long_names ... ok
+test commands::ci::tests::tail_header_separator_is_double_colon ... ok
+test commands::ci::tests::truncated_full_log_resets_the_stream_offset ... ok
+test commands::ci::tests::watch_log_line_excludes_newline ... ok
+test commands::ci::tests::watch_log_line_preserves_user_content ... ok
+test commands::ci::tests::watch_log_line_uses_vertical_bar_gutter ... ok
+test commands::ci::tests::watch_log_line_with_label_and_number_orders_label_then_number ... ok
+test commands::ci::tests::watch_log_line_with_label_inserts_tag_after_gutter ... ok
+test commands::ci::tests::watch_log_line_with_line_number_inserts_number_after_gutter ... ok
+test commands::ci::tests::watch_log_line_without_label_has_no_tag ... ok
+test commands::ci::tests::watch_step_header_includes_step_name_and_state ... ok
+test commands::ci::tests::watch_step_header_shows_different_states ... ok
+test commands::ci::tests::watch_step_header_uses_box_drawing_char ... ok
+test commands::ci_compare::tests::compute_step_deltas_empty ... ok
+test commands::ci_compare::tests::compute_step_deltas_matching_steps ... ok
+test commands::ci_compare::tests::compute_step_deltas_missing_step_in_b ... ok
+test commands::ci_compare::tests::compute_step_deltas_new_step_in_b ... ok
+test commands::ci_compare::tests::render_compare_includes_pipeline_info ... ok
+test commands::commit::tests::commit_status_out_serializes_json ... ok
+test commands::commit::tests::normalize_state_handles_whitespace_and_dashes ... ok
+test commands::commit::tests::normalizes_status_state ... ok
+test commands::commit::tests::normalizes_status_state_aliases ... ok
+test commands::commit::tests::short_commit_handles_empty ... ok
+test commands::commit::tests::short_commit_returns_unchanged_when_shorter ... ok
+test commands::commit::tests::short_commit_truncates_to_twelve_chars ... ok
+test commands::commit::tests::status_out_serializes_correctly ... ok
+test commands::deploy::tests::deployment_deployable_empty ... ok
+test commands::deploy::tests::deployment_deployable_falls_back_to_release ... ok
+test commands::deploy::tests::deployment_deployable_reads_deployable_first ... ok
+test commands::deploy::tests::deployment_to_out_maps_fields ... ok
+test commands::deploy::tests::failed_states_cover_failed_and_stopped ... ok
+test commands::deploy::tests::in_progress_is_not_terminal ... ok
+test commands::deploy::tests::terminal_states_are_terminal ... ok
+test commands::export::tests::format_markdown_with_no_pr_or_pipeline ... ok
+test commands::export::tests::format_markdown_with_pipeline ... ok
+test commands::export::tests::format_slack_with_no_pr_or_pipeline ... ok
+test commands::export::tests::format_slack_with_pr ... ok
+test commands::notify::tests::parse_notify_bell ... ok
+test commands::issue::tests::issue_out_serializes ... ok
+test commands::issue::tests::issue_comment_out_serializes ... ok
+test commands::notify::tests::parse_notify_command_empty_rejected ... ok
+test commands::notify::tests::parse_notify_command_with_value ... ok
+test commands::notify::tests::parse_notify_desktop ... ok
+test commands::notify::tests::parse_notify_none_returns_none ... ok
+test commands::notify::tests::shell_single_quote_escapes_embedded_quote ... ok
+test commands::notify::tests::shell_single_quote_neutralizes_injection ... ok
+test commands::open::tests::accepts_http_and_https ... ok
+test commands::open::tests::open_out_defaults_opened_false_in_json_mode ... ok
+test commands::notify::tests::parse_notify_unknown_rejected ... ok
+test commands::open::tests::open_out_serializes_correctly ... ok
+test commands::open::tests::opener_uses_xdg_open_on_linux ... ok
+test commands::open::tests::rejects_non_http_schemes ... ok
+test commands::open::tests::rejects_option_shaped_and_injection_payloads ... ok
+test commands::picker::tests::parse_choice_defaults_and_validates ... ok
+test commands::picker::tests::can_interact_requires_both_ttys ... ok
+test commands::picker::tests::pick_empty_candidates_errors ... ok
+test commands::picker::tests::pick_non_interactive_returns_first ... ok
+test commands::picker::tests::pick_interactive_uses_selection ... ok
+test commands::picker::tests::render_choices_numbers_each_pr ... ok
+test commands::pr::tests::is_non_fast_forward_detects_push_rejection ... ok
+test commands::pr::tests::render_diffstat_empty_values ... ok
+test commands::picker::tests::pick_single_pr_skips_prompt_even_interactive ... ok
+test commands::repo::tests::branch_out_serializes ... ok
+test commands::pr::tests::render_diffstat_builds_table_with_totals ... ok
+test commands::repo::tests::commit_out_serializes ... ok
+test commands::repo::tests::first_line_extracts_first_line ... ok
+test commands::repo::tests::first_line_handles_empty ... ok
+test commands::repo::tests::json_uses_scm_field_not_scim ... ok
+test commands::repo::tests::tag_out_serializes ... ok
+test commands::repo::tests::first_line_returns_full_if_single_line ... ok
+test commands::notify::tests::run_command_does_not_execute_injected_payload ... ok
+test commands::repo::tests::tag_out_serializes_with_null_optionals ... ok
+test commands::status::tests::pipeline_summary_builds_from_pipeline ... ok
+test commands::status::tests::pipeline_summary_collects_failing_steps ... ok
+test commands::status::tests::pr_summary_builds_from_pr ... ok
+test commands::status::tests::real_pipeline_in_progress_state_is_recognized_as_running ... ok
+test commands::status::tests::render_short_shows_pr_and_ci ... ok
+test commands::status::tests::renders_empty_state ... ok
+test commands::status::tests::render_short_shows_dim_when_no_pr_or_ci ... ok
+test commands::status::tests::renders_sections_and_separators ... ok
+test commands::status::tests::reviewer_rollup_falls_back_to_user_display_name ... ok
+test commands::status::tests::reviewer_rollup_uses_display_name ... ok
+test commands::status::tests::reviewers_deduplicate_same_person_across_lists ... ok
+test commands::status::tests::reviewers_exclude_non_action_participants ... ok
+test commands::status::tests::reviewers_falls_back_to_participants ... ok
+test commands::status::tests::reviewers_include_approving_participants_with_participant_role ... ok
+test commands::status::tests::reviewers_uses_reviewers_field_when_non_empty ... ok
+test commands::status::tests::status_out_serializes_to_json ... ok
+test commands::status::tests::suggested_commands_inprogress_pipeline_suggests_watch ... ok
+test commands::status::tests::suggested_commands_successful_pipeline_suggests_open_ci ... ok
+test commands::status::tests::suggested_commands_with_pr_approved_clean ... ok
+test commands::status::tests::suggested_commands_with_pr_changes_requested ... ok
+test commands::status::tests::suggested_commands_with_pr_unapproved ... ok
+test commands::status::tests::suggested_commands_with_pr_uses_open_pr ... ok
+test commands::status::tests::suggests_failed_log_command_for_failed_pipeline ... ok
+test commands::status::tests::suggested_commands_no_pipeline_suggests_ci_status ... ok
+test commands::tests::human_duration_hours ... ok
+test commands::status::tests::suggested_commands_without_pr_suggests_create ... ok
+test commands::tests::human_duration_minutes_and_seconds ... ok
+test commands::tests::human_duration_seconds_only ... ok
+test commands::tests::make_spinner_hidden_in_json_mode ... ok
+test commands::tests::make_spinner_hidden_in_quiet_mode ... ok
+test commands::tests::table_or_empty_returns_message_when_no_rows ... ok
+test commands::tests::table_or_empty_returns_table_when_rows_present ... ok
+test commands::tests::truncate_handles_empty ... ok
+test commands::tests::truncate_appends_ellipsis_when_longer ... ok
+test api::tests::oversized_replacement_removes_the_previous_validator ... ok
+test commands::tests::truncate_handles_unicode ... ok
+test commands::tests::resolve_body_direct ... ok
+test commands::tests::resolve_body_errors_without_source ... ok
+test commands::tests::truncate_handles_wide_cjk ... ok
+test commands::tests::truncate_result_never_exceeds_budget ... ok
+test commands::tests::truncate_returns_string_when_equal ... ok
+test commands::tests::truncate_returns_string_when_shorter_than_limit ... ok
+test commands::update::tests::allows_self_managed_install_paths ... ok
+test commands::update::tests::asset_name_matches_platform_archive_format ... ok
+test commands::update::tests::binary_file_name_matches_platform ... ok
+test commands::update::tests::detects_package_manager_owned_paths ... ok
+test commands::update::tests::env_flag_enabled_requires_truthy_value ... ok
+test commands::update::tests::failed_checks_back_off_for_an_hour_not_a_day ... ok
+test commands::update::tests::is_newer_detects_higher_version ... ok
+test commands::update::tests::is_newer_falls_back_to_string_compare ... ok
+test commands::update::tests::is_newer_prerelease_not_newer_than_release ... ok
+test commands::update::tests::is_newer_returns_false_for_older ... ok
+test commands::update::tests::is_newer_returns_false_for_same ... ok
+test commands::update::tests::is_newer_treats_missing_trailing_components_as_zero ... ok
+test commands::update::tests::linux_prefers_musl_and_falls_back_to_gnu ... ok
+test commands::update::tests::parse_checksum_for_asset_matches_basename_in_path ... ok
+test commands::update::tests::parse_checksum_for_asset_not_found ... ok
+test commands::update::tests::parse_checksum_for_asset_rejects_suffix_collision ... ok
+test commands::update::tests::parse_checksum_for_asset_skips_comments_and_empty ... ok
+test commands::update::tests::parse_checksum_for_asset_standard_format ... ok
+test commands::update::tests::parse_checksum_for_asset_star_prefix ... ok
+test commands::update::tests::parse_version_handles_two_parts ... ok
+test commands::update::tests::parse_version_returns_none_for_invalid ... ok
+test commands::update::tests::parse_version_strips_prerelease_metadata ... ok
+test commands::update::tests::parse_version_strips_v_prefix ... ok
+test commands::update::tests::render_update_shows_new_version ... ok
+test commands::update::tests::render_update_shows_up_to_date ... ok
+test commands::update::tests::sha256_hex_computes_known_hash ... ok
+test commands::update::tests::unknown_platform_has_no_candidates ... ok
+test commands::update::tests::unparseable_tags_are_never_offered_as_upgrades ... ok
+test config::tests::config_file_parses_ui_theme ... ok
+test config::tests::config_file_parses_toml_with_contexts ... ok
+test config::tests::config_file_roundtrip ... ok
+test config::tests::load_config_returns_default_when_missing ... ok
+test config::tests::private_write_failure_removes_temporary_file ... ok
+test config::tests::private_write_replaces_existing_file ... ok
+test config::tests::ui_theme_defaults_to_none ... ok
+test config::tests::ui_section_survives_roundtrip ... ok
+test config::tests::parses_token_profile ... ok
+test diff::align::tests::identical_lines_pair_as_equal ... ok
+test diff::align::tests::pure_deletes_are_delete_only ... ok
+test diff::align::tests::pure_inserts_are_add_only ... ok
+test diff::align::tests::reordered_similar_lines_pair_by_similarity ... ok
+test diff::align::tests::unequal_counts_leave_extras_unpaired ... ok
+test config::tests::save_credentials_uses_private_permissions ... ok
+test diff::align::tests::unrelated_lines_still_pair_positionally_for_display ... ok
+test diff::parser::tests::invalid_utf8_escapes_and_overflow_do_not_panic ... ok
+test diff::parser::tests::octal_escaped_utf8_paths_decode_as_utf8 ... ok
+test diff::parser::tests::test_filter_raw_diff_by_pathspec ... ok
+test diff::align::tests::interleaved_similar_edits_emit_pairs_in_order ... ok
+test diff::parser::tests::full_diff_with_non_ascii_quoted_paths_and_rename ... ok
+test diff::parser::tests::hunk_header_text_is_stripped_of_escape_sequences ... ok
+test diff::parser::tests::test_parse_binary_file ... ok
+test diff::parser::tests::test_counts_are_correct ... ok
+test diff::parser::tests::test_parse_deleted_file ... ok
+test diff::parser::tests::test_parse_diff_git_paths_unquoted ... ok
+test diff::parser::tests::test_parse_diff_git_paths_with_spaces ... ok
+test diff::parser::tests::test_parse_empty_diff ... ok
+test diff::parser::tests::test_parse_hunk_header ... ok
+test diff::parser::tests::test_parse_hunk_header_no_match ... ok
+test diff::parser::tests::test_parse_hunk_header_single_line ... ok
+test diff::parser::tests::test_parse_multiple_files ... ok
+test diff::parser::tests::test_parse_multiple_hunks_preserved ... ok
+test diff::parser::tests::test_parse_new_file ... ok
+test diff::parser::tests::test_parse_no_newline_at_eof ... ok
+test diff::parser::tests::test_parse_pure_rename_no_hunks ... ok
+test diff::parser::tests::test_parse_quoted_path_in_full_diff ... ok
+test diff::parser::tests::test_parse_rename ... ok
+test diff::parser::tests::test_parse_simple_diff ... ok
+test diff::parser::tests::test_rejects_non_diff_input ... ok
+test diff::parser::tests::test_sanitize_handles_every_truncation_of_an_escape ... ok
+test diff::parser::tests::test_sanitize_preserves_clean_content ... ok
+test diff::parser::tests::test_sanitize_strips_csi_sequences ... ok
+test diff::parser::tests::test_sanitize_strips_osc_sequences ... ok
+test diff::parser::tests::test_sanitizes_osc_sequences ... ok
+test diff::parser::tests::test_sanitizes_terminal_escape_sequences ... ok
+test diff::pathspec::tests::basename ... ok
+test diff::pathspec::tests::exact_and_prefix ... ok
+test diff::pathspec::tests::matches_any_or ... ok
+test diff::pathspec::tests::wildcards ... ok
+test diff::renderer::tests::test_bitbucket_binary_file_detected_without_marker ... ok
+test diff::renderer::tests::test_expand_tabs_uses_tabstop_8 ... ok
+test diff::renderer::tests::test_find_change_ranges_simple ... ok
+test diff::renderer::tests::test_find_change_ranges_collapsed ... ok
+test diff::renderer::tests::test_inline_file_header ... ok
+test diff::renderer::tests::test_lineno_width_for_small_files_is_compact ... ok
+test diff::renderer::tests::test_context_lines_not_dimmed ... ok
+test diff::renderer::tests::test_lineno_width_grows_for_large_line_numbers ... ok
+test diff::renderer::tests::test_pure_rename_is_not_binary ... ok
+test diff::renderer::tests::test_no_word_diff_skips_intra_line_hl ... ok
+test diff::renderer::tests::test_render_binary_file_message ... ok
+test diff::renderer::tests::test_render_empty_diff ... ok
+test diff::renderer::tests::test_render_empty_line_marker ... ok
+test diff::renderer::tests::test_render_interleaved_pairs ... ok
+test diff::renderer::tests::test_render_multiple_files_has_index ... ok
+test diff::renderer::tests::test_render_no_newline_marker ... ok
+test diff::renderer::tests::test_render_pure_rename_cue ... ok
+test diff::renderer::tests::test_render_side_by_side ... ok
+test diff::renderer::tests::test_render_simple_diff ... ok
+test diff::renderer::tests::test_render_to_matches_render ... ok
+test diff::renderer::tests::test_side_by_side_left_edge_pipe ... ok
+test api::tests::cache_budget_applies_when_replacing_an_existing_entry ... ok
+test diff::renderer::tests::test_truncate_mode_still_clips_with_ellipsis ... ok
+test diff::renderer::tests::test_unified_truncates_long_lines ... ok
+test diff::renderer::tests::test_wrap_colored_keeps_every_row_within_term_width ... ok
+test diff::renderer::tests::test_wrap_plain_emits_one_physical_line_per_row ... ok
+test diff::selector_tests::parse_selectors_globs_pass_through ... ok
+test diff::selector_tests::parse_selectors_indices_and_ranges ... ok
+test diff::selector_tests::parse_selectors_invalid_ranges_dropped ... ok
+test diff::selector_tests::raw_rebuild_roundtrips_signs ... ok
+test diff::selector_tests::select_by_index_matches_original_numbering ... ok
+test diff::selector_tests::select_by_range_keeps_order ... ok
+test diff::selector_tests::select_no_match_yields_empty ... ok
+test diff::word_diff::tests::test_empty_input ... ok
+test diff::word_diff::tests::test_word_changes_identical ... ok
+test diff::word_diff::tests::test_word_changes_prefix ... ok
+test diff::word_diff::tests::test_word_changes_simple_modification ... ok
+test error::tests::auth_failed_maps_to_auth ... ok
+test error::tests::declined_confirmation_is_a_nonzero_exit_without_hints ... ok
+test error::tests::display_error_includes_hints ... ok
+test error::tests::full_display_includes_cause ... ok
+test error::tests::generic_other_is_exit_code_1 ... ok
+test error::tests::hints_exist_for_common_errors ... ok
+test error::tests::kind_covers_all_variants ... ok
+test error::tests::no_credentials_maps_to_auth_exit ... ok
+test error::tests::not_found_gives_notfound_exit ... ok
+test error::tests::pipeline_failed_maps_correctly ... ok
+test error::tests::rate_limit_display_separates_context ... ok
+test error::tests::rate_limit_maps_correctly ... ok
+test git::tests::current_commit_slices_by_chars_not_bytes ... ok
+test git::tests::git_with_timeout_drains_pipes_concurrently ... ok
+test git::tests::invalid_segment_message_escapes_control_characters ... ok
+test git::tests::parses_https_remote_with_creds ... ok
+test git::tests::parses_ssh_remote ... ok
+test git::tests::parses_ssh_url_with_local_alias ... ok
+test git::tests::repo_segments_accept_real_identities_and_reject_url_syntax ... ok
+test logging::tests::enabled_respects_the_configured_level ... ok
+test logging::tests::levels_are_ordered_by_verbosity ... ok
+test logging::tests::parses_level_names ... ok
+test output::json::tests::ndjson_payload_is_compact_and_single_line ... ok
+test output::table::tests::empty_table_renders ... ok
+test output::table::tests::headers_classify_columns ... ok
+test output::table::tests::renders_basic_table ... ok
+test output::table::tests::title_column_constraint_applied ... ok
+test output::tests::log_lines_show_the_last_carriage_return_redraw ... ok
+test output::tests::sanitize_keeps_ordinary_text_borrowed ... ok
+test output::tests::sanitize_never_keeps_controls_inside_an_sgr_lookalike ... ok
+test output::tests::sanitize_preserves_sgr_color_codes ... ok
+test output::tests::sanitize_strips_bare_control_chars_but_keeps_newline_tab ... ok
+test output::tests::sanitize_strips_osc52_clipboard_hijack ... ok
+test output::tests::sanitize_strips_screen_clear_and_cursor_moves ... ok
+test output::tests::sanitizing_is_idempotent ... ok
+test output::tests::sanitizing_writer_catches_sequences_split_across_writes ... ok
+test output::tests::split_pager_args_double_quoted_flag ... ok
+test output::tests::split_pager_args_empty ... ok
+test output::tests::split_pager_args_plain ... ok
+test output::tests::split_pager_args_quoted_path_with_space ... ok
+test output::tests::split_pager_args_single_token ... ok
+hello test
+test output::tests::test_print_paginated_falls_back_when_not_terminal ... ok
+test output::tests::unterminated_osc_does_not_swallow_following_lines ... ok
+test output::tests::write_sanitized_reports_writer_errors_and_flushes_partial_line ... ok
+test output::theme::tests::bullet_is_asterisk_when_no_color ... ok
+test output::theme::tests::label_appends_space ... ok
+test output::theme::tests::matches_ignore_ascii_case_works ... ok
+test output::theme::tests::no_color_disables ... ok
+test output::theme::tests::preset_auto_reads_colorfgbg ... ok
+test output::theme::tests::preset_colorfgbg_garbage_is_dark ... ok
+test output::theme::tests::preset_explicit_values_win ... ok
+test output::theme::tests::preset_unknown_value_falls_back_to_env_or_dark ... ok
+test output::theme::tests::separator_uses_reasonable_width ... ok
+test output::theme::tests::state_label_colors_the_whole_state_vocabulary ... ok
+test output::theme::tests::status_glyph_fallback_for_unknown ... ok
+test output::theme::tests::status_glyph_maps_failed_states ... ok
+test output::theme::tests::status_glyph_maps_inprogress_states ... ok
+test output::theme::tests::status_glyph_maps_pending_states ... ok
+test output::theme::tests::status_glyph_maps_stopped_states ... ok
+test output::theme::tests::status_glyph_maps_successful_states ... ok
+test output::theme::tests::watch_footer_renders_quota_or_placeholder ... ok
+test stack::tests::active_roundtrips_in_toml ... ok
+test stack::tests::active_stack_falls_back_to_first ... ok
+test stack::tests::active_stack_rejects_stale_selection ... ok
+test stack::tests::active_stack_uses_named_selection ... ok
+test stack::tests::failed_parent_creation_is_reported_directly ... ok
+test stack::tests::failed_save_preserves_destination_and_cleans_temporary_file ... ok
+test stack::tests::land_partial_failure_retains_unmerged_prs ... ok
+test stack::tests::land_success_keeps_active_when_other_stack_active ... ok
+test stack::tests::land_success_removes_only_landed_stack ... ok
+test stack::tests::missing_active_deserializes_as_none ... ok
+test stack::tests::private_stack_save_roundtrips_and_replaces_existing_file ... ok
+test stack::tests::set_active_rejects_unknown ... ok
+test stack::tests::set_active_updates_field ... ok
+test stack::tests::set_parent_branch_only_touches_named_stack_entry ... ok
+test diff::renderer::tests::test_header_fill_uses_plain_visible_width ... ok
+test diff::renderer::tests::test_render_sign_column ... ok
+test diff::renderer::tests::test_render_colored_background_tinting ... ok
+test diff::renderer::tests::test_render_summary_colored ... ok
+test diff::renderer::tests::test_syntax_highlight_emits_truecolor ... ok
+
+test result: ok. 436 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running unittests src/main.rs (target/debug/deps/bbr-9cf7e7734fdd1154)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/api_cache.rs (target/debug/deps/api_cache-bf025760cb7db43c)
+
+running 11 tests
+test conditional_get_reuses_body_when_server_returns_304 ... ok
+test failed_mutations_also_invalidate_because_the_server_may_have_applied_them ... ok
+test full_response_without_etag_discards_the_old_validator ... ok
+test get_requests_with_bodies_bypass_the_path_only_cache ... ok
+test accept_representations_have_independent_validators_and_bodies ... ok
+test unexpected_304_without_validator_is_an_error ... ok
+test successful_mutations_invalidate_all_get_variants_without_caching_mutation_bodies ... ok
+test verbose_json_errors_do_not_print_response_bodies_or_query_values ... ok
+test no_store_and_vary_star_responses_are_not_cached ... ok
+test mutation_cannot_succeed_via_a_304_cached_get_body ... ok
+test in_flight_304_uses_request_snapshot_after_mutation_invalidation ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+     Running tests/api_ci_schedules.rs (target/debug/deps/api_ci_schedules-e892abe1d3ce07c3)
+
+running 6 tests
+test get_schedule_fetches_by_uuid ... ok
+test list_schedules_returns_all ... ok
+test create_schedule_posts_correctly ... ok
+test schedule_executions_returns_list ... ok
+test update_schedule_sends_put ... ok
+test delete_schedule_sends_delete ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/api_deploy.rs (target/debug/deps/api_deploy-9691ccb91175a28e)
+
+running 3 tests
+test get_deployment_404_maps_to_not_found ... ok
+test list_deployments_for_environment_returns_values ... ok
+test get_deployment_adds_braces_and_parses ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/api_deploy_keys.rs (target/debug/deps/api_deploy_keys-4232e04d473de788)
+
+running 6 tests
+test delete_deploy_key_succeeds ... ok
+test delete_deploy_key_not_found ... ok
+test add_deploy_key_returns_created ... ok
+test list_deploy_keys_empty ... ok
+test get_deploy_key_returns_single ... ok
+test list_deploy_keys_returns_all ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/api_new_features.rs (target/debug/deps/api_new_features-4aac88bf1176c4b8)
+
+running 4 tests
+test test_issue_tracker ... ok
+test test_deployments_and_environments ... ok
+test test_webhooks_crud ... ok
+test test_source_browser ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/api_pagination.rs (target/debug/deps/api_pagination-e623c3d697e3cbf9)
+
+running 13 tests
+test cross_origin_next_link_is_rejected_before_sending_credentials ... ok
+test limit_reached_does_not_fetch_or_validate_an_unused_next_link ... ok
+test continuation_errors_are_not_silently_returned_as_partial_lists ... ok
+test next_link_must_stay_under_exact_api_base ... ok
+test longer_cycles_fail_instead_of_returning_partial_success ... ok
+test repeated_next_link_is_an_error_not_duplicate_results ... ok
+test non_first_page_preserves_next_query_without_duplicate_page_parameter ... ok
+test small_limits_follow_short_server_pages ... ok
+test stale_size_and_page_length_do_not_override_next_links ... ok
+test empty_intermediate_page_still_follows_its_next_link ... ok
+test terminal_link_stops_despite_overstated_size ... ok
+test cursor_with_page_substring_is_not_numeric_paging ... ok
+test endless_unique_empty_pages_hit_the_page_budget ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.24s
+
+     Running tests/api_pipeline.rs (target/debug/deps/api_pipeline-1bb0facc08f56421)
+
+running 2 tests
+test no_pipeline_yields_not_found_exit_code ... ok
+test fetches_latest_pipeline_and_steps ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/api_pr.rs (target/debug/deps/api_pr-81eb5a6b6ad0a014)
+
+running 8 tests
+test not_found_maps_correctly ... ok
+test lists_open_prs ... ok
+test deletes_pr_comment ... ok
+test auth_failure_maps_to_auth_error ... ok
+test creates_approves_merges_and_declines_pr ... ok
+test lists_pr_review_resources ... ok
+test prs_for_branch_returns_open_prs ... ok
+test toggles_pr_change_request ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/api_repo.rs (target/debug/deps/api_repo-e248300891bff1cf)
+
+running 1 test
+test lists_repository_tags ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/api_retry.rs (target/debug/deps/api_retry-151b9c5f8df3809e)
+
+running 16 tests
+WARN bbr: retrying in 5s (attempt 1) for /repositories/ws/slug/pullrequests?fields=values.id,values.state,values.title,values.draft,values.source.branch.name,values.destination.branch.name,values.author.display_name,values.author.uuid,values.links.html.href,values.comment_count,values.task_count,values.close_source_branch,values.updated_on,values.reviewers.display_name,values.reviewers.uuid,values.reviewers.role,values.reviewers.approved,values.reviewers.state,values.participants.display_name,values.participants.uuid,values.participants.role,values.participants.approved,values.participants.state,size,page,pagelen,next,previous&pagelen=25&sort=-updated_on&q=state%3D%22OPEN%22
+test fetch_all_pages_respects_limit ... ok
+test error_envelope_includes_message ... ok
+test fetch_all_pages_follows_next_links ... ok
+WARN bbr: retrying in 9s (attempt 1) for /repositories/ws/slug/pullrequests/1/diff
+test fetch_all_pages_single_page_no_next ... ok
+WARN bbr: retrying in 9s (attempt 1) for /repositories/ws/slug/pullrequests?fields=values.id,values.state,values.title,values.draft,values.source.branch.name,values.destination.branch.name,values.author.display_name,values.author.uuid,values.links.html.href,values.comment_count,values.task_count,values.close_source_branch,values.updated_on,values.reviewers.display_name,values.reviewers.uuid,values.reviewers.role,values.reviewers.approved,values.reviewers.state,values.participants.display_name,values.participants.uuid,values.participants.role,values.participants.approved,values.participants.state,size,page,pagelen,next,previous&pagelen=25&sort=-updated_on&q=state%3D%22OPEN%22
+test send_raw_range_fetches_partial_content ... ok
+test send_raw_range_includes_auth_header ... ok
+WARN bbr: retrying in 1s (attempt 1) for /repositories/ws/slug/pipelines/p-uuid/steps/s-uuid/log
+test send_raw_range_respects_byte_offset ... ok
+test send_raw_range_returns_empty_on_416 ... ok
+test send_raw_range_returns_error_on_401 ... ok
+test send_raw_returns_body_on_success ... ok
+test send_raw_returns_error_on_failure ... ok
+test pagination_preserves_page_order ... ok
+test send_raw_range_retries_on_429_then_succeeds ... ok
+WARN bbr: retrying in 11s (attempt 2) for /repositories/ws/slug/pullrequests?fields=values.id,values.state,values.title,values.draft,values.source.branch.name,values.destination.branch.name,values.author.display_name,values.author.uuid,values.links.html.href,values.comment_count,values.task_count,values.close_source_branch,values.updated_on,values.reviewers.display_name,values.reviewers.uuid,values.reviewers.role,values.reviewers.approved,values.reviewers.state,values.participants.display_name,values.participants.uuid,values.participants.role,values.participants.approved,values.participants.state,size,page,pagelen,next,previous&pagelen=25&sort=-updated_on&q=state%3D%22OPEN%22
+WARN bbr: retrying in 13s (attempt 2) for /repositories/ws/slug/pullrequests?fields=values.id,values.state,values.title,values.draft,values.source.branch.name,values.destination.branch.name,values.author.display_name,values.author.uuid,values.links.html.href,values.comment_count,values.task_count,values.close_source_branch,values.updated_on,values.reviewers.display_name,values.reviewers.uuid,values.reviewers.role,values.reviewers.approved,values.reviewers.state,values.participants.display_name,values.participants.uuid,values.participants.role,values.participants.approved,values.participants.state,size,page,pagelen,next,previous&pagelen=25&sort=-updated_on&q=state%3D%22OPEN%22
+test retry_on_send_raw_succeeds_after_429 ... ok
+test retries_on_rate_limit_then_succeeds ... ok
+test returns_error_after_max_retries_exhausted ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.01s
+
+     Running tests/api_reviewers_merge_check.rs (target/debug/deps/api_reviewers_merge_check-614b5af44c6bedd3)
+
+running 6 tests
+test update_pr_request_includes_reviewers ... ok
+test lists_default_reviewers ... ok
+test adds_and_removes_default_reviewer ... ok
+test resolve_user_uuid_looks_up_username ... ok
+test adds_pr_reviewer ... ok
+test removes_pr_reviewer ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/api_status.rs (target/debug/deps/api_status-b035edc290297f7c)
+
+running 3 tests
+test commit_statuses_not_found_returns_error ... ok
+test creates_commit_build_status ... ok
+test lists_commit_statuses ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/api_variables.rs (target/debug/deps/api_variables-1369eaa2d741d3ce)
+
+running 4 tests
+test create_repo_pipeline_variable ... ok
+test delete_repo_pipeline_variable ... ok
+test update_repo_pipeline_variable ... ok
+test list_repo_pipeline_variables ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/auth_scopes.rs (target/debug/deps/auth_scopes-889d259b9e326a33)
+
+running 2 tests
+test setup_scope_list_matches_the_readme_scope_table ... ok
+test partial_environment_credentials_are_reported_as_config_file_source ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+     Running tests/auth_setup.rs (target/debug/deps/auth_setup-f729174a5e8f28b8)
+
+running 12 tests
+test setup_help_lists_safe_stdin_option ... ok
+test auth_status_reports_unreadable_credentials_as_an_error ... ok
+test auth_status_without_credentials_still_succeeds ... ok
+test auth_status_reports_corrupt_credentials_as_an_error ... ok
+test setup_schema_describes_the_saved_receipt ... ok
+test blank_credentials_are_rejected_without_overwriting_existing_file ... ok
+test setup_json_reports_saved_not_authenticated_and_never_echoes_token ... ok
+test setup_stdin_accepts_the_documented_size_boundary ... ok
+test setup_stdin_saves_trimmed_token_and_preserves_workspace ... ok
+test setup_stdin_requires_username_and_conflicts_with_token_argument ... ok
+test setup_without_arguments_never_prompts_when_noninteractive ... ok
+test setup_stdin_rejects_empty_or_oversized_input_without_overwriting ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/batch.rs (target/debug/deps/batch-66857a96f48aef5a)
+
+running 4 tests
+test all_successful_batch_still_exits_zero ... ok
+test draft_prs_are_excluded_from_the_plan ... ok
+test failed_merges_exit_nonzero_but_keep_the_receipt ... ok
+test pr_that_lost_its_approval_after_planning_is_not_merged ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+
+     Running tests/ci_watch.rs (target/debug/deps/ci_watch-ec36170fec99bfcd)
+
+running 9 tests
+test paused_pipeline_stops_watching_with_explicit_outcome ... ok
+test expired_pipeline_finishes_with_failure_exit ... ok
+test failed_pipeline_exits_5_not_3_when_the_failure_log_is_missing ... ok
+test failed_step_listing_is_reported_not_silently_empty ... ok
+test successful_pipeline_still_exits_zero ... ok
+test pending_step_logs_are_skipped_and_missing_logs_do_not_warn ... ok
+test wait_timeout_bounds_a_running_pipeline ... ok
+test finished_step_with_missing_log_stops_being_polled ... ok
+test logs_reach_a_piped_stderr_sanitized_and_finished_steps_are_not_refetched ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.05s
+
+     Running tests/cli_contract.rs (target/debug/deps/cli_contract-16de2cc8cf082291)
+
+running 23 tests
+test allows_loopback_http_for_tests ... ok
+test boolean_flags_accept_an_explicit_false ... ok
+test ci_log_conflicting_selectors_are_rejected ... ok
+test auth_setup_requires_both_username_and_token ... ok
+test closed_value_sets_reject_unknown_values ... ok
+test body_source_flags_are_mutually_exclusive ... ok
+test doctor_reports_a_plaintext_base_as_a_failed_check ... ok
+test help_subcommand_matches_the_flag ... ok
+test json_errors_go_to_stderr_as_structured_data ... ok
+test limit_above_the_cap_is_rejected ... ok
+test help_and_version_succeed_without_a_runtime ... ok
+test limit_non_numeric_is_rejected ... ok
+test limit_of_zero_is_rejected ... ok
+test json_does_not_imply_consent ... ok
+test missing_required_argument_is_a_usage_error ... ok
+test refuses_to_send_credentials_over_plaintext_http ... ok
+test unknown_subcommand_is_a_usage_error ... ok
+test unknown_flag_is_a_usage_error ... ok
+test refuses_non_http_api_base_schemes ... ok
+test zero_or_out_of_range_timeout_is_a_usage_error ... ok
+test destructive_commands_reach_the_consent_gate ... ok
+test destructive_commands_never_succeed_without_yes ... ok
+test yes_flag_is_accepted_by_every_destructive_command ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running tests/cli_smoke.rs (target/debug/deps/cli_smoke-6d155b140f5c7c78)
+
+running 47 tests
+test auth_status_no_credentials_exits_zero_with_truthful_message ... ok
+test auth_status_json_no_credentials_is_valid_json ... ok
+test ci_help_lists_examples ... ok
+test ci_tail_help_lists_notify_backends ... ok
+test batch_help_mentions_min_approvals ... ok
+test auth_status_with_bad_credentials_fails_nonzero_with_real_error ... ok
+test ci_tail_json_emits_ndjson_log_events ... ok
+test ci_tests_help_lists_step_filters ... ok
+test commit_status_help_lists_set ... ok
+test ci_watch_help_lists_notify_backends ... ok
+test ci_watch_rejects_bad_notify_value ... ok
+test deploy_help_lists_view_rollback ... ok
+test deploy_rollback_help_lists_yes_and_target ... ok
+test completion_piped_to_closed_stdout_does_not_panic ... ok
+test deploy_trigger_help_lists_wait ... ok
+test deploy_view_requires_uuid ... ok
+test deploy_view_help_lists_wait_and_timeout ... ok
+test doctor_help_mentions_checks ... ok
+test doctor_json_outputs_check_array ... ok
+test help_lists_subcommands ... ok
+test doctor_strict_exits_nonzero_on_failures ... ok
+test human_error_includes_hint ... ok
+test json_mode_emits_structured_error_on_stderr ... ok
+test missing_creds_exits_with_auth_code ... ok
+test emits_bash_completion ... ok
+test pr_comment_delete_help_lists_yes_flag ... ok
+test pr_create_force_requires_push ... ok
+test pr_create_help_lists_push_and_force ... ok
+test pr_help_lists_comment_delete ... ok
+test pr_help_lists_create_merge_approve ... ok
+test pr_list_rejects_unknown_order ... ok
+test pr_help_lists_review_commands ... ok
+test pr_diff_raw_json_is_single_valid_json_document ... ok
+test help_and_version_exit_zero ... ok
+test pr_list_rejects_unknown_sort_field ... ok
+test repo_help_lists_default_reviewers ... ok
+test repo_help_lists_tags ... ok
+test pr_merge_help_lists_yes_flag ... ok
+test root_help_lists_common_workflows ... ok
+test pr_stack_help_lists_use ... ok
+test schema_lists_models ... ok
+test status_export_json_emits_json_not_slack ... ok
+test schema_prints_specific_model ... ok
+test version_is_printed ... ok
+test workspace_list_rejects_unknown_role ... ok
+test usage_errors_exit_64_not_2 ... ok
+test watch_stderr_piped_to_closed_consumer_does_not_abort ... ok
+
+test result: ok. 47 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.15s
+
+     Running tests/config_safety.rs (target/debug/deps/config_safety-f36a8b9d4aa75c85)
+
+running 3 tests
+test config_save_failure_leaves_existing_directory_intact ... ok
+test config_save_replaces_file_without_truncating_existing_readers ... ok
+test credential_parse_errors_never_echo_file_contents ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/context_resolution.rs (target/debug/deps/context_resolution-7c4e2ed9fb17cfc1)
+
+running 16 tests
+test full_env_target_can_override_broken_context_and_flags_override_env ... ok
+test complete_context_does_not_require_git ... ok
+test incomplete_target_without_git_still_reports_missing_half ... ok
+test full_explicit_target_bypasses_broken_or_stale_context_without_git ... ok
+test empty_active_context_fields_are_not_usable_targets ... ok
+test invalid_context_prevents_authenticated_api_requests ... ok
+test context_create_and_config_set_refuse_unsafe_identities ... ok
+test malformed_context_never_falls_back_to_git_for_missing_identity_fields ... ok
+test unreadable_config_is_not_treated_as_missing ... ok
+test partial_env_target_does_not_hide_broken_configuration ... ok
+test stale_context_can_be_repaired_using_context_commands ... ok
+test missing_config_or_no_active_context_uses_git ... ok
+test stale_active_context_is_an_actionable_error_not_git_fallback ... ok
+test valid_context_and_partial_overrides_preserve_precedence ... ok
+test workspace_only_context_keeps_its_workspace_when_slug_comes_from_git ... ok
+test url_syntax_in_any_identity_source_is_rejected_before_requests ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running tests/destructive_confirmation.rs (target/debug/deps/destructive_confirmation-aa605d3c035e8b76)
+
+running 2 tests
+test variable_deletes_refuse_without_yes_before_any_request ... ok
+test variable_deletes_proceed_with_yes ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/endpoint_pagination.rs (target/debug/deps/endpoint_pagination-7b8446aed7e45ed9)
+
+running 11 tests
+test pipeline_variables_include_later_pages ... ok
+test environment_variables_include_later_pages ... ok
+test schedules_include_later_pages ... ok
+test source_directory_includes_later_pages ... ok
+test schedule_executions_follow_next_and_honor_limits ... ok
+test zero_limit_lists_make_no_requests ... ok
+test issue_comments_follow_next_and_honor_limits ... ok
+test issues_follow_next_and_honor_limits ... ok
+test variable_set_does_not_write_when_a_later_page_fails ... ok
+test variable_set_updates_existing_key_on_later_page_instead_of_creating_duplicate ... ok
+test workspace_list_caps_page_size_but_returns_requested_items ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/git_remote.rs (target/debug/deps/git_remote-d526d288b906929c)
+
+running 6 tests
+test strips_only_one_git_suffix_and_preserves_valid_slug_characters ... ok
+test rejects_unrelated_ssh_domains_but_retains_single_label_aliases ... ok
+test https_identity_requires_the_bitbucket_cloud_host ... ok
+test accepts_cloud_https_scp_and_explicit_ssh_urls ... ok
+test remote_path_must_be_exactly_two_safe_segments ... ok
+test detects_cloud_remote_instead_of_unrelated_origin ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/list_completion.rs (target/debug/deps/list_completion-cf99f02cb92b45a6)
+
+running 10 tests
+test lightweight_branch_lookup_keeps_single_result_cost ... ok
+test full_branch_lookup_fetches_more_than_fifty_prs ... ok
+test raw_step_page_keeps_its_pagination_metadata ... ok
+test pipeline_list_requests_next_metadata_and_honors_limit ... ok
+test ci_steps_surfaces_later_page_failures ... ok
+test ci_logs_can_select_a_failed_step_on_a_later_page ... ok
+test ci_tests_can_select_a_named_step_on_a_later_page ... ok
+test ci_steps_includes_all_pages_without_changing_json_shape ... ok
+test search_continuation_error_does_not_return_a_partial_success ... ok
+test search_follows_cursors_and_keeps_total_independent_of_limit ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/onboarding_contract.rs (target/debug/deps/onboarding_contract-234f4355c653cc5d)
+
+running 4 tests
+test readme_does_not_use_unrelated_license_or_static_test_count_badges ... ok
+test binary_install_examples_never_rely_on_bare_crates_io_lookup ... ok
+test auth_reference_uses_api_token_scope_names ... ok
+test binstall_metadata_matches_release_names_and_disables_unrelated_fallbacks ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/src_ref.rs (target/debug/deps/src_ref-1d9df09219a11d0b)
+
+running 3 tests
+test branch_with_slash_is_resolved_to_its_commit_before_reading_files ... ok
+test tag_with_slash_falls_back_to_the_tag_lookup ... ok
+test plain_ref_needs_no_lookup_and_unknown_slash_ref_is_not_found ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/stack_abort.rs (target/debug/deps/stack_abort-1a130c0f7ee96308)
+
+running 21 tests
+test empty_stack_abort_preserves_siblings_without_remote_calls ... ok
+test ambiguous_stack_names_cannot_drop_unfinished_entries ... ok
+test decline_failure_keeps_branches_and_state_and_stops ... ok
+test already_declined_and_missing_branches_reconcile_on_retry ... ok
+test actual_checkpoint_write_failure_stops_after_completed_cleanup ... ok
+test partial_abort_checkpoints_finished_entries_before_next_decline ... ok
+test remote_delete_failure_does_not_delete_local_branch_or_drop_entry ... ok
+test sibling_parent_branch_is_protected ... ok
+test rebase_rejects_revision_syntax_in_stack_file_before_touching_git ... ok
+test rebase_failure_returns_nonzero_with_partial_step_receipt ... ok
+test rebase_push_failure_is_not_reported_as_success ... ok
+test state_changed_after_decline_stops_before_branch_deletion ... ok
+test successful_http_status_without_declined_state_does_not_trigger_deletion ... ok
+test successful_abort_removes_only_completed_stack ... ok
+test unreadable_state_after_remote_delete_stops_next_pr ... ok
+test tracked_unmerged_branch_is_retained_even_when_upstream_contains_commits ... ok
+test unmerged_local_commits_are_not_force_deleted_and_retry_can_finish ... ok
+test rebase_conflict_pushes_nothing_and_restores_the_starting_branch ... ok
+test unconfirmed_or_mismatched_prs_never_delete_branches ... ok
+test successful_rebase_push_publishes_all_and_returns_to_start_branch ... ok
+test unsafe_stack_entries_are_rejected_before_any_remote_work ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+     Running tests/stack_land.rs (target/debug/deps/stack_land-6bef7e7c084b268a)
+
+running 16 tests
+test declined_pr_is_not_merged_or_removed_from_stack ... ok
+test configuration_edit_during_preflight_stops_before_merge ... ok
+test already_merged_pr_is_checkpointed_without_repeating_the_post ... ok
+test concurrent_state_change_is_not_overwritten_after_merge ... ok
+test checkpoint_failure_stops_before_next_merge_and_preserves_local_branch ... ok
+test checkpoint_records_retargeted_parent_for_resume ... ok
+test land_refuses_pr_targeting_an_unexpected_branch ... ok
+test land_refuses_pr_whose_source_branch_does_not_match_the_stack ... ok
+test local_unmerged_commits_are_retained_after_remote_merge ... ok
+test partial_failure_exits_nonzero_and_checkpoints_each_merge ... ok
+test unconfirmed_merge_response_does_not_delete_branch_or_checkpoint_success ... ok
+test successful_last_merge_persists_empty_stack_config ... ok
+test retarget_failure_keeps_parent_branch_and_retry_resumes ... ok
+test retry_after_partial_merge_only_processes_remaining_prs ... ok
+test stacked_children_are_retargeted_before_parent_branch_is_deleted ... ok
+test missing_zero_or_duplicate_ids_fail_before_remote_work ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+     Running tests/stack_safety.rs (target/debug/deps/stack_safety-de6e875c09f49d43)
+
+running 8 tests
+test explicit_stale_selection_cannot_choose_an_unrelated_stack ... ok
+test legacy_missing_selection_still_uses_first_stack ... ok
+test invalid_stack_parent_reports_creation_error_without_altering_file ... ok
+test init_refuses_corrupt_state_without_overwriting_it ... ok
+test stack_save_replaces_instead_of_truncating_live_state ... ok
+test unreadable_stack_path_is_not_reinitialized ... ok
+test init_and_use_from_subdirectory_preserve_repo_root_state ... ok
+test stale_selection_blocks_abort_before_any_remote_operation ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/terminal_safety.rs (target/debug/deps/terminal_safety-0859e09eae4a573f)
+
+running 3 tests
+test json_output_keeps_exact_remote_text ... ok
+test pr_view_with_diff_sanitizes_title_author_and_hunk_header ... ok
+test pr_diff_render_is_sanitized_but_raw_diff_is_byte_exact ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+   Doc-tests bbr
+
+running 1 test
+test src/commands/mod.rs - commands::SpinnerGuard (line 287) ... ignored
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+cargo test exit: 0 (verified 2026-10-21)

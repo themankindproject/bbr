@@ -46,9 +46,11 @@ impl BitbucketClient {
         workspace: &str,
         slug: &str,
         commit: &str,
-    ) -> Result<super::Paginated<BuildStatus>> {
+    ) -> Result<Vec<BuildStatus>> {
+        // Commit statuses are paginated; the first page cut off at 100 when a
+        // commit had many CI systems reporting.
         let path = format!("/repositories/{workspace}/{slug}/commit/{commit}/statuses?pagelen=100");
-        self.send(reqwest::Method::GET, &path, None).await
+        self.fetch_all_pages(&path, usize::MAX).await
     }
 
     /// `POST /repositories/{ws}/{slug}/commit/{commit}/statuses/build`

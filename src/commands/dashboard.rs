@@ -16,6 +16,16 @@ pub struct DashboardOut {
     pub my_prs: Vec<DashboardPr>,
     pub recent_activity: Vec<DashboardActivity>,
     pub repo_count: usize,
+    /// Repos whose PR fetch failed. Reported instead of silently rendering as
+    /// empty, which used to look like "no PRs".
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<DashboardRepoError>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct DashboardRepoError {
+    pub repo: String,
+    pub error: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -40,8 +50,8 @@ pub struct DashboardActivity {
 }
 
 fn get_cache_path(workspace: &str) -> Option<std::path::PathBuf> {
-    let mut path = dirs::config_dir()?;
-    path.push("bbr");
+    // Use the same XDG-aware directory as the rest of bbr's config.
+    let mut path = crate::config::config_dir()?;
     path.push("cache");
     let _ = std::fs::create_dir_all(&path);
     path.push(format!("dashboard-repos-{}.json", workspace));
@@ -66,7 +76,7 @@ fn read_cached_repos(workspace: &str) -> Option<Vec<Repository>> {
 fn write_cached_repos(workspace: &str, repos: &[Repository]) {
     if let Some(path) = get_cache_path(workspace) {
         if let Ok(content) = serde_json::to_string(repos) {
-            let _ = std::fs::write(path, content);
+            let _ = crate::config::write_private(&path, &content);
         }
     }
 }
@@ -85,15 +95,18 @@ pub async fn run_dashboard(
     let user = client.current_user().await?;
     let my_name = user.display_name.clone();
 
-    // Check cache first for repos
-    let repos = if let Some(cached) = read_cached_repos(ws) {
-        cached
-    } else {
-        spinner.set_message("Scanning workspace repositories...");
-        let limit = repos_limit.unwrap_or(200);
-        let fetched = client.list_repos(ws, limit).await?;
-        write_cached_repos(ws, &fetched);
-        fetched
+    // Check cache first for repos. The cache must satisfy the requested
+    // `--repos` cap; using a 50-repo cache for `--repos 200` silently
+    // truncated the scan.
+    let wanted = repos_limit.unwrap_or(100);
+    let repos = match read_cached_repos(ws) {
+        Some(cached) if cached.len() >= wanted as usize => cached,
+        _ => {
+            spinner.set_message("Scanning workspace repositories...");
+            let fetched = client.list_repos(ws, wanted).await?;
+            write_cached_repos(ws, &fetched);
+            fetched
+        }
     };
 
     // Filter repos
@@ -106,15 +119,17 @@ pub async fn run_dashboard(
         repos
     };
 
-    // Fetch PRs concurrently from filtered repositories. The scan is capped
-    // at 15 repos to stay fast and avoid rate-limit spikes; surface the cap so
-    // the dashboard never silently shows a subset of the requested repos.
-    let scan_repos = if filtered_repos.len() > 15 {
-        spinner.println(format!(
-            "Note: scanning the 15 most recently updated of {} repos (use --repos to raise the fetch cap).",
+    // Fetch PRs concurrently from filtered repositories. Default to 15 to
+    // stay fast; `--repos N` also raises the scan cap, not just the fetch cap.
+    let scan_cap = repos_limit.unwrap_or(15) as usize;
+    let scan_repos = if filtered_repos.len() > scan_cap {
+        // `println` is dropped when the spinner is hidden (piped/quiet); the
+        // cap must remain visible in that case too.
+        spinner.println_visible(format!(
+            "Note: scanning {scan_cap} of {} repos (pass a larger --repos to scan more).",
             filtered_repos.len()
         ));
-        &filtered_repos[..15]
+        &filtered_repos[..scan_cap]
     } else {
         &filtered_repos[..]
     };
@@ -151,11 +166,10 @@ pub async fn run_dashboard(
                     None,
                 )
             );
-            (
-                slug_clone,
-                open_prs.unwrap_or_default(),
-                merged_prs.unwrap_or_default(),
-            )
+            match (open_prs, merged_prs) {
+                (Ok(open), Ok(merged)) => Ok((slug_clone, open, merged)),
+                (Err(e), _) | (_, Err(e)) => Err((slug_clone, e.to_string())),
+            }
         });
     }
 
@@ -171,11 +185,22 @@ pub async fn run_dashboard(
     let mut needs_review = Vec::new();
     let mut my_prs = Vec::new();
     let mut recent_activity = Vec::new();
+    let mut errors = Vec::new();
 
-    for (slug, open, merged) in results {
+    for result in results {
+        let (slug, open, merged) = match result {
+            Ok(row) => row,
+            Err((repo, error)) => {
+                errors.push(DashboardRepoError { repo, error });
+                continue;
+            }
+        };
         for pr in open {
-            // Count approvals from participants only (reviewers are a subset)
-            let approvals = pr.participants.iter().filter(|p| p.is_approved()).count();
+            let approvals = pr
+                .reviewer_summaries()
+                .iter()
+                .filter(|r| r.approved)
+                .count();
 
             let matches_me = |p: &Participant| {
                 if let (Some(u1), Some(u2)) = (&p.uuid, &user.uuid) {
@@ -256,6 +281,7 @@ pub async fn run_dashboard(
         recent_activity,
         // Report the number of repos actually scanned, not the total matched.
         repo_count: scan_repos.len(),
+        errors,
     };
 
     let human = render_dashboard(&out);
@@ -332,6 +358,20 @@ fn render_dashboard(out: &DashboardOut) -> String {
                 event_colored,
                 truncate(&act.repo, 14),
                 act.description
+            ));
+        }
+    }
+
+    if !out.errors.is_empty() {
+        s.push_str(&format!(
+            "\n{}\n",
+            theme.warn(&format!("Fetch Errors ({})", out.errors.len()))
+        ));
+        for err in &out.errors {
+            s.push_str(&format!(
+                "  {}: {}\n",
+                truncate(&err.repo, 14),
+                truncate(&err.error, 70)
             ));
         }
     }

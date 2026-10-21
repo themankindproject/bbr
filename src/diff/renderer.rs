@@ -599,7 +599,11 @@ fn render_hunk_unified(
             }
 
             if !deletions.is_empty() || !additions.is_empty() {
-                let rows = crate::diff::align::align_change_block(&deletions, &additions);
+                let rows = crate::diff::align::align_change_block(
+                    &deletions,
+                    &additions,
+                    options.word_diff,
+                );
                 for row in rows {
                     match row {
                         crate::diff::align::AlignedRow::Pair(del, add) => {
@@ -1561,8 +1565,7 @@ fn render_hunk_side_by_side(
     let width = term_width;
     // Reserved: left_edge(1) + left_lineno(w) + sep(3) + middle_sep(3) + right_lineno(w) + sep(3)
     // Total overhead: 1 + w + 3 + 3 + w + 3 = 2*w + 10
-    let overhead = lineno_width * 2 + 10;
-    let code_width = width.saturating_sub(overhead) / 2;
+    let code_width = side_by_side_code_width(width, lineno_width);
 
     let ranges = find_change_ranges(&hunk.lines, options.context_lines);
 
@@ -1595,7 +1598,11 @@ fn render_hunk_side_by_side(
             }
 
             if !deletions.is_empty() || !additions.is_empty() {
-                let rows = crate::diff::align::align_change_block(&deletions, &additions);
+                let rows = crate::diff::align::align_change_block(
+                    &deletions,
+                    &additions,
+                    options.word_diff,
+                );
                 for row in rows {
                     match row {
                         crate::diff::align::AlignedRow::Pair(del, add) => {
@@ -1706,8 +1713,11 @@ fn render_side_by_side_row(
                 // Paired change: check threshold then word-level highlighting
                 let left_visible = truncate_code_raw(expand_tabs(&l.content).as_ref(), code_width);
                 let right_visible = truncate_code_raw(expand_tabs(&r.content).as_ref(), code_width);
-                let sim = crate::diff::word_diff::similarity(&left_visible, &right_visible);
-                let sim = if options.word_diff { sim } else { 0.0 };
+                let sim = if options.word_diff {
+                    crate::diff::word_diff::similarity(&left_visible, &right_visible)
+                } else {
+                    0.0
+                };
                 let mut col = String::new();
                 let mut left_w = 0;
                 if left_visible.is_empty() {
@@ -1765,8 +1775,11 @@ fn render_side_by_side_row(
             {
                 let left_visible = truncate_code_raw(expand_tabs(&l.content).as_ref(), code_width);
                 let right_visible = truncate_code_raw(expand_tabs(&r.content).as_ref(), code_width);
-                let sim = crate::diff::word_diff::similarity(&left_visible, &right_visible);
-                let sim = if options.word_diff { sim } else { 0.0 };
+                let sim = if options.word_diff {
+                    crate::diff::word_diff::similarity(&left_visible, &right_visible)
+                } else {
+                    0.0
+                };
                 let mut col = String::new();
                 let mut right_w = 0;
                 if right_visible.is_empty() {
@@ -2012,6 +2025,16 @@ struct LineRange {
     is_collapsed: bool,
 }
 
+/// Width available for each code column in side-by-side mode.
+///
+/// The overhead is the left edge, two line-number columns, three separators,
+/// and two sign columns with spaces. Plain mode emits the widest layout, so
+/// reserving it for both modes keeps every row within the terminal.
+fn side_by_side_code_width(term_width: usize, lineno_width: usize) -> usize {
+    let overhead = lineno_width.saturating_mul(2).saturating_add(14);
+    term_width.saturating_sub(overhead) / 2
+}
+
 /// Find which line ranges to render, collapsing context-only sections.
 fn find_change_ranges(lines: &[DiffLine], context_lines: usize) -> Vec<LineRange> {
     if lines.is_empty() {
@@ -2038,7 +2061,10 @@ fn find_change_ranges(lines: &[DiffLine], context_lines: usize) -> Vec<LineRange
     let mut ranges: Vec<(usize, usize)> = Vec::new();
     for idx in &change_indices {
         let start = idx.saturating_sub(context_lines);
-        let end = (idx + 1 + context_lines).min(lines.len());
+        let end = idx
+            .saturating_add(1)
+            .saturating_add(context_lines)
+            .min(lines.len());
         ranges.push((start, end));
     }
 
@@ -2871,5 +2897,33 @@ rename to new.rs
 ";
         let files = parse(diff);
         assert!(!files[0].binary, "pure rename must not be flagged binary");
+    }
+
+    #[test]
+    fn test_huge_context_does_not_panic() {
+        let diff = "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1,2 +1,2 @@
+-old
++new
+ tail
+";
+        let files = parse(diff);
+        let options = DiffRenderOptions {
+            context_lines: usize::MAX,
+            ..Default::default()
+        };
+        let _ = render(&files, &options, &test_theme());
+    }
+
+    #[test]
+    fn test_side_by_side_width_budget() {
+        for width in [40, 80, 120, 200] {
+            let code = side_by_side_code_width(width, 3);
+            // Plain layout: 2*3 line numbers + 9 separators + 2*(sign+space)
+            assert!(2 * 3 + 9 + 4 + 2 * code <= width);
+        }
     }
 }

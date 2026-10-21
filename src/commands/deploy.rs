@@ -21,6 +21,46 @@ fn is_terminal_state(name: &str) -> bool {
     )
 }
 
+/// Pick the deployment to re-deploy.
+///
+/// With an explicit target, use it. Otherwise sort by `last_update_time`
+/// (the API does not guarantee order) and choose the newest **successful**
+/// deployment that is not the current top. Picking `history[1]` blindly could
+/// "roll back" to a failed or in-progress deployment.
+fn select_rollback_target(
+    history: &[crate::api::deploy::Deployment],
+    target: Option<&str>,
+    env_uuid: &str,
+) -> Result<crate::api::deploy::Deployment> {
+    if let Some(t) = target {
+        let wanted = ensure_uuid_braces(t);
+        return history
+            .iter()
+            .find(|d| d.uuid == wanted || d.uuid == t)
+            .cloned()
+            .ok_or_else(|| {
+                BitbucketError::NotFound(format!(
+                    "deployment {t} not in environment {env_uuid} history"
+                ))
+            });
+    }
+
+    let mut sorted: Vec<&crate::api::deploy::Deployment> = history.iter().collect();
+    sorted.sort_by(|a, b| b.last_update_time.cmp(&a.last_update_time));
+    let top_uuid = sorted.first().map(|d| d.uuid.as_str());
+    let successful = sorted.into_iter().filter(|d| {
+        d.state.name.eq_ignore_ascii_case("SUCCESSFUL") && deployment_deployable(d).1.is_some()
+    });
+    let candidates: Vec<&crate::api::deploy::Deployment> = successful
+        .filter(|d| Some(d.uuid.as_str()) != top_uuid)
+        .collect();
+    candidates.first().map(|d| (*d).clone()).ok_or_else(|| {
+        BitbucketError::Other(format!(
+            "no earlier successful deployment in environment {env_uuid}; nothing to roll back to"
+        ))
+    })
+}
+
 /// Extract (pipeline build, commit hash) from a deployment, reading from
 /// `deployable` first and falling back to `release` (the API surfaces the
 /// same data in one or the other depending on response version).
@@ -219,7 +259,7 @@ pub async fn set_env_var(
     env_uuid: &str,
     key: &str,
     value: &str,
-    secured: bool,
+    secured: Option<bool>,
 ) -> Result<()> {
     let repo = resolve_repo(g)?;
     let api = client(g)?;
@@ -233,6 +273,8 @@ pub async fn set_env_var(
 
     let fmt = make_formatter(g);
     if let Some(existing) = vars.iter().find(|v| v.key == key) {
+        // Preserve the current secured flag unless explicitly overridden.
+        let secured = crate::commands::preserved_secured(secured, existing.secured);
         let spinner2 = SpinnerGuard::new(make_spinner(g.json, g.quiet));
         spinner2.set_message(format!("Updating {key}..."));
         api.update_env_variable(
@@ -252,8 +294,15 @@ pub async fn set_env_var(
     } else {
         let spinner2 = SpinnerGuard::new(make_spinner(g.json, g.quiet));
         spinner2.set_message(format!("Creating {key}..."));
-        api.create_env_variable(&repo.workspace, &repo.slug, env_uuid, key, value, secured)
-            .await?;
+        api.create_env_variable(
+            &repo.workspace,
+            &repo.slug,
+            env_uuid,
+            key,
+            value,
+            secured.unwrap_or(false),
+        )
+        .await?;
         spinner2.finish();
         let out = serde_json::json!({"action": "created", "key": key});
         let human = format!("Created {key}");
@@ -509,31 +558,7 @@ pub async fn rollback_deployment(
         )));
     }
 
-    // Resolve the target deployment (the commit we'll re-deploy).
-    let target_dep: crate::api::deploy::Deployment = match target {
-        Some(t) => {
-            let t_uuid = ensure_uuid_braces(t);
-            history
-                .iter()
-                .find(|d| d.uuid == t_uuid || d.uuid == t)
-                .cloned()
-                .ok_or_else(|| {
-                    BitbucketError::NotFound(format!(
-                        "deployment {t} not in environment {env_uuid} history"
-                    ))
-                })?
-        }
-        None => {
-            // Most recent *other* than the top. If there's only one
-            // deployment, there's nothing to roll back to.
-            if history.len() < 2 {
-                return Err(BitbucketError::Other(format!(
-                    "only one deployment in environment {env_uuid}; nothing to roll back to"
-                )));
-            }
-            history[1].clone()
-        }
-    };
+    let target_dep = select_rollback_target(&history, target, env_uuid)?;
 
     let (target_build, target_commit) = deployment_deployable(&target_dep);
     let commit = target_commit.clone().ok_or_else(|| {
@@ -760,5 +785,58 @@ mod tests {
         assert_eq!(out.pipeline_build, Some(3));
         assert_eq!(out.commit_hash.as_deref(), Some("abcdef1234567890"));
         assert_eq!(out.last_update.as_deref(), Some("2026-08-30"));
+    }
+
+    fn deployment(uuid: &str, state: &str, time: &str) -> Deployment {
+        Deployment {
+            uuid: uuid.into(),
+            state: DeploymentState {
+                name: state.into(),
+                url: None,
+            },
+            deployable: Some(DeploymentDeployable {
+                pipeline: None,
+                commit: Some(DeployableCommit { hash: uuid.into() }),
+            }),
+            last_update_time: Some(time.into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn rollback_skips_failed_and_in_progress_history_entries() {
+        let history = vec![
+            deployment("{failed}", "FAILED", "2026-08-30T12:00:00Z"),
+            deployment("{inprog}", "IN_PROGRESS", "2026-08-30T13:00:00Z"),
+            deployment("{good}", "SUCCESSFUL", "2026-08-30T11:00:00Z"),
+        ];
+        let target = select_rollback_target(&history, None, "{env}").unwrap();
+        assert_eq!(target.uuid, "{good}");
+    }
+
+    #[test]
+    fn rollback_skips_the_current_top_when_it_is_successful() {
+        let history = vec![
+            deployment("{previous}", "SUCCESSFUL", "2026-08-30T11:00:00Z"),
+            deployment("{current}", "SUCCESSFUL", "2026-08-30T12:00:00Z"),
+        ];
+        let target = select_rollback_target(&history, None, "{env}").unwrap();
+        assert_eq!(target.uuid, "{previous}");
+    }
+
+    #[test]
+    fn rollback_without_an_earlier_success_is_an_error() {
+        let history = vec![deployment("{only}", "SUCCESSFUL", "2026-08-30T12:00:00Z")];
+        assert!(select_rollback_target(&history, None, "{env}").is_err());
+    }
+
+    #[test]
+    fn explicit_rollback_target_is_used_even_if_not_successful() {
+        let history = vec![
+            deployment("{good}", "SUCCESSFUL", "2026-08-30T11:00:00Z"),
+            deployment("{failed}", "FAILED", "2026-08-30T12:00:00Z"),
+        ];
+        let target = select_rollback_target(&history, Some("{failed}"), "{env}").unwrap();
+        assert_eq!(target.uuid, "{failed}");
     }
 }

@@ -1,7 +1,7 @@
 //! Integration tests for pipeline schedule API methods.
 
 use serde_json::json;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use bbr::api::BitbucketClient;
@@ -76,6 +76,15 @@ async fn create_schedule_posts_correctly() {
 
     Mock::given(method("POST"))
         .and(path("/repositories/ws/repo/pipelines_config/schedules/"))
+        .and(body_json(json!({
+            "target": {
+                "ref_name": "main",
+                "ref_type": "branch",
+                "selector": { "type": "custom", "pattern": "Deploy to prod" }
+            },
+            "enabled": false,
+            "cron_pattern": "0 3 * * *"
+        })))
         .respond_with(ResponseTemplate::new(201).set_body_json(json!({
             "type": "pipeline_schedule",
             "uuid": "{new-sched}",
@@ -95,7 +104,14 @@ async fn create_schedule_posts_correctly() {
 
     let c = client(&server.uri()).await;
     let schedule = c
-        .create_schedule("ws", "repo", "0 3 * * *", "main", Some("custom"))
+        .create_schedule(
+            "ws",
+            "repo",
+            "0 3 * * *",
+            "main",
+            Some("Deploy to prod"),
+            false,
+        )
         .await
         .unwrap();
     assert_eq!(schedule.uuid, "{new-sched}");

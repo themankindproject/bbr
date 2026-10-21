@@ -226,7 +226,9 @@ pub async fn resolve_body(
 }
 
 /// Read a secret value from stdin (blocking; safe for use before/without the
-/// async runtime touching stdin). Trailing whitespace/newline is trimmed.
+/// async runtime touching stdin). Only the final line ending is removed:
+/// leading/trailing spaces can be part of a webhook signing secret or env
+/// value and must be preserved byte-for-byte.
 ///
 /// Used by secret-taking commands (`variable set --stdin`, `webhook create
 /// --secret-stdin`, `deploy-keys add --stdin`) so tokens don't appear in
@@ -238,7 +240,18 @@ pub fn read_secret_stdin() -> Result<String> {
         .lock()
         .read_to_string(&mut buf)
         .map_err(BitbucketError::Io)?;
-    Ok(buf.trim().to_string())
+    Ok(strip_final_newline(&buf).to_string())
+}
+
+/// Resolve the `--secured` flag for an update: `None` means "keep the
+/// variable's current setting".
+pub(crate) fn preserved_secured(requested: Option<bool>, existing: bool) -> bool {
+    requested.unwrap_or(existing)
+}
+
+fn strip_final_newline(value: &str) -> &str {
+    let value = value.strip_suffix('\n').unwrap_or(value);
+    value.strip_suffix('\r').unwrap_or(value)
 }
 
 /// Standard Formatter construction for command handlers.
@@ -593,5 +606,21 @@ mod tests {
     async fn resolve_body_errors_without_source() {
         let err = resolve_body(None, None, false).await.unwrap_err();
         assert!(format!("{err}").contains("no body provided"));
+    }
+
+    #[test]
+    fn secret_stdin_strips_only_the_line_ending() {
+        assert_eq!(strip_final_newline("  s3cret  \n"), "  s3cret  ");
+        assert_eq!(strip_final_newline("  s3cret  \r\n"), "  s3cret  ");
+        assert_eq!(strip_final_newline("secret"), "secret");
+        assert_eq!(strip_final_newline(""), "");
+    }
+
+    #[test]
+    fn omitted_secured_flag_preserves_the_existing_value() {
+        assert!(preserved_secured(None, true));
+        assert!(!preserved_secured(None, false));
+        assert!(preserved_secured(Some(true), false));
+        assert!(!preserved_secured(Some(false), true));
     }
 }

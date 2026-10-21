@@ -54,8 +54,6 @@ pub struct Branch {
     #[serde(default)]
     pub name: String,
     #[serde(default)]
-    pub merged: bool,
-    #[serde(default)]
     pub target: Option<super::pr::CommitRef>,
     #[serde(default)]
     pub links: super::pr::Links,

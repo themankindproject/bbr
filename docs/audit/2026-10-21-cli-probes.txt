@@ -1,0 +1,11 @@
+$ XDG_CONFIG_HOME=<tmp> bbr config set ui.theme ""
+bbr: invalid theme '' (valid: dark, light, auto)
+  hint: run `bbr doctor` to check your environment.
+  hint: re-run with -v for more detail.
+exit=1
+
+$ XDG_CONFIG_HOME=<tmp> bbr schema repo
+bbr: Unknown schema model 'repo'. Available: auth-setup, auth, status, pr, ci, webhook, src, issue
+  hint: run `bbr doctor` to check your environment.
+  hint: re-run with -v for more detail.
+exit=1

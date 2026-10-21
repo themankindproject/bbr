@@ -54,6 +54,45 @@ const DELETES: &[&[&str]] = &[
 ];
 
 #[tokio::test]
+async fn context_delete_requires_yes_and_then_succeeds() {
+    let server = MockServer::start().await;
+    let home = TempDir::new().unwrap();
+    bbr(
+        &server,
+        &home,
+        &["context", "create", "work", "--set-workspace", "ws"],
+    );
+    let refused = bbr(&server, &home, &["context", "delete", "work", "--json"]);
+    assert_eq!(refused.status.code(), Some(64));
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("--yes"));
+
+    let allowed = bbr(
+        &server,
+        &home,
+        &["context", "delete", "work", "--yes", "--json"],
+    );
+    assert!(
+        allowed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&allowed.stderr)
+    );
+}
+
+#[tokio::test]
+async fn default_reviewer_removal_requires_yes_before_any_request() {
+    let server = MockServer::start().await;
+    let home = TempDir::new().unwrap();
+    let out = bbr(
+        &server,
+        &home,
+        &["repo", "default-reviewers", "remove", "alice", "--json"],
+    );
+    assert_eq!(out.status.code(), Some(64));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--yes"));
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn variable_deletes_refuse_without_yes_before_any_request() {
     let server = MockServer::start().await;
     mount_variables(&server).await;
