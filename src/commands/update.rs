@@ -805,8 +805,11 @@ fn extract_from_zip(
             continue;
         }
         // Match on the file name component only — release archives may nest
-        // the binary under a directory.
-        let name_matches = std::path::Path::new(entry.name())
+        // the binary under a directory. zip 9 returns the name as a Result.
+        let entry_name = entry
+            .name()
+            .map_err(|e| BitbucketError::Other(format!("Failed to read zip entry name: {e}")))?;
+        let name_matches = std::path::Path::new(entry_name.as_ref())
             .file_name()
             .and_then(|n| n.to_str())
             == Some(bin_name);
