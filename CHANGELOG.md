@@ -7,11 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-21
+
 ### Security
 
 - Updated transitive TLS and archive dependencies to clear recent RUSTSEC
   advisories: `rustls` 0.23.46, `rustls-webpki` 0.103.16, `webpki-roots`
   1.0.10, `quinn-proto` 0.11.19, and the Windows-only `zip` 9.0.5.
+
+### Fixed
+
+- Windows self-update now handles zip 9's fallible `ZipFile::name()` result,
+  restoring Windows builds after the security update.
 
 ## [0.4.0] - 2026-10-21
 
@@ -1520,7 +1527,8 @@ GitHub release is marked as a pre-release because its Linux archives and
 - Credentials file opened with mode `0o600` at creation time on Unix, closing TOCTOU window.
 - No system keyring dependency (avoids 671 MB texlive pull).
 
-[Unreleased]: https://github.com/themankindproject/bbr/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/themankindproject/bbr/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/themankindproject/bbr/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/themankindproject/bbr/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/themankindproject/bbr/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/themankindproject/bbr/compare/v0.3.0...v0.3.1
